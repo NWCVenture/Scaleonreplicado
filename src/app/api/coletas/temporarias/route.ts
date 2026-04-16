@@ -1,0 +1,89 @@
+import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
+import { db } from "@/lib/db";
+import { coletaBipagemTemporaria } from "@/lib/db/schema";
+import { desc, eq } from "drizzle-orm";
+import { z } from "zod";
+import { generateId } from "@/lib/utils";
+
+export async function GET(request: NextRequest) {
+  try {
+    const session = await auth.api.getSession({ headers: request.headers });
+    if (!session) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
+
+    const temporarias = await db
+      .select()
+      .from(coletaBipagemTemporaria)
+      .where(eq(coletaBipagemTemporaria.usuarioId, session.user.id))
+      .orderBy(desc(coletaBipagemTemporaria.createdAt));
+
+    return NextResponse.json({ temporarias });
+  } catch (error) {
+    console.error("Error fetching temporarias:", error);
+    return NextResponse.json(
+      { error: "Erro ao buscar bipagens temporarias" },
+      { status: 500 }
+    );
+  }
+}
+
+const createSchema = z.object({
+  tipo: z.enum(["FLEX", "COLETA", "DEVOLUCAO", "CANCELADO"]),
+  conta: z.enum(["TIKTOK_SHOP", "MERCADO_LIVRE", "SHOPEE"]),
+  total: z.number().int(),
+  dados: z.object({
+    pacotes: z.array(
+      z.object({
+        codigo: z.string(),
+        transportadora: z.string().optional(),
+      })
+    ),
+    devolucoes: z.record(z.string(), z.object({
+      skuLines: z.array(z.object({ sku: z.string(), qtd: z.number() })),
+      operacao: z.string(),
+      avaria: z.string(),
+      obs: z.string(),
+      tipo: z.string(),
+    })),
+  }),
+});
+
+export async function POST(request: NextRequest) {
+  try {
+    const session = await auth.api.getSession({ headers: request.headers });
+    if (!session) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const data = createSchema.parse(body);
+
+    const id = generateId();
+
+    await db.insert(coletaBipagemTemporaria).values({
+      id,
+      tipo: data.tipo,
+      conta: data.conta,
+      total: data.total,
+      dados: data.dados,
+      usuarioId: session.user.id,
+    });
+
+    return NextResponse.json({ id }, { status: 201 });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { error: "Dados invalidos", details: error.issues },
+        { status: 400 }
+      );
+    }
+
+    console.error("Error saving temporaria:", error);
+    return NextResponse.json(
+      { error: "Erro ao salvar bipagem temporaria" },
+      { status: 500 }
+    );
+  }
+}
