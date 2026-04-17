@@ -9,11 +9,11 @@ import {
 } from "./schema";
 import { auth } from "../auth";
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ||
-  "postgresql://postgres:postgres@localhost:5432/crm_nwc";
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL não definida. Use npm run db:seed:dev ou db:seed:prod.");
+}
 
-const client = postgres(DATABASE_URL);
+const client = postgres(process.env.DATABASE_URL);
 const db = drizzle(client);
 
 // ============================================================
