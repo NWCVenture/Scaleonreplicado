@@ -8,6 +8,13 @@
       "when": 1776390170751,
       "tag": "0000_yielding_nomad",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1776445043241,
+      "tag": "0001_noisy_luminals",
+      "breakpoints": true
     }
   ]
 }

@@ -12,6 +12,7 @@ const createStockItemsSchema = z.object({
         sku: z.string(),
         lote: z.string(),
         quantidade: z.number().int().positive(),
+        codigoFardo: z.string().optional(),
       })
     )
     .min(1),
@@ -32,6 +33,7 @@ export async function POST(request: NextRequest) {
       sku: item.sku,
       lote: item.lote,
       quantidade: item.quantidade,
+      codigoFardo: item.codigoFardo ?? null,
       usuarioId: session.user.id,
     }));
 

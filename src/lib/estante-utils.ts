@@ -23,8 +23,12 @@ export function parseImportText(
   text: string,
 ): Array<{ sku: string; qtd: number; lote: string }> {
   const results: Array<{ sku: string; qtd: number; lote: string }> = [];
-  for (const line of text.split("\n")) {
-    const t = line.trim();
+
+  // Normalise: split on newlines AND tabs so pasted bipagem lines (tab-separated) each become their own entry
+  const rawTokens = text.split(/[\n\t]/);
+
+  for (const token of rawTokens) {
+    const t = token.trim();
     if (
       !t ||
       t.startsWith("---") ||
@@ -38,22 +42,30 @@ export function parseImportText(
       t.includes("----")
     )
       continue;
-    const parts = t.split("|").map((p) => p.trim());
-    if (parts.length >= 4 && /^\d{2}:\d{2}:\d{2}$/.test(parts[0])) {
-      const sku = parts[1],
-        qtd = parseInt(parts[2]),
-        lote = parts[3];
-      if (sku && !isNaN(qtd)) {
-        results.push({ sku, qtd, lote });
-        continue;
+
+    // Format 1: QR bipagem  "LUA AZ GG}ESTOQUE PADRO}60" or pipe-separated
+    const qrParts = t.replace(/\}/g, "|").split("|").map((p) => p.trim());
+    if (qrParts.length >= 3) {
+      // Detailed report: HH:MM:SS | SKU | QTD | LOTE
+      if (/^\d{2}:\d{2}:\d{2}$/.test(qrParts[0])) {
+        const sku = qrParts[1], qtd = parseInt(qrParts[2]), lote = qrParts[3] ?? "";
+        if (sku && !isNaN(qtd)) { results.push({ sku, qtd, lote }); continue; }
       }
+      // Simple: SKU | QTD | LOTE  or  SKU | LOTE | QTD
+      const [a, b, c] = qrParts;
+      const qtdFromC = parseInt(c, 10);
+      if (a && b && !isNaN(qtdFromC)) { results.push({ sku: a, lote: b, qtd: qtdFromC }); continue; }
+      const qtdFromB = parseInt(b, 10);
+      if (a && !isNaN(qtdFromB) && c) { results.push({ sku: a, lote: c, qtd: qtdFromB }); continue; }
     }
-    if (parts.length === 3) {
-      const sku = parts[0],
-        qtd = parseInt(parts[1]),
-        lote = parts[2];
-      if (sku && !isNaN(qtd)) {
-        results.push({ sku, qtd, lote });
+
+    // Format 2: space-separated  "LUA AZ GG 60" — last token is quantity
+    const spaceParts = t.split(/\s+/);
+    if (spaceParts.length >= 2) {
+      const lastVal = parseInt(spaceParts[spaceParts.length - 1], 10);
+      if (!isNaN(lastVal) && lastVal > 0) {
+        const sku = spaceParts.slice(0, -1).join(" ");
+        results.push({ sku, qtd: lastVal, lote: "IMPORTADO" });
         continue;
       }
     }

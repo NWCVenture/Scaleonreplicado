@@ -91,12 +91,12 @@ function parseScannedData(raw: string) {
   }
   if (parts.length >= 3) {
     let sku = parts[0].trim();
-    sku = sku.replace(/^\d+([A-Z])/, "$1");
-    return {
-      sku: sku,
-      lote: parts[1].trim(),
-      qtd: parseInt(parts[2].trim()),
-    };
+    // Remove leading digits/separators from old QR format (e.g. "1LUA AZ GG" → "LUA AZ GG")
+    sku = sku.replace(/^\d+\s*/, "").trim();
+    const qtd = parseInt(parts[2].trim());
+    if (sku && !isNaN(qtd)) {
+      return { sku, lote: parts[1].trim(), qtd };
+    }
   }
   return null;
 }

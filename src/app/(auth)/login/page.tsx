@@ -43,13 +43,13 @@ export default function LoginPage() {
           router.push("/");
         },
         onError: (ctx) => {
-          toast.error("Email ou senha incorretos!");
+          toast.error(ctx.error?.message || "Email ou senha incorretos!");
         },
       },
     );
 
     if (error) {
-      toast.error("Email ou senha incorretos!");
+      toast.error(error.message || "Email ou senha incorretos!");
     }
 
     setLoading(false);

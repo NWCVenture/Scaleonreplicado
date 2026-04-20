@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { copyToClipboard } from "@/lib/utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -102,7 +103,7 @@ export default function RecuperarDados() {
       return;
     }
 
-    navigator.clipboard.writeText(coletasIds.join("\n"));
+    copyToClipboard(coletasIds.join("\n"));
     toast.success(
       `${coletasIds.length} IDs copiados para a area de transferencia!`
     );

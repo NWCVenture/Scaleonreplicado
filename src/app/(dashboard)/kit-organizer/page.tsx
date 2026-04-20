@@ -33,6 +33,7 @@ type ProcessedData = {
 
 export default function KitOrganizer() {
   const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [processedData, setProcessedData] = useState<ProcessedData | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -43,20 +44,26 @@ export default function KitOrganizer() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
-  const handleFileSelect = (selectedFile: File | null) => {
-    if (selectedFile) {
-      const isPDF = selectedFile.type === "application/pdf" ||
-                   selectedFile.name.toLowerCase().endsWith(".pdf");
-
-      if (isPDF) {
-        setFile(selectedFile);
-        setProcessedData(null);
-        setProgress(0);
-        toast.success("PDF selecionado!");
-      } else {
-        toast.error("Por favor, selecione um arquivo PDF valido.");
-      }
+  const handleFilesSelect = (selectedFiles: File[]) => {
+    const pdfs = selectedFiles.filter(
+      (f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")
+    );
+    if (pdfs.length === 0) {
+      toast.error("Por favor, selecione apenas arquivos PDF.");
+      return;
     }
+    if (selectedFiles.length !== pdfs.length) {
+      toast.warning("Alguns arquivos ignorados (não são PDF).");
+    }
+    setFiles(pdfs);
+    setFile(pdfs[0]);
+    setProcessedData(null);
+    setProgress(0);
+    toast.success(pdfs.length > 1 ? `${pdfs.length} PDFs selecionados — serão mesclados` : "PDF selecionado!");
+  };
+
+  const handleFileSelect = (selectedFile: File | null) => {
+    if (selectedFile) handleFilesSelect([selectedFile]);
   };
 
   // Prevenir comportamento padrao do navegador para drag and drop
@@ -83,8 +90,9 @@ export default function KitOrganizer() {
   }, []);
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    handleFileSelect(selectedFile || null);
+    if (e.target.files && e.target.files.length > 0) {
+      handleFilesSelect(Array.from(e.target.files));
+    }
   };
 
   const handleDragEnter = (e: React.DragEvent) => {
@@ -128,19 +136,10 @@ export default function KitOrganizer() {
 
     setIsDragging(false);
 
-    const files = e.dataTransfer.files;
+    const droppedFiles = e.dataTransfer.files;
 
-    if (files && files.length > 0) {
-      const droppedFile = files[0];
-
-      const isPDF = droppedFile.type === "application/pdf" ||
-                   droppedFile.name.toLowerCase().endsWith(".pdf");
-
-      if (isPDF) {
-        handleFileSelect(droppedFile);
-      } else {
-        toast.error("Por favor, solte apenas arquivos PDF.");
-      }
+    if (droppedFiles && droppedFiles.length > 0) {
+      handleFilesSelect(Array.from(droppedFiles));
     } else {
       toast.error("Nenhum arquivo foi solto.");
     }
@@ -149,7 +148,7 @@ export default function KitOrganizer() {
   };
 
   const processPDF = async () => {
-    if (!file) {
+    if (!file && files.length === 0) {
       toast.error("Selecione um arquivo PDF primeiro!");
       return;
     }
@@ -160,10 +159,23 @@ export default function KitOrganizer() {
 
     try {
       setProgress(10);
-      setProgressText("Lendo arquivo PDF...");
+      setProgressText(files.length > 1 ? `Mesclando ${files.length} PDFs...` : "Lendo arquivo PDF...");
 
-      const arrayBuffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
+      let bytes: Uint8Array;
+      if (files.length > 1) {
+        // Merge multiple PDFs
+        const merged = await PDFDocument.create();
+        for (const f of files) {
+          const buf = await f.arrayBuffer();
+          const doc = await PDFDocument.load(buf, { ignoreEncryption: true });
+          const copied = await merged.copyPages(doc, doc.getPageIndices());
+          copied.forEach((p) => merged.addPage(p));
+        }
+        bytes = await merged.save();
+      } else {
+        const arrayBuffer = await (files[0] ?? file!).arrayBuffer();
+        bytes = new Uint8Array(arrayBuffer);
+      }
 
       if (bytes.length < 4) {
         throw new Error("Arquivo muito pequeno ou invalido.");
@@ -521,6 +533,7 @@ export default function KitOrganizer() {
 
   const resetAll = () => {
     setFile(null);
+    setFiles([]);
     setProcessedData(null);
     setPdfBytes(null);
     setProgress(0);
@@ -602,6 +615,7 @@ export default function KitOrganizer() {
                     ref={fileInputRef}
                     type="file"
                     accept=".pdf"
+                    multiple
                     onChange={handleFileInputChange}
                     className="hidden"
                     disabled={isProcessing}
@@ -617,10 +631,17 @@ export default function KitOrganizer() {
                   </Button>
                 </div>
               </div>
-              {file && (
-                <p className="text-sm text-muted-foreground mt-2">
-                  {file.name} ({(file.size / 1024).toFixed(2)} KB)
-                </p>
+              {files.length > 0 && (
+                <div className="mt-2 space-y-0.5">
+                  {files.map((f, i) => (
+                    <p key={i} className="text-sm text-muted-foreground">
+                      {f.name} ({(f.size / 1024).toFixed(2)} KB)
+                    </p>
+                  ))}
+                  {files.length > 1 && (
+                    <p className="text-xs text-primary font-medium">{files.length} PDFs serão mesclados automaticamente</p>
+                  )}
+                </div>
               )}
             </div>
 
@@ -655,11 +676,11 @@ export default function KitOrganizer() {
             <div className="flex gap-3">
               <Button
                 onClick={processPDF}
-                disabled={!file || isProcessing}
+                disabled={(files.length === 0 && !file) || isProcessing}
                 className="flex-1"
               >
                 <FileText className="mr-2 h-4 w-4" />
-                Processar PDF
+                {files.length > 1 ? `Processar ${files.length} PDFs` : "Processar PDF"}
               </Button>
               <Button
                 onClick={resetAll}

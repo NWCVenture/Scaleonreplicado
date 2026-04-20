@@ -196,9 +196,11 @@ export default function EstanteVirtualPage() {
 
   const handleConfirmRetirada = useCallback(async () => {
     if (!pendingQR || !selectedId) return;
+    const norm = (s: string) => s.toUpperCase().replace(/\s+/g, " ").trim();
     const match = fardos.find(
       (f) =>
-        f.sku === pendingQR.parsed.sku && f.lote === pendingQR.parsed.lote,
+        norm(f.sku) === norm(pendingQR.parsed.sku) &&
+        norm(f.lote) === norm(pendingQR.parsed.lote),
     );
     if (!match) {
       toast.error(`Fardo nao encontrado: ${pendingQR.parsed.sku}`);

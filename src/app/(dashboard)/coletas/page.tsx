@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
+import { cn, copyToClipboard } from "@/lib/utils";
 import {
   Loader2,
   Package,
@@ -274,9 +274,13 @@ export default function ColetasPage() {
   }, [removeInputValue, bipagem]);
 
   // ── Copy IDs ──────────────────────────────────────────────────────────────
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(bipagem.ids.join("\n"));
-    toast.success(`Copiado! (${bipagem.ids.length})`);
+  const handleCopy = useCallback(async () => {
+    try {
+      await copyToClipboard(bipagem.ids.join("\n"));
+      toast.success(`Copiado! (${bipagem.ids.length})`);
+    } catch {
+      toast.error("Erro ao copiar — verifique permissões do navegador");
+    }
   }, [bipagem.ids]);
 
   // ── Clear ─────────────────────────────────────────────────────────────────
@@ -518,10 +522,12 @@ export default function ColetasPage() {
       });
       if (!res.ok) throw new Error();
       toast.success("Revisado com sucesso!");
+      setViewMode("bipagem");
+      bipagem.clear();
     } catch {
       toast.error("Erro ao revisar");
     }
-  }, []);
+  }, [bipagem]);
 
   const handleExportGeral = useCallback((bipagens: BipagemRecord[]) => {
     if (!bipagens.length) {
@@ -555,7 +561,7 @@ export default function ColetasPage() {
       const codes = data.pacotes.map(
         (p: { codigo: string }) => p.codigo,
       );
-      await navigator.clipboard.writeText(codes.join("\n"));
+      await copyToClipboard(codes.join("\n"));
       toast.success(`Copiado! (${codes.length} IDs)`);
     } catch {
       toast.error("Erro ao copiar codigos");
@@ -910,7 +916,7 @@ export default function ColetasPage() {
                         className={cn(
                           "flex-1",
                           bipagem.currentAccount === op
-                            ? "bg-zinc-100 text-zinc-900 border-zinc-100"
+                            ? "bg-primary text-primary-foreground border-primary"
                             : "border-zinc-700 text-zinc-400 hover:bg-zinc-800",
                         )}
                       >

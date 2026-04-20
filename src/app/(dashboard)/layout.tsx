@@ -38,6 +38,7 @@ const expedicaoHrefs = [
   "/estante-virtual",
   "/alteracao-estoque",
   "/produtos-avariados",
+  "/pedidos-urgentes",
 ];
 
 const outrosHrefs = [
@@ -70,6 +71,11 @@ const expedicaoItems = [
     href: "/produtos-avariados",
     label: "Produtos com Avarias",
     icon: AlertTriangle,
+  },
+  {
+    href: "/pedidos-urgentes",
+    label: "Pedidos Urgentes",
+    icon: Package,
   },
 ];
 
@@ -164,6 +170,7 @@ export default function DashboardLayout({
   }
 
   if (!session) {
+    router.replace("/login");
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

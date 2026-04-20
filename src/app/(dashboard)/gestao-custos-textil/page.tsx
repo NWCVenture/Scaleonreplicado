@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { generateId } from "@/lib/utils";
 import { toast } from "sonner";
 import { Input, Label } from "@/components/ui/form-elements";
 import { Button } from "@/components/ui/button";
@@ -215,7 +216,7 @@ export default function GestaoCustosTextil() {
       setResultadosAtuais(resultados);
 
       const novoLote: LoteRegistrado = {
-        id: crypto.randomUUID(),
+        id: generateId(),
         dados: dadosCompletos,
         resultados,
         timestamp: Date.now(),

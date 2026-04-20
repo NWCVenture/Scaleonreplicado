@@ -155,6 +155,7 @@ export const stockItem = pgTable(
     sku: text("sku").notNull(),
     lote: text("lote").notNull(),
     quantidade: integer("quantidade").notNull(),
+    codigoFardo: text("codigo_fardo").unique(),
     usuarioId: text("usuario_id").references(() => user.id, {
       onDelete: "set null",
     }),
@@ -163,6 +164,7 @@ export const stockItem = pgTable(
   (table) => [
     index("idx_stock_item_sku").on(table.sku),
     index("idx_stock_item_created_at").on(table.createdAt),
+    index("idx_stock_item_codigo_fardo").on(table.codigoFardo),
   ]
 );
 

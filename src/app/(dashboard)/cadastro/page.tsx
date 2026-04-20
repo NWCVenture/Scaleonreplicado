@@ -42,7 +42,17 @@ type PrintQueueItem = {
   sku: string;
   lote: string;
   qtd: number;
+  codigoFardo: string;
 };
+
+function gerarCodigoFardo(): string {
+  const d = new Date();
+  const date = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let rand = "";
+  for (let i = 0; i < 5; i++) rand += chars[Math.floor(Math.random() * chars.length)];
+  return `F-${date}-${rand}`;
+}
 
 type LoteCadastrado = {
   id: string;
@@ -140,7 +150,7 @@ export default function CadastroEstoque() {
     }
   };
 
-  const handleAddToQueue = (e: React.FormEvent) => {
+  const handleAddToQueue = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
 
     if (!selectedProduct || !selectedSize) {
@@ -175,6 +185,7 @@ export default function CadastroEstoque() {
         sku,
         lote,
         qtd: qtdUnidades,
+        codigoFardo: gerarCodigoFardo(),
       });
     }
 
@@ -288,6 +299,7 @@ export default function CadastroEstoque() {
       sku: item.sku,
       lote,
       qtd: item.qtd,
+      codigoFardo: gerarCodigoFardo(),
     }));
     setPrintQueue((prev) => [...prev, ...newItems]);
     toast.success(`${newItems.length} fardos importados!`, {
@@ -299,9 +311,9 @@ export default function CadastroEstoque() {
     setIsTxtDialogOpen(false);
   };
 
-  // QR Code payload
+  // QR Code payload — includes unique fardo code so each physical fardo is identifiable
   const getQrPayload = (item: PrintQueueItem) =>
-    `${item.sku}|${item.lote}|${item.qtd}`;
+    `${item.sku}}${item.lote}}${item.qtd}}${item.codigoFardo}`;
 
   // Pages for print queue
   const itemsPerPage = isFardoAgrupado ? 1 : 4;
@@ -436,6 +448,7 @@ export default function CadastroEstoque() {
             sku: item.sku,
             lote: item.lote,
             quantidade: item.qtd,
+            codigoFardo: item.codigoFardo,
           })),
         }),
       });

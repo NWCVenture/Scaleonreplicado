@@ -93,14 +93,18 @@ export function CameraScanner({ onScan, className }: CameraScannerProps) {
   useEffect(() => {
     doneRef.current = false;
     (async () => {
+      let stream: MediaStream | null = null;
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: "environment",
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-        });
+        // Try rear camera first (mobile), fallback to any available camera
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          });
+        }
         if (doneRef.current) {
           stream.getTracks().forEach((t) => t.stop());
           return;
@@ -114,7 +118,14 @@ export function CameraScanner({ onScan, className }: CameraScannerProps) {
           setStatus("scanning");
           startDetection(video);
         };
-      } catch {
+      } catch (err: any) {
+        if (err?.name === "NotAllowedError") {
+          console.warn("Camera: permissão negada");
+        } else if (err?.name === "NotFoundError") {
+          console.warn("Camera: nenhuma câmera encontrada");
+        } else {
+          console.warn("Camera error:", err);
+        }
         setStatus("error");
       }
     })();

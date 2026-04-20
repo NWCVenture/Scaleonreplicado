@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { copyToClipboard } from "@/lib/utils";
 import { toast } from "sonner";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Search, Copy } from "lucide-react";
@@ -129,7 +130,7 @@ export default function VerificadorEtiquetas() {
   const handleCopyResumo = () => {
     if (!paginasNaoBipadas.length) return;
     const resumo = `Paginas do PDF MISTURADO que possuem identificadores nao presentes no PDF BIPADO: ${paginasNaoBipadas.join(", ")}`;
-    navigator.clipboard.writeText(resumo);
+    copyToClipboard(resumo);
     toast.success("Lista de paginas copiada para a area de transferencia!");
   };
 

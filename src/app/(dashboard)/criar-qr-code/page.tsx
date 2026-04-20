@@ -6,13 +6,13 @@ import { Input, Label } from "@/components/ui/form-elements";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { QRCodeSVG } from "qrcode.react";
-import { Printer, Download, QrCode, RefreshCw, Package, Plus, Minus, Layers } from "lucide-react";
+import { Printer, Download, QrCode, RefreshCw, Package, Plus, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/layout/page-header";
 
 export default function CriarQRCode() {
   // Tab
-  const [activeTab, setActiveTab] = useState<'fardos' | 'embalados' | 'kits'>('fardos');
+  const [activeTab, setActiveTab] = useState<'fardos' | 'embalados'>('fardos');
 
   // Fardos (existente)
   const [titulo, setTitulo] = useState("");
@@ -26,47 +26,21 @@ export default function CriarQRCode() {
   const [emQrValue, setEmQrValue] = useState("");
   const [emSuggestions, setEmSuggestions] = useState<string[]>([]);
   const [showEmSuggestions, setShowEmSuggestions] = useState(false);
-  const [coletaSkuCatalog] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem("coletas_sku_catalog");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
 
-  // Kits — usa o catálogo de SKUs do módulo Coletas (mesma fonte dos 408 cadastrados)
-  const [kitSkuInput, setKitSkuInput] = useState("");
-  const [kitQtd, setKitQtd] = useState(1);
-  const [kitQrValue, setKitQrValue] = useState("");
-  const [kitSuggestions, setKitSuggestions] = useState<string[]>([]);
-  const [showKitSuggestions, setShowKitSuggestions] = useState(false);
-
+  // Fetch SKU suggestions from API (both Embalados and Kits use the same catalog)
   useEffect(() => {
-    if (kitSkuInput.length > 0) {
-      const filtered = coletaSkuCatalog
-        .filter(s => s.toLowerCase().includes(kitSkuInput.toLowerCase()))
-        .slice(0, 10);
-      setKitSuggestions(filtered);
-      setShowKitSuggestions(filtered.length > 0);
-    } else {
-      setKitSuggestions([]);
-      setShowKitSuggestions(false);
-    }
-  }, [kitSkuInput, coletaSkuCatalog]);
-
-  useEffect(() => {
-    if (emSkuInput.length > 0) {
-      const filtered = coletaSkuCatalog
-        .filter(s => s.toLowerCase().includes(emSkuInput.toLowerCase()))
-        .slice(0, 10);
-      setEmSuggestions(filtered);
-      setShowEmSuggestions(filtered.length > 0);
-    } else {
-      setEmSuggestions([]);
-      setShowEmSuggestions(false);
-    }
-  }, [emSkuInput, coletaSkuCatalog]);
+    if (emSkuInput.length < 1) { setEmSuggestions([]); setShowEmSuggestions(false); return; }
+    const controller = new AbortController();
+    fetch(`/api/sku-catalogo?search=${encodeURIComponent(emSkuInput)}`, { signal: controller.signal })
+      .then(r => r.ok ? r.json() : { skus: [] })
+      .then(data => {
+        const list = (data.skus as { codigo: string }[]).map(s => s.codigo).slice(0, 10);
+        setEmSuggestions(list);
+        setShowEmSuggestions(list.length > 0);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [emSkuInput]);
 
   // --- Shared handlers ---
   const handlePrint = (svgId: string, printTitulo: string, printLink: string) => {
@@ -195,18 +169,6 @@ export default function CriarQRCode() {
 
   const emQrTitle = emSkuInput ? `${emSkuInput.toUpperCase()} x${emQtd}` : "";
 
-  // --- Kits handlers ---
-  const handleGenerateKit = () => {
-    if (!kitSkuInput.trim()) {
-      toast.error("Selecione um Kit!");
-      return;
-    }
-    const sku = kitSkuInput.trim().toUpperCase();
-    setKitQrValue(`${sku}|KIT|${kitQtd}`);
-    toast.success("QR Code do kit gerado!");
-  };
-
-  const kitQrTitle = kitSkuInput ? `${kitSkuInput.toUpperCase()} KIT x${kitQtd}` : "";
 
   return (
     <div className="space-y-6">
@@ -221,7 +183,6 @@ export default function CriarQRCode() {
         {[
           { id: 'fardos' as const, label: 'Fardos / Geral', icon: QrCode },
           { id: 'embalados' as const, label: 'Embalados', icon: Package },
-          { id: 'kits' as const, label: 'Kits', icon: Layers },
         ].map(tab => {
           const Icon = tab.icon;
           return (
@@ -405,11 +366,6 @@ export default function CriarQRCode() {
                     </div>
                   )}
                 </div>
-                {coletaSkuCatalog.length === 0 && (
-                  <p className="text-xs text-amber-400 bg-amber-950/20 p-2 rounded">
-                    Catálogo de SKUs vazio. Cadastre SKUs na página de Coletas.
-                  </p>
-                )}
               </div>
 
               <div className="space-y-2">
@@ -531,169 +487,6 @@ export default function CriarQRCode() {
         </div>
       )}
 
-      {/* TAB 3: Kits */}
-      {activeTab === 'kits' && (
-        <div className="grid gap-8 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>QR Code de Kit</CardTitle>
-              <CardDescription>
-                Selecione um Kit cadastrado no módulo de Coletas e informe a quantidade
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <Label>Kit SKU</Label>
-                <div className="relative">
-                  <Input
-                    placeholder="Buscar kit..."
-                    value={kitSkuInput}
-                    onChange={(e) => setKitSkuInput(e.target.value)}
-                    onFocus={() => kitSkuInput.length > 0 && setShowKitSuggestions(true)}
-                  />
-                  {showKitSuggestions && kitSuggestions.length > 0 && (
-                    <div className="absolute z-50 w-full mt-1 bg-slate-800 border border-slate-700 rounded-md shadow-lg max-h-48 overflow-auto">
-                      {kitSuggestions.map(sku => (
-                        <button
-                          key={sku}
-                          type="button"
-                          className="w-full text-left px-4 py-2 hover:bg-slate-700 text-sm font-mono text-white"
-                          onClick={() => {
-                            setKitSkuInput(sku);
-                            setShowKitSuggestions(false);
-                          }}
-                        >
-                          {sku}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {coletaSkuCatalog.length === 0 && (
-                  <p className="text-xs text-amber-400 bg-amber-950/20 p-2 rounded">
-                    Catálogo de SKUs vazio. Cadastre SKUs na página de Coletas.
-                  </p>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <Label>Quantidade de Kits</Label>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="shrink-0"
-                    onClick={() => setKitQtd(q => Math.max(1, q - 1))}
-                  >
-                    <Minus className="h-4 w-4" />
-                  </Button>
-                  <Input
-                    type="number"
-                    value={kitQtd}
-                    onChange={(e) => setKitQtd(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="text-center text-xl font-bold"
-                    min="1"
-                  />
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="shrink-0"
-                    onClick={() => setKitQtd(q => q + 1)}
-                  >
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-
-              <Button
-                onClick={handleGenerateKit}
-                className="w-full h-12 text-lg"
-                disabled={!kitSkuInput.trim()}
-              >
-                <Layers className="mr-2 h-5 w-5" />
-                Gerar QR Code do Kit
-              </Button>
-
-              {kitQrValue && (
-                <div className="pt-4 border-t border-slate-700 space-y-4">
-                  <div className="flex gap-3">
-                    <Button
-                      onClick={() => handlePrint("qr-code-svg-kit", kitQrTitle, kitQrValue)}
-                      className="flex-1 h-12"
-                      variant="default"
-                    >
-                      <Printer className="mr-2 h-5 w-5" />
-                      Imprimir
-                    </Button>
-                    <Button
-                      onClick={() => handleDownloadPNG("qr-code-svg-kit", kitQrTitle)}
-                      className="flex-1 h-12"
-                      variant="outline"
-                    >
-                      <Download className="mr-2 h-5 w-5" />
-                      Baixar PNG
-                    </Button>
-                  </div>
-                  <Button
-                    onClick={() => {
-                      setKitSkuInput("");
-                      setKitQtd(1);
-                      setKitQrValue("");
-                      toast.info("Formulário limpo");
-                    }}
-                    variant="ghost"
-                    className="w-full"
-                  >
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    Limpar e Criar Novo
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Visualização</CardTitle>
-              <CardDescription>QR Code do kit gerado</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {kitQrValue ? (
-                <div className="flex flex-col items-center justify-center space-y-4 p-8 bg-muted/30 rounded-lg min-h-[400px]">
-                  <div className="bg-white p-6 rounded-lg shadow-lg">
-                    <QRCodeSVG
-                      id="qr-code-svg-kit"
-                      value={kitQrValue}
-                      size={300}
-                      level="H"
-                      imageSettings={{
-                        src: "/logo.svg",
-                        x: undefined,
-                        y: undefined,
-                        height: 60,
-                        width: 60,
-                        excavate: true,
-                      }}
-                    />
-                  </div>
-                  <div className="text-center space-y-1">
-                    <p className="text-lg font-bold font-mono">{kitSkuInput.toUpperCase()}</p>
-                    <p className="text-2xl font-bold text-primary">&times; {kitQtd} kit(s)</p>
-                    <p className="text-xs text-muted-foreground font-mono mt-2">{kitQrValue}</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center space-y-4 p-8 bg-muted/30 rounded-lg min-h-[400px]">
-                  <Layers className="h-24 w-24 text-muted-foreground opacity-50" />
-                  <p className="text-muted-foreground text-center">
-                    Selecione um kit e informe a quantidade para gerar o QR Code
-                  </p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
 
       {/* Área de Impressão (Oculta visualmente) */}
       <div className="hidden">
