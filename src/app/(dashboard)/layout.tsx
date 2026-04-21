@@ -415,7 +415,7 @@ export default function DashboardLayout({
           </Button>
 
           <div className="mt-3 text-xs text-sidebar-foreground/50">
-            <p>Sistema v1.0</p>
+            <p>Sistema v1.1</p>
           </div>
         </div>
       </aside>
