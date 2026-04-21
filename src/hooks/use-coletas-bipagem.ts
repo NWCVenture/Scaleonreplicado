@@ -36,6 +36,9 @@ export function useColetasBipagem() {
   // Refs for scan debounce
   const processTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastProcessedText = useRef("");
+  // Always-current snapshot of ids — avoids stale closures in processText
+  const idsRef = useRef<string[]>([]);
+  idsRef.current = ids;
 
   // processText: extract IDs from scanned text, detect carriers, add to list
   // Returns { newIds, duplicates } for parent to play sounds
@@ -56,21 +59,24 @@ export function useColetasBipagem() {
         extracted = extractShippingIds(text);
       }
 
+      // Compute new/duplicates synchronously using the ref snapshot.
+      // Do NOT use side effects inside the setIds updater — React 18 batching
+      // defers updater execution in production, so values read after setIds()
+      // would be stale (empty arrays), preventing the modal from opening.
+      const currentIds = idsRef.current;
       const newIds: string[] = [];
       const duplicates: string[] = [];
 
       extracted.forEach((id) => {
-        setIds((prev) => {
-          if (dedup && prev.includes(id)) {
-            duplicates.push(id);
-            return prev;
-          }
+        if (dedup && currentIds.includes(id)) {
+          duplicates.push(id);
+        } else {
           newIds.push(id);
-          return [...prev, id];
-        });
+        }
       });
 
       if (newIds.length > 0) {
+        setIds((prev) => [...prev, ...newIds]);
         setStatusMsg(`+${newIds.length} pacote(s)`);
         setStatusType("success");
       } else if (duplicates.length > 0) {
