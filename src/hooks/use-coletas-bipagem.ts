@@ -118,6 +118,9 @@ export function useColetasBipagem() {
       delete next[id];
       return next;
     });
+    setStatusMsg("");
+    setStatusType("");
+    lastProcessedText.current = "";
   }, []);
 
   const clear = useCallback(() => {

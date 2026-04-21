@@ -168,7 +168,7 @@ export default function ColetasPage() {
       ) {
         inputRef.current?.focus();
       }
-    }, 2000);
+    }, 500);
     return () => clearInterval(interval);
   }, [viewMode, devolucaoModalOpen]);
 
@@ -1030,7 +1030,10 @@ export default function ColetasPage() {
                       index={index}
                       carrier={detectCarrier(id, bipagem.carrierPatterns)}
                       hasDevolucao={!!bipagem.devolucoesData[id]}
-                      onRemove={() => bipagem.removeId(id)}
+                      onRemove={() => {
+                        bipagem.removeId(id);
+                        setTimeout(() => inputRef.current?.focus(), 0);
+                      }}
                       onEditDevolucao={() => handleOpenDevolucao(id)}
                     />
                   ))}
