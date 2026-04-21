@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db } from "./db";
 import * as schema from "./db/schema";
+import { sendEmail, buildVerificationEmailHtml } from "./email";
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -15,6 +16,29 @@ export const auth = betterAuth({
   }),
   emailAndPassword: {
     enabled: true,
+  },
+  emailVerification: {
+    sendVerificationEmail: async ({ user, url }) => {
+      try {
+        await sendEmail({
+          to: user.email,
+          subject: "NWC ERP — Verifique seu email",
+          html: buildVerificationEmailHtml(url, user.name),
+        });
+      } catch (err) {
+        console.warn("[email] Falha ao enviar verificação para", user.email, "—", (err as Error).message);
+      }
+    },
+    expiresIn: 60 * 60, // 1 hour
+  },
+  user: {
+    additionalFields: {
+      role: {
+        type: "string",
+        required: true,
+        defaultValue: "funcionario",
+      },
+    },
   },
   session: {
     expiresIn: 60 * 60 * 24 * 7, // 7 days

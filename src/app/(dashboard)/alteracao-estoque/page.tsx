@@ -36,6 +36,8 @@ import {
   Tag,
   Filter,
   Calendar,
+  ScanLine,
+  X,
 } from "lucide-react";
 import {
   type Size,
@@ -77,9 +79,9 @@ export default function AlteracaoEstoquePage() {
   // Quick Edit Popup
   const [showAlteracaoPopup, setShowAlteracaoPopup] = useState(false);
   const [popupSaidaSku, setPopupSaidaSku] = useState("");
-  const [popupQtd, setPopupQtd] = useState(1);
   const [popupNovoTamanho, setPopupNovoTamanho] = useState<Size | null>(null);
-  const [popupEtiqueta, setPopupEtiqueta] = useState("");
+  const [popupEtiquetas, setPopupEtiquetas] = useState<string[]>([]);
+  const [etiquetaInput, setEtiquetaInput] = useState("");
 
   // SKU autocomplete
   const [saidaInput, setSaidaInput] = useState("");
@@ -166,10 +168,25 @@ export default function AlteracaoEstoquePage() {
 
   const abrirPopupAlteracao = (sku: string) => {
     setPopupSaidaSku(sku.trim().toUpperCase());
-    setPopupQtd(1);
     setPopupNovoTamanho(null);
-    setPopupEtiqueta("");
+    setPopupEtiquetas([]);
+    setEtiquetaInput("");
     setShowAlteracaoPopup(true);
+  };
+
+  const adicionarEtiqueta = (value: string) => {
+    const code = value.trim();
+    if (!code) return;
+    if (popupEtiquetas.includes(code)) {
+      toast.warning("Etiqueta já adicionada");
+      return;
+    }
+    setPopupEtiquetas((prev) => [...prev, code]);
+    setEtiquetaInput("");
+  };
+
+  const removerEtiqueta = (code: string) => {
+    setPopupEtiquetas((prev) => prev.filter((e) => e !== code));
   };
 
   const handleSalvarAlteracaoRapida = async () => {
@@ -181,12 +198,8 @@ export default function AlteracaoEstoquePage() {
       toast.error("Selecione o novo tamanho!");
       return;
     }
-    if (!popupEtiqueta.trim()) {
-      toast.error("Informe a etiqueta/codigo do pacote!");
-      return;
-    }
-    if (popupQtd < 1) {
-      toast.error("Informe a quantidade!");
+    if (popupEtiquetas.length === 0) {
+      toast.error("Bipe ao menos uma etiqueta!");
       return;
     }
 
@@ -195,23 +208,24 @@ export default function AlteracaoEstoquePage() {
       const saidaUpper = popupSaidaSku.trim().toUpperCase();
       const entradaUpper = replaceSize(saidaUpper, popupNovoTamanho);
 
-      const res = await fetch("/api/alteracoes-estoque", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          saidas: [{ sku: saidaUpper, quantidade: popupQtd }],
-          entradas: [{ sku: entradaUpper, quantidade: popupQtd }],
-          codigoPacote: popupEtiqueta.trim(),
-        }),
-      });
-
-      if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.error || "Erro ao registrar");
+      for (const etiqueta of popupEtiquetas) {
+        const res = await fetch("/api/alteracoes-estoque", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            saidas: [{ sku: saidaUpper, quantidade: 1 }],
+            entradas: [{ sku: entradaUpper, quantidade: 1 }],
+            codigoPacote: etiqueta,
+          }),
+        });
+        if (!res.ok) {
+          const error = await res.json();
+          throw new Error(error.error || "Erro ao registrar");
+        }
       }
 
       toast.success(
-        `Alteracao: ${saidaUpper} -> ${entradaUpper} (${popupQtd}x)`
+        `${popupEtiquetas.length} alteracao(oes): ${saidaUpper} → ${entradaUpper}`
       );
       setShowAlteracaoPopup(false);
       setSaidaInput("");
@@ -708,54 +722,56 @@ export default function AlteracaoEstoquePage() {
               </div>
             )}
 
-            {/* Quantity +/- */}
+            {/* Multi-bip etiquetas */}
             <div className="space-y-2">
-              <Label>Quantidade</Label>
-              <div className="flex items-center gap-3">
-                <Button
-                  size="icon"
-                  variant="outline"
-                  onClick={() => setPopupQtd((q) => Math.max(1, q - 1))}
-                >
-                  <Minus className="h-4 w-4" />
-                </Button>
-                <Input
-                  type="number"
-                  value={popupQtd}
-                  onChange={(e) =>
-                    setPopupQtd(Math.max(1, parseInt(e.target.value) || 1))
-                  }
-                  className="text-center text-lg font-mono w-20 bg-slate-800 border-slate-600"
-                />
-                <Button
-                  size="icon"
-                  variant="outline"
-                  onClick={() => setPopupQtd((q) => q + 1)}
-                >
-                  <Plus className="h-4 w-4" />
-                </Button>
+              <div className="flex items-center justify-between">
+                <Label>Etiquetas Bipadas</Label>
+                {popupEtiquetas.length > 0 && (
+                  <span className="text-xs text-muted-foreground bg-slate-700 px-2 py-0.5 rounded-full">
+                    {popupEtiquetas.length} pacote(s)
+                  </span>
+                )}
               </div>
-            </div>
-
-            {/* Package code */}
-            <div className="space-y-2">
-              <Label>Codigo do Pacote / Etiqueta</Label>
-              <Input
-                value={popupEtiqueta}
-                onChange={(e) => setPopupEtiqueta(e.target.value)}
-                placeholder="Bipe ou digite o codigo"
-                className="h-12 text-lg font-mono bg-slate-800 border-slate-600"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSalvarAlteracaoRapida();
-                }}
-              />
+              <div className="relative">
+                <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  value={etiquetaInput}
+                  onChange={(e) => setEtiquetaInput(e.target.value)}
+                  placeholder="Bipe ou digite o código e pressione Enter"
+                  className="h-12 pl-9 text-base font-mono bg-slate-800 border-slate-600"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") adicionarEtiqueta(etiquetaInput);
+                  }}
+                />
+              </div>
+              {popupEtiquetas.length > 0 && (
+                <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
+                  {popupEtiquetas.map((code, i) => (
+                    <div
+                      key={code}
+                      className="flex items-center justify-between bg-slate-800 rounded px-3 py-1.5 text-sm"
+                    >
+                      <span className="font-mono text-xs text-slate-300">
+                        {i + 1}. {code}
+                      </span>
+                      <button
+                        onClick={() => removerEtiqueta(code)}
+                        className="text-red-400 hover:text-red-300 ml-2"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Save button */}
             <Button
               className="w-full h-12"
               disabled={
-                !popupNovoTamanho || !popupEtiqueta.trim() || isSubmitting
+                !popupNovoTamanho || popupEtiquetas.length === 0 || isSubmitting
               }
               onClick={handleSalvarAlteracaoRapida}
             >

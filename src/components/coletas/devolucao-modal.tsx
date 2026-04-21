@@ -3,15 +3,19 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import type {
+  TipoColeta,
   ContaOperacao,
   SkuLine,
   SkuKitRule,
   DevolucaoFormData,
+  TransportadoraLabel,
 } from "@/types/coletas";
 import {
   OPERATIONS,
   OPERATION_DISPLAY,
   EMPTY_SKU_LINE,
+  CARRIER_DISPLAY,
+  CARRIER_COLORS,
 } from "@/types/coletas";
 import { explodeSkuLines, sumSkuLines, fileToBase64 } from "@/lib/coletas-utils";
 import {
@@ -26,12 +30,15 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Plus, Minus, X, Camera, ImageIcon } from "lucide-react";
+import { toast } from "sonner";
 
 interface DevolucaoModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pacoteId: string;
+  carrier?: TransportadoraLabel | null;
   currentAccount: ContaOperacao;
+  currentFunction?: TipoColeta;
   skuCatalog: string[];
   kitRules: SkuKitRule[];
   existingData?: DevolucaoFormData;
@@ -42,7 +49,9 @@ export function DevolucaoModal({
   open,
   onOpenChange,
   pacoteId,
+  carrier,
   currentAccount,
+  currentFunction = "DEVOLUCAO",
   skuCatalog,
   kitRules,
   existingData,
@@ -156,12 +165,21 @@ export function DevolucaoModal({
   );
 
   const handleSave = useCallback(() => {
+    const validSkus = skuLines.filter((l) => l.sku.trim());
+    if (validSkus.length === 0) {
+      toast.error("Informe ao menos 1 SKU da devolucao");
+      return;
+    }
+    if (avaria && !obs.trim()) {
+      toast.error("Descricao da avaria e obrigatoria quando avaria = SIM");
+      return;
+    }
     onSave({
-      skuLines: skuLines.filter((l) => l.sku.trim()),
+      skuLines: validSkus,
       operacao,
       avaria,
       obs,
-      tipo: "DEVOLUCAO",
+      tipo: existingData?.tipo ?? currentFunction,
       fotoPacoteBase64: fotoPacoteBase64 || undefined,
       fotoAvariaBase64: fotoAvariaBase64 || undefined,
     });
@@ -193,16 +211,26 @@ export function DevolucaoModal({
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto bg-zinc-950 border-zinc-800">
         <DialogHeader>
           <DialogTitle className="text-zinc-100">
-            Registrar Devolucao
+            {currentFunction === "CANCELADO" ? "Registrar Cancelamento" : "Registrar Devolucao"}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* Pacote ID */}
+          {/* Pacote ID + badge transportadora */}
           <div className="bg-zinc-900 p-3 rounded-lg text-center border border-zinc-800">
             <div className="font-mono font-bold text-zinc-200 tracking-wider">
               {pacoteId}
             </div>
+            {carrier && carrier !== "DESCONHECIDA" && (
+              <span
+                className={cn(
+                  "inline-block mt-1.5 px-2 py-0.5 rounded text-xs font-bold border",
+                  CARRIER_COLORS[carrier],
+                )}
+              >
+                {CARRIER_DISPLAY[carrier]}
+              </span>
+            )}
           </div>
 
           {/* SKU Lines */}

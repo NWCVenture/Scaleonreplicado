@@ -15,7 +15,7 @@ import { relations } from "drizzle-orm";
 // 1. ENUMS
 // ============================================================
 
-export const userRoleEnum = pgEnum("user_role", ["admin", "funcionario"]);
+export const userRoleEnum = pgEnum("user_role", ["admin", "supervisor", "funcionario", "expedicao"]);
 
 export const tipoColetaEnum = pgEnum("tipo_coleta", [
   "FLEX",

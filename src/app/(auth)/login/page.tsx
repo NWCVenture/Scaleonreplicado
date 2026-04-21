@@ -16,15 +16,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Lock, User, Loader2 } from "lucide-react";
 
-const demoUsers = [
-  { email: "admin@nwc.com", password: "admin123", role: "admin" },
-  { email: "funcionario@nwc.com", password: "func1234", role: "funcionario" },
-  { email: "igor@nwc.com", password: "12345678", role: "admin" },
-  { email: "victor@nwc.com", password: "12345678", role: "admin" },
-  { email: "fellicio@nwc.com", password: "12345678", role: "admin" },
-  { email: "beatriz@nwc.com", password: "12345678", role: "funcionario" },
-];
-
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -53,11 +44,6 @@ export default function LoginPage() {
     }
 
     setLoading(false);
-  }
-
-  function fillCredentials(userEmail: string, userPassword: string) {
-    setEmail(userEmail);
-    setPassword(userPassword);
   }
 
   return (
@@ -119,29 +105,6 @@ export default function LoginPage() {
               )}
             </Button>
           </form>
-
-          <div className="mt-6 p-4 bg-muted/50 rounded-lg">
-            <p className="text-xs text-muted-foreground mb-2 font-medium">
-              Usuários demo:
-            </p>
-            <div className="space-y-1">
-              {demoUsers.map((user) => (
-                <button
-                  key={user.email}
-                  type="button"
-                  onClick={() => fillCredentials(user.email, user.password)}
-                  className="block w-full text-left text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <span className="font-mono">
-                    {user.email} / {user.password}
-                  </span>{" "}
-                  <span className="text-muted-foreground/60">
-                    ({user.role})
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
         </CardContent>
       </Card>
     </div>

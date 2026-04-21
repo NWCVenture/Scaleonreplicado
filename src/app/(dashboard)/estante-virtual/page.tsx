@@ -206,19 +206,22 @@ export default function EstanteVirtualPage() {
       toast.error(`Fardo nao encontrado: ${pendingQR.parsed.sku}`);
       return;
     }
+    let ok = false;
     try {
       const res = await fetch(
         `/api/estantes/${selectedId}/fardos/${match.id}`,
         { method: "DELETE" },
       );
+      ok = res.ok;
       if (!res.ok) throw new Error("Erro ao retirar");
       toast.success(`Fardo retirado: ${pendingQR.parsed.sku}`);
       setPendingQR(null);
       setShowScanner(false);
+    } catch {
+      if (!ok) toast.error("Erro ao retirar fardo");
+    } finally {
       fetchDetail(selectedId);
       fetchEstantes();
-    } catch {
-      toast.error("Erro ao retirar fardo");
     }
   }, [pendingQR, selectedId, fardos, fetchDetail, fetchEstantes]);
 
@@ -298,19 +301,21 @@ export default function EstanteVirtualPage() {
       if (!selectedId) return;
       if (!confirm("Remover este fardo?")) return;
       setRemovingId(fardoId);
+      let ok = false;
       try {
         const res = await fetch(
           `/api/estantes/${selectedId}/fardos/${fardoId}`,
           { method: "DELETE" },
         );
+        ok = res.ok;
         if (!res.ok) throw new Error("Erro ao remover");
         toast.success("Fardo removido");
-        fetchDetail(selectedId);
-        fetchEstantes();
       } catch {
-        toast.error("Erro ao remover fardo");
+        if (!ok) toast.error("Erro ao remover fardo");
       } finally {
         setRemovingId(null);
+        fetchDetail(selectedId);
+        fetchEstantes();
       }
     },
     [selectedId, fetchDetail, fetchEstantes],

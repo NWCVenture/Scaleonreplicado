@@ -73,6 +73,7 @@ export default function ColetasPage() {
   // Devolucao modal
   const [devolucaoModalOpen, setDevolucaoModalOpen] = useState(false);
   const [devolucaoPacketId, setDevolucaoPacketId] = useState("");
+  const [devolucaoCarrier, setDevolucaoCarrier] = useState<TransportadoraLabel | null>(null);
 
   // Remove search
   const [removeInputValue, setRemoveInputValue] = useState("");
@@ -238,12 +239,20 @@ export default function ColetasPage() {
       bipagem.setInputValue(value);
 
       // Use a small debounce to process
-      const timer = setTimeout(() => {
+      setTimeout(() => {
         const result = bipagem.processText(value);
         if (result.newIds.length > 0) {
           const lastId = result.newIds[result.newIds.length - 1];
           const carrier = detectCarrier(lastId, bipagem.carrierPatterns);
           showOverlay(lastId, false, carrier);
+          if (
+            bipagem.currentFunction === "DEVOLUCAO" ||
+            bipagem.currentFunction === "CANCELADO"
+          ) {
+            setDevolucaoPacketId(lastId);
+            setDevolucaoCarrier(carrier ?? null);
+            setDevolucaoModalOpen(true);
+          }
         } else if (result.duplicates.length > 0) {
           showOverlay(result.duplicates[0], true);
         }
@@ -251,10 +260,8 @@ export default function ColetasPage() {
           bipagem.setInputValue("");
         }
       }, 5);
-
-      return () => clearTimeout(timer);
     },
-    [bipagem, showOverlay],
+    [bipagem, showOverlay, setDevolucaoPacketId, setDevolucaoModalOpen],
   );
 
   // ── Remove package by search ──────────────────────────────────────────────
@@ -504,14 +511,16 @@ export default function ColetasPage() {
   // ── Devolucao Modal ───────────────────────────────────────────────────────
   const handleOpenDevolucao = useCallback((pacoteId: string) => {
     setDevolucaoPacketId(pacoteId);
+    setDevolucaoCarrier(detectCarrier(pacoteId, bipagem.carrierPatterns));
     setDevolucaoModalOpen(true);
-  }, []);
+  }, [bipagem.carrierPatterns]);
 
   const handleSaveDevolucao = useCallback(
     (data: DevolucaoFormData) => {
       bipagem.setDevolucao(devolucaoPacketId, data);
+      setTimeout(() => inputRef.current?.focus(), 100);
     },
-    [bipagem, devolucaoPacketId],
+    [bipagem, devolucaoPacketId, inputRef],
   );
 
   // ── Historico callbacks ───────────────────────────────────────────────────
@@ -821,7 +830,9 @@ export default function ColetasPage() {
         open={devolucaoModalOpen}
         onOpenChange={setDevolucaoModalOpen}
         pacoteId={devolucaoPacketId}
+        carrier={devolucaoCarrier}
         currentAccount={bipagem.currentAccount}
+        currentFunction={bipagem.currentFunction}
         skuCatalog={bipagem.skuCatalog}
         kitRules={bipagem.kitRules}
         existingData={bipagem.devolucoesData[devolucaoPacketId]}

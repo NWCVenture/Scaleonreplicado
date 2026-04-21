@@ -52,6 +52,13 @@ export function ModalScanner({
   const scanRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const playBeep = (type: "success" | "error" = "success") => {
+    const audio = new Audio(
+      type === "success" ? "/sounds/bipado.mp3" : "/sounds/erro.mp3",
+    );
+    audio.play().catch(() => {});
+  };
+
   useEffect(() => {
     if (open) {
       setTimeout(() => scanRef.current?.focus(), 200);
@@ -60,7 +67,11 @@ export function ModalScanner({
 
   const handleCameraScan = (raw: string) => {
     const parsed = parseQRCode(raw);
-    if (!parsed) return;
+    if (!parsed) {
+      playBeep("error");
+      return;
+    }
+    playBeep("success");
     setLastScanned(parsed);
     onScanComplete(parsed, raw);
   };
@@ -72,12 +83,15 @@ export function ModalScanner({
       if (value.trim().length > 3) {
         const parsed = parseQRCode(value);
         if (parsed) {
+          playBeep("success");
           setLastScanned(parsed);
           onScanComplete(parsed, value);
+        } else {
+          playBeep("error");
         }
         setScanInput("");
       }
-    }, 100);
+    }, 30);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -85,8 +99,11 @@ export function ModalScanner({
       if (debounceRef.current) clearTimeout(debounceRef.current);
       const parsed = parseQRCode(scanInput);
       if (parsed) {
+        playBeep("success");
         setLastScanned(parsed);
         onScanComplete(parsed, scanInput);
+      } else {
+        playBeep("error");
       }
       setScanInput("");
     }

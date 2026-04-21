@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useSession, signOut } from "@/lib/auth-client";
+import { useSession, signOut, authClient } from "@/lib/auth-client";
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,7 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  UserCog,
 } from "lucide-react";
 
 const expedicaoHrefs = [
@@ -51,10 +52,19 @@ const outrosHrefs = [
   "/recuperar-dados",
 ];
 
-const restrictedPages = [
-  "/criar-qr-code",
-  "/kit-organizer",
-  "/processador-anuncios",
+const adminOnlyPages = ["/gerenciar-usuarios"];
+
+const expedicaoAllowedPaths = [
+  "/",
+  "/coletas",
+  "/pedidos-urgentes",
+  "/cadastro",
+  "/estante-virtual",
+  "/contagem",
+];
+
+const adminItems = [
+  { href: "/gerenciar-usuarios", label: "Gerenciar Usuários", icon: UserCog },
 ];
 
 const expedicaoItems = [
@@ -132,6 +142,23 @@ export default function DashboardLayout({
     setModoLivre(sessionStorage.getItem("stockflow_modo_livre") === "1");
   }, []);
 
+  // Handle auth + role-based redirects in an effect (never during render)
+  useEffect(() => {
+    if (isPending) return;
+    if (!session) {
+      router.replace("/login");
+      return;
+    }
+    const role = (session.user as Record<string, unknown>).role as string;
+    if (adminOnlyPages.includes(pathname) && role !== "admin") {
+      router.replace("/");
+      return;
+    }
+    if (role === "expedicao" && !expedicaoAllowedPaths.includes(pathname)) {
+      router.replace("/");
+    }
+  }, [isPending, session, pathname, router]);
+
   // Block Tab key when modoLivre is false (scanner mode)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -161,6 +188,15 @@ export default function DashboardLayout({
     router.push("/login");
   };
 
+  const handleResendVerification = async () => {
+    try {
+      await authClient.sendVerificationEmail({ email: session?.user.email ?? "", callbackURL: "/" });
+      toast.success("Email de verificação reenviado!");
+    } catch {
+      toast.error("Erro ao reenviar email de verificação");
+    }
+  };
+
   if (isPending) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -170,7 +206,6 @@ export default function DashboardLayout({
   }
 
   if (!session) {
-    router.replace("/login");
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -178,14 +213,26 @@ export default function DashboardLayout({
     );
   }
 
-  const isBeatriz = session.user.email === "beatriz@nwc.com";
+  const userRole = (session.user as Record<string, unknown>).role as string;
+  const isAdmin = userRole === "admin";
+  const isExpedicao = userRole === "expedicao";
 
-  const filteredExpedicao = expedicaoItems.filter(
-    (item) => !(isBeatriz && restrictedPages.includes(item.href))
-  );
-  const filteredOutros = outrosItems.filter(
-    (item) => !(isBeatriz && restrictedPages.includes(item.href))
-  );
+  if (
+    (adminOnlyPages.includes(pathname) && !isAdmin) ||
+    (isExpedicao && !expedicaoAllowedPaths.includes(pathname))
+  ) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  const expedicaoRoleAllowed = new Set(["/coletas", "/pedidos-urgentes", "/cadastro", "/estante-virtual", "/contagem"]);
+  const filteredExpedicao = isExpedicao
+    ? expedicaoItems.filter((item) => expedicaoRoleAllowed.has(item.href))
+    : expedicaoItems;
+  const filteredOutros = isExpedicao ? [] : outrosItems;
 
   function renderNavItem(item: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }) {
     const isActive = pathname === item.href;
@@ -281,33 +328,47 @@ export default function DashboardLayout({
             )}
           </div>
 
-          {/* Outros section */}
-          <div>
-            <button
-              onClick={() => setOutrosAberta((v) => !v)}
-              className={cn(
-                "w-full flex items-center justify-between px-4 py-2.5 rounded-md text-sm font-bold transition-colors",
-                outrosHrefs.includes(pathname)
-                  ? "bg-primary/10 text-primary"
-                  : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground text-sidebar-foreground/80"
+          {/* Outros section (hidden for expedicao role) */}
+          {!isExpedicao && (
+            <div>
+              <button
+                onClick={() => setOutrosAberta((v) => !v)}
+                className={cn(
+                  "w-full flex items-center justify-between px-4 py-2.5 rounded-md text-sm font-bold transition-colors",
+                  outrosHrefs.includes(pathname)
+                    ? "bg-primary/10 text-primary"
+                    : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground text-sidebar-foreground/80"
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <Boxes className="h-4 w-4" />
+                  Outros
+                </div>
+                {outrosAberta ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </button>
+              {outrosAberta && (
+                <div className="mt-1 ml-3 pl-3 border-l-2 border-sidebar-border space-y-0.5">
+                  {filteredOutros.map(renderNavItem)}
+                </div>
               )}
-            >
-              <div className="flex items-center gap-3">
-                <Boxes className="h-4 w-4" />
-                Outros
+            </div>
+          )}
+
+          {/* Administração section (admin only) */}
+          {isAdmin && (
+            <div className="pt-2 border-t border-sidebar-border mt-2">
+              <p className="px-4 py-1 text-xs font-semibold text-sidebar-foreground/40 uppercase tracking-wider">
+                Administração
+              </p>
+              <div className="space-y-0.5 mt-1">
+                {adminItems.map(renderNavItem)}
               </div>
-              {outrosAberta ? (
-                <ChevronDown className="h-4 w-4" />
-              ) : (
-                <ChevronRight className="h-4 w-4" />
-              )}
-            </button>
-            {outrosAberta && (
-              <div className="mt-1 ml-3 pl-3 border-l-2 border-sidebar-border space-y-0.5">
-                {filteredOutros.map(renderNavItem)}
-              </div>
-            )}
-          </div>
+            </div>
+          )}
         </nav>
 
         {/* Bottom section */}
@@ -316,10 +377,8 @@ export default function DashboardLayout({
             <p className="text-xs font-medium text-sidebar-foreground">
               {session.user.name}
             </p>
-            <p className="text-xs text-sidebar-foreground/50">
-              {(session.user as Record<string, unknown>).role === "admin"
-                ? "Administrador"
-                : "Funcionario"}
+            <p className="text-xs text-sidebar-foreground/50 capitalize">
+              {{ admin: "Administrador", supervisor: "Supervisor", funcionario: "Funcionário", expedicao: "Expedição" }[userRole] ?? userRole}
             </p>
           </div>
 
@@ -408,34 +467,62 @@ export default function DashboardLayout({
               )}
             </div>
 
-            {/* Outros mobile */}
-            <div>
-              <button
-                onClick={() => setOutrosAberta((v) => !v)}
-                className="w-full flex items-center justify-between px-4 py-3 rounded-md text-sm font-bold bg-secondary hover:bg-secondary/80"
-              >
-                <div className="flex items-center gap-3">
-                  <Boxes className="h-5 w-5" /> Outros
-                </div>
-                {outrosAberta ? (
-                  <ChevronDown className="h-4 w-4" />
-                ) : (
-                  <ChevronRight className="h-4 w-4" />
+            {/* Outros mobile (hidden for expedicao role) */}
+            {!isExpedicao && (
+              <div>
+                <button
+                  onClick={() => setOutrosAberta((v) => !v)}
+                  className="w-full flex items-center justify-between px-4 py-3 rounded-md text-sm font-bold bg-secondary hover:bg-secondary/80"
+                >
+                  <div className="flex items-center gap-3">
+                    <Boxes className="h-5 w-5" /> Outros
+                  </div>
+                  {outrosAberta ? (
+                    <ChevronDown className="h-4 w-4" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4" />
+                  )}
+                </button>
+                {outrosAberta && (
+                  <div className="ml-4 pl-3 border-l-2 border-border mt-1 space-y-1">
+                    {filteredOutros.map(renderMobileNavItem)}
+                  </div>
                 )}
-              </button>
-              {outrosAberta && (
-                <div className="ml-4 pl-3 border-l-2 border-border mt-1 space-y-1">
-                  {filteredOutros.map(renderMobileNavItem)}
+              </div>
+            )}
+
+            {/* Administração mobile (admin only) */}
+            {isAdmin && (
+              <div className="pt-3 border-t border-border mt-2">
+                <p className="px-4 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  Administração
+                </p>
+                <div className="space-y-1 mt-1">
+                  {adminItems.map(renderMobileNavItem)}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </nav>
         </div>
       )}
 
       {/* Main Content */}
-      <main className="flex-1 pt-20 md:pt-0 overflow-auto">
-        <div className="container py-8 md:py-12 max-w-5xl mx-auto">
+      <main className="flex-1 pt-20 md:pt-0 overflow-auto flex flex-col">
+        {/* Email verification banner */}
+        {session.user.emailVerified === false && (
+          <div className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 flex items-center justify-between text-sm gap-4 shrink-0">
+            <span className="text-amber-700 dark:text-amber-400">
+              ⚠️ Verifique seu email para garantir acesso contínuo ao sistema.
+            </span>
+            <button
+              onClick={handleResendVerification}
+              className="text-xs font-medium underline text-amber-700 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-200 whitespace-nowrap"
+            >
+              Reenviar email
+            </button>
+          </div>
+        )}
+        <div className="container py-8 md:py-12 max-w-5xl mx-auto flex-1">
           {children}
         </div>
       </main>

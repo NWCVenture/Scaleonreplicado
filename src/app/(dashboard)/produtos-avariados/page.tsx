@@ -29,7 +29,6 @@ type ProdutoAvariado = {
 };
 
 const LOCALIZACAO_LABELS: Record<string, string> = {
-  DEVOLUCAO: "Devolucao",
   ESTANTE: "Estante",
   LOTE_DE_COSTURA: "Lote de Costura",
 };
@@ -325,7 +324,6 @@ export default function ProdutosAvariadosPage() {
               }}
             >
               <option value="">Selecione...</option>
-              <option value="DEVOLUCAO">Devolucao</option>
               <option value="ESTANTE">Estante</option>
               <option value="LOTE_DE_COSTURA">Lote de Costura</option>
             </select>
