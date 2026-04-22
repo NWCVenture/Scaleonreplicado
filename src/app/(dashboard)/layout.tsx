@@ -281,7 +281,7 @@ export default function DashboardLayout({
           <img
               src="/logo-full.png"
               alt="SCALEON ERP"
-              className="h-16 w-auto object-contain"
+              className="h-32 w-auto object-contain"
             />
           </div>
         </div>
