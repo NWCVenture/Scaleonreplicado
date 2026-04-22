@@ -42,7 +42,7 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
-/* SCALEON theme — green accent / gray background */
+/* SCALEON theme — green accent / dark background */
 :root {
   --radius: 0.375rem;
 
@@ -50,11 +50,11 @@
   --primary: oklch(0.508 0.177 142.5);
   --primary-foreground: oklch(0.985 0 0);
 
-  /* Background: SCALEON Gray #898989 */
-  --background: oklch(0.574 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
+  /* Background: dark (same as original dark theme) */
+  --background: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.985 0 0);
 
-  /* Cards: dark panels for contrast against gray background */
+  /* Cards: slightly lighter dark panels */
   --card: oklch(0.18 0.006 285.885);
   --card-foreground: oklch(0.985 0 0);
 
@@ -90,12 +90,12 @@
   --chart-4: oklch(0.3 0.1 250);
   --chart-5: oklch(0.2 0.1 250);
 
-  /* Sidebar: dark charcoal — cria separação visual clara do conteúdo cinza */
-  --sidebar: oklch(0.22 0.006 285.885);
+  /* Sidebar: slightly darker than background for visual separation */
+  --sidebar: oklch(0.10 0.005 285.823);
   --sidebar-foreground: oklch(0.88 0 0);
   --sidebar-primary: oklch(0.508 0.177 142.5);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.30 0.006 286.033);
+  --sidebar-accent: oklch(0.22 0.006 285.885);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(0.18 0.005 285.823);
   --sidebar-ring: oklch(0.508 0.177 142.5);

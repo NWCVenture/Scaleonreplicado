@@ -278,11 +278,11 @@ export default function DashboardLayout({
       {/* Desktop Sidebar */}
       <aside className="hidden md:flex w-64 flex-col bg-sidebar text-sidebar-foreground border-r border-sidebar-border">
         <div className="py-4 px-6 border-b border-sidebar-border flex justify-center items-center">
-          <div className="bg-white rounded-xl px-5 py-3 flex items-center justify-center w-full">
+          <div className="bg-white rounded-lg px-4 py-2 flex items-center justify-center w-full border border-green-700/30">
             <img
               src="/logo-full.png"
               alt="SCALEON ERP"
-              className="h-14 w-auto object-contain"
+              className="h-12 w-auto object-contain"
             />
           </div>
         </div>
