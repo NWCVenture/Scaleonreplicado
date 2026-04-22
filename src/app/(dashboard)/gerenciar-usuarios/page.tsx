@@ -56,7 +56,7 @@ const ROLE_BADGE_CLASS: Record<UserRole, string> = {
   admin: "bg-green-600",
   supervisor: "bg-purple-600",
   funcionario: "bg-blue-600",
-  expedicao: "bg-orange-500",
+  expedicao: "bg-green-700",
 };
 
 function RoleIcon({ role, className }: { role: UserRole; className?: string }) {

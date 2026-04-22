@@ -537,9 +537,9 @@ export default function GestaoCustosTextil() {
                     <p className="text-xs text-slate-400 mb-1">Custo Total de Produção</p>
                     <p className="text-2xl font-bold text-yellow-400">R$ {formatarNumero(resultadosAtuais.custo_total_producao)}</p>
                   </div>
-                  <div className="p-4 bg-orange-950/40 rounded-md">
+                  <div className="p-4 bg-amber-950/40 rounded-md">
                     <p className="text-xs text-slate-400 mb-1">Custo Real por Peça</p>
-                    <p className="text-2xl font-bold text-orange-400">R$ {formatarNumero(resultadosAtuais.custo_real_por_peca)}</p>
+                    <p className="text-2xl font-bold text-amber-400">R$ {formatarNumero(resultadosAtuais.custo_real_por_peca)}</p>
                   </div>
                   <div className="p-4 bg-purple-950/40 rounded-md">
                     <p className="text-xs text-slate-400 mb-1">Preço de Venda</p>

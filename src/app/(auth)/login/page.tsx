@@ -54,7 +54,7 @@ export default function LoginPage() {
             <Lock className="h-6 w-6 text-primary" />
           </div>
           <CardTitle className="text-2xl">Login</CardTitle>
-          <CardDescription>Acesse o sistema NWC ERP</CardDescription>
+          <CardDescription>Acesse o sistema SCALEON ERP</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">

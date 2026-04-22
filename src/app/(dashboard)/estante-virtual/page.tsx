@@ -470,7 +470,7 @@ export default function EstanteVirtualPage() {
           </Button>
           <Button
             variant="outline"
-            className="flex-col h-14 gap-1 text-xs border-orange-400 text-orange-500 hover:bg-orange-950"
+            className="flex-col h-14 gap-1 text-xs border-green-600 text-green-700 hover:bg-green-950"
             onClick={() => setShowImportar(true)}
           >
             <Upload className="h-5 w-5" /> Importar Balanco

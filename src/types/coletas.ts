@@ -134,7 +134,7 @@ export const CARRIER_DISPLAY: Record<TransportadoraLabel, string> = {
 };
 
 export const CARRIER_COLORS: Record<TransportadoraLabel, string> = {
-  TTK_JDLOG: "bg-orange-500/20 text-orange-400 border-orange-500/30",
+  TTK_JDLOG: "bg-green-700/20 text-green-500 border-green-700/30",
   TTK_IMILE: "bg-purple-500/20 text-purple-400 border-purple-500/30",
   ML: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
   SHP: "bg-red-500/20 text-red-400 border-red-500/30",

@@ -41,7 +41,7 @@ const TIPO_FILTERS = [
   { key: "TODOS", label: "Todos", color: "" },
   { key: "SAIDA", label: "Saidas", color: "text-red-600" },
   { key: "ENTRADA", label: "Entradas", color: "text-green-600" },
-  { key: "IMPORTACAO", label: "Importacoes", color: "text-orange-600" },
+  { key: "IMPORTACAO", label: "Importacoes", color: "text-amber-600" },
   { key: "BALANCO", label: "Balancos", color: "text-indigo-600" },
 ] as const;
 
@@ -54,7 +54,7 @@ function getTipoBadgeClasses(tipo: string) {
     case "BIPAGEM_SEMANAL":
       return "bg-blue-950 text-blue-200";
     case "IMPORTACAO":
-      return "bg-orange-950 text-orange-200";
+      return "bg-green-950 text-green-300";
     case "BALANCO":
       return "bg-indigo-950 text-indigo-200";
     default:
@@ -71,7 +71,7 @@ function getTipoIcon(tipo: string) {
     case "BIPAGEM_SEMANAL":
       return <RefreshCw className="h-4 w-4 text-blue-500 shrink-0" />;
     case "IMPORTACAO":
-      return <Upload className="h-4 w-4 text-orange-500 shrink-0" />;
+      return <Upload className="h-4 w-4 text-amber-500 shrink-0" />;
     case "BALANCO":
       return <ClipboardCheck className="h-4 w-4 text-indigo-500 shrink-0" />;
     default:

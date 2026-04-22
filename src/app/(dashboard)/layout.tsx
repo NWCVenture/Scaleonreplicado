@@ -280,7 +280,7 @@ export default function DashboardLayout({
         <div className="p-6 border-b border-sidebar-border flex justify-center">
           <img
             src="/logo-full.png"
-            alt="NWC New Command"
+            alt="SCALEON ERP"
             className="h-10 w-auto object-contain"
           />
         </div>
@@ -388,7 +388,7 @@ export default function DashboardLayout({
               "w-full flex items-center gap-2 px-3 py-2 rounded-md text-xs font-medium transition-colors mb-2",
               modoLivre
                 ? "bg-green-900/40 text-green-300 border border-green-700"
-                : "bg-orange-900/40 text-orange-300 border border-orange-700"
+                : "bg-green-900/40 text-green-400 border border-green-700"
             )}
           >
             {modoLivre ? (
@@ -415,7 +415,7 @@ export default function DashboardLayout({
           </Button>
 
           <div className="mt-3 text-xs text-sidebar-foreground/50">
-            <p>Sistema v1.1</p>
+            <p>SCALEON ERP v1.1</p>
           </div>
         </div>
       </aside>

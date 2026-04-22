@@ -530,7 +530,7 @@ export default function AlteracaoEstoquePage() {
                           className="mt-1"
                         >
                           {selecionados.has(item.id) ? (
-                            <CheckSquare className="h-5 w-5 text-orange-400" />
+                            <CheckSquare className="h-5 w-5 text-green-500" />
                           ) : (
                             <Square className="h-5 w-5 text-slate-500" />
                           )}

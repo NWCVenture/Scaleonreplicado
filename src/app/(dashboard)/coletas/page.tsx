@@ -909,7 +909,7 @@ export default function ColetasPage() {
             onClick={() => setViewMode(key)}
             className={cn(
               viewMode === key
-                ? "bg-orange-500 hover:bg-orange-600 text-white"
+                ? "bg-green-700 hover:bg-green-800 text-white"
                 : "border-zinc-700 text-zinc-300 hover:bg-zinc-800",
             )}
           >
@@ -945,11 +945,11 @@ export default function ColetasPage() {
                         "flex-1",
                         bipagem.currentFunction === fn
                           ? fn === "FLEX"
-                            ? "bg-orange-500 text-white border-orange-500"
+                            ? "bg-teal-600 text-white border-teal-600"
                             : fn === "COLETA"
                               ? "bg-blue-500 text-white border-blue-500"
                               : fn === "DEVOLUCAO"
-                                ? "bg-green-500 text-white border-green-500"
+                                ? "bg-green-600 text-white border-green-600"
                                 : "bg-amber-500 text-white border-amber-500"
                           : "border-zinc-700 text-zinc-400 hover:bg-zinc-800",
                       )}
@@ -994,7 +994,7 @@ export default function ColetasPage() {
                     type="checkbox"
                     checked={bipagem.dedup}
                     onChange={(e) => bipagem.setDedup(e.target.checked)}
-                    className="accent-orange-500"
+                    className="accent-green-700"
                   />
                   Deduplicar
                 </label>
@@ -1003,7 +1003,7 @@ export default function ColetasPage() {
                     type="checkbox"
                     checked={bipagem.autoClear}
                     onChange={(e) => bipagem.setAutoClear(e.target.checked)}
-                    className="accent-orange-500"
+                    className="accent-green-700"
                   />
                   Auto-limpar
                 </label>
@@ -1155,7 +1155,7 @@ export default function ColetasPage() {
             <Button
               onClick={handleFinalize}
               disabled={!bipagem.ids.length || isFinalizing}
-              className="bg-orange-500 hover:bg-orange-600 text-white"
+              className="bg-green-700 hover:bg-green-800 text-white"
             >
               {isFinalizing ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

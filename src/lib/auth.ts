@@ -22,7 +22,7 @@ export const auth = betterAuth({
       try {
         await sendEmail({
           to: user.email,
-          subject: "NWC ERP — Verifique seu email",
+          subject: "SCALEON ERP — Verifique seu email",
           html: buildVerificationEmailHtml(url, user.name),
         });
       } catch (err) {

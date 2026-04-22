@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NWC ERP",
+  title: "SCALEON ERP",
   description: "Sistema de gestão de estoque e operações têxteis",
 };
 

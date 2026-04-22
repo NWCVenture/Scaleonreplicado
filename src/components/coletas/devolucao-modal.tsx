@@ -241,7 +241,7 @@ export function DevolucaoModal({
               </Label>
               <button
                 onClick={addSkuLine}
-                className="text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1 font-semibold"
+                className="text-xs text-green-500 hover:text-green-400 flex items-center gap-1 font-semibold"
               >
                 <Plus className="h-3 w-3" /> Adicionar linha
               </button>
@@ -305,7 +305,7 @@ export function DevolucaoModal({
                           Math.max(1, parseInt(e.target.value) || 1),
                         )
                       }
-                      className="w-12 h-9 text-center border border-zinc-700 bg-zinc-900 text-zinc-100 font-bold text-sm focus:outline-none focus:border-orange-500"
+                      className="w-12 h-9 text-center border border-zinc-700 bg-zinc-900 text-zinc-100 font-bold text-sm focus:outline-none focus:border-green-700"
                     />
                     <button
                       onClick={() => updateSkuLine(idx, "qtd", line.qtd + 1)}
@@ -427,7 +427,7 @@ export function DevolucaoModal({
               />
               <div
                 onClick={() => fotoPacoteRef.current?.click()}
-                className="cursor-pointer border-2 border-dashed border-zinc-700 rounded-lg h-20 flex items-center justify-center hover:border-orange-500 overflow-hidden"
+                className="cursor-pointer border-2 border-dashed border-zinc-700 rounded-lg h-20 flex items-center justify-center hover:border-green-700 overflow-hidden"
               >
                 {fotoPacotePreview ? (
                   <img
@@ -515,7 +515,7 @@ export function DevolucaoModal({
           </Button>
           <Button
             onClick={handleSave}
-            className="bg-orange-500 hover:bg-orange-600 text-white"
+            className="bg-green-700 hover:bg-green-800 text-white"
           >
             Salvar
           </Button>

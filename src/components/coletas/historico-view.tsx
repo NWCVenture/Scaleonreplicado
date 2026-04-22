@@ -277,7 +277,7 @@ export function HistoricoView({
                       variant="outline"
                       className={cn(
                         item.tipo === "FLEX"
-                          ? "bg-orange-500/20 text-orange-400 border-orange-500/30"
+                          ? "bg-green-700/20 text-green-500 border-green-700/30"
                           : item.tipo === "COLETA"
                             ? "bg-blue-500/20 text-blue-400 border-blue-500/30"
                             : item.tipo === "DEVOLUCAO"
@@ -316,7 +316,7 @@ export function HistoricoView({
                   <Button
                     size="sm"
                     onClick={() => onResumeBipagem(item.id)}
-                    className="bg-orange-500 hover:bg-orange-600 text-white"
+                    className="bg-green-700 hover:bg-green-800 text-white"
                   >
                     <Barcode className="mr-1 h-4 w-4" /> Bipar Mais
                   </Button>

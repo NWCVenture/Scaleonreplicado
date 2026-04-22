@@ -64,7 +64,7 @@ export function ContinuarView({
                     className={cn(
                       "flex items-center gap-1",
                       temp.tipo === "FLEX"
-                        ? "bg-orange-500/20 text-orange-400 border-orange-500/30"
+                        ? "bg-green-700/20 text-green-500 border-green-700/30"
                         : temp.tipo === "COLETA"
                           ? "bg-blue-500/20 text-blue-400 border-blue-500/30"
                           : temp.tipo === "DEVOLUCAO"

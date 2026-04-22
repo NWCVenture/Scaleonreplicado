@@ -1312,7 +1312,7 @@ export default function PacotesUrgentes() {
         <Button
           variant={pageTab === "urgentes" ? "default" : "outline"}
           onClick={() => setPageTab("urgentes")}
-          className={cn(pageTab === "urgentes" ? "bg-orange-500 hover:bg-orange-600 text-white" : "border-zinc-700 text-zinc-300 hover:bg-zinc-800")}
+          className={cn(pageTab === "urgentes" ? "bg-green-700 hover:bg-green-800 text-white" : "border-zinc-700 text-zinc-300 hover:bg-zinc-800")}
         >
           <AlertTriangle className="mr-2 h-4 w-4" /> Pacotes Urgentes
         </Button>
@@ -1571,9 +1571,9 @@ export default function PacotesUrgentes() {
                   <p className="text-xs text-muted-foreground">JadLog</p>
                   <p className="text-2xl font-bold text-purple-600">{jadlogOrders.length}</p>
                 </div>
-                <div className="rounded-lg border p-3 bg-orange-50 dark:bg-orange-950/20">
+                <div className="rounded-lg border p-3 bg-amber-50 dark:bg-green-950/20">
                   <p className="text-xs text-muted-foreground">J&T Express</p>
-                  <p className="text-2xl font-bold text-orange-600">{ordersArr.filter((o) => /j&t|j\s*&\s*t/i.test(o.provider)).length}</p>
+                  <p className="text-2xl font-bold text-amber-600">{ordersArr.filter((o) => /j&t|j\s*&\s*t/i.test(o.provider)).length}</p>
                 </div>
                 <div className="rounded-lg border p-3 bg-gray-50 dark:bg-gray-900/50">
                   <p className="text-xs text-muted-foreground">Sem rastreio</p>
@@ -1726,9 +1726,9 @@ export default function PacotesUrgentes() {
 
                   {/* Missing from PDF */}
                   {missingFromPDF.length > 0 && (
-                    <div className="rounded-lg border border-orange-300 bg-orange-50 dark:bg-orange-950/20 p-3 flex flex-col gap-2">
+                    <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-green-950/20 p-3 flex flex-col gap-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-orange-700 dark:text-orange-300 flex items-center gap-1">
+                        <span className="text-xs font-semibold text-green-700 dark:text-green-400 flex items-center gap-1">
                           <AlertTriangle className="h-3.5 w-3.5" />
                           {missingFromPDF.length} etiqueta(s) faltando no PDF
                         </span>
@@ -1742,7 +1742,7 @@ export default function PacotesUrgentes() {
                           Copiar IDs
                         </Button>
                       </div>
-                      <ul className="text-xs text-orange-600 dark:text-orange-400 space-y-0.5 max-h-24 overflow-y-auto">
+                      <ul className="text-xs text-amber-600 dark:text-green-500 space-y-0.5 max-h-24 overflow-y-auto">
                         {missingFromPDF.map((o) => (
                           <li key={o.orderId} className="font-mono">{o.orderId}</li>
                         ))}
@@ -1782,17 +1782,17 @@ export default function PacotesUrgentes() {
                     </div>
                     {/* J&T Express */}
                     {jtPDFPages.length > 0 && (
-                      <div className="rounded-lg border p-3 flex flex-col gap-2 col-span-2 border-orange-200 bg-orange-50/30 dark:bg-orange-950/10">
+                      <div className="rounded-lg border p-3 flex flex-col gap-2 col-span-2 border-amber-200 bg-amber-50/30 dark:bg-green-950/10">
                         <div className="flex items-center gap-2">
-                          <Truck className="h-4 w-4 text-orange-500" />
+                          <Truck className="h-4 w-4 text-amber-500" />
                           <span className="text-sm font-medium">J&T Express</span>
-                          <span className="ml-auto text-xl font-bold text-orange-600">{jtPDFPages.length}</span>
+                          <span className="ml-auto text-xl font-bold text-amber-600">{jtPDFPages.length}</span>
                         </div>
                         <div className="flex gap-2">
                           <Button size="sm" variant="outline" className="text-xs flex-1" onClick={() => openTXTDownload("J&T")}>
                             <FileDown className="h-3 w-3 mr-1" /> Baixar TXT
                           </Button>
-                          <Button size="sm" className="text-xs flex-1 bg-orange-500 hover:bg-orange-600 text-white" onClick={() => downloadCarrierPDF("J&T", jtPDFPages)}>
+                          <Button size="sm" className="text-xs flex-1 bg-green-700 hover:bg-green-800 text-white" onClick={() => downloadCarrierPDF("J&T", jtPDFPages)}>
                             <Download className="h-3 w-3 mr-1" /> Baixar PDF
                           </Button>
                         </div>
