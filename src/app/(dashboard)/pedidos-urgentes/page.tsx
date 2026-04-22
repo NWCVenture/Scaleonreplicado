@@ -215,7 +215,8 @@ async function analyzePDFPages(
   if (file instanceof File) {
     data = await file.arrayBuffer();
   } else {
-    data = file.buffer as ArrayBuffer;
+    // pdf.js detacha o ArrayBuffer — passamos uma cópia para preservar o original
+    data = new Uint8Array(file).buffer;
   }
   const pdf = await pdfjsLib.getDocument({ data }).promise;
   const total = pdf.numPages;
@@ -338,7 +339,8 @@ async function downloadFilteredPDF(
   products: string[]
 ) {
   const { PDFDocument, rgb, degrees } = window.PDFLib;
-  const srcDoc = await PDFDocument.load(sourceBytes, { ignoreEncryption: true });
+  // Cópia defensiva — evita detach do buffer entre múltiplas chamadas
+  const srcDoc = await PDFDocument.load(new Uint8Array(sourceBytes), { ignoreEncryption: true });
   const newDoc = await PDFDocument.create();
   const copied = await newDoc.copyPages(srcDoc, pageIndexes);
 

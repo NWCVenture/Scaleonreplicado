@@ -765,22 +765,20 @@ export default function AlteracaoEstoquePage() {
               )}
             </div>
 
-            {/* Save button */}
+            {/* Save button — sempre visualmente clicável, valida com toast */}
             {!popupNovoTamanho && (
-              <p className="text-xs text-amber-400 text-center">
-                Selecione um tamanho para habilitar o salvamento
+              <p className="text-xs text-amber-400 text-center font-medium">
+                ⚠ Selecione um novo tamanho acima
               </p>
             )}
             {popupNovoTamanho && popupEtiquetas.length === 0 && (
-              <p className="text-xs text-amber-400 text-center">
-                Bipe ao menos uma etiqueta para salvar
+              <p className="text-xs text-amber-400 text-center font-medium">
+                ⚠ Bipe ao menos uma etiqueta acima
               </p>
             )}
             <Button
-              className="w-full h-12"
-              disabled={
-                !popupNovoTamanho || popupEtiquetas.length === 0 || isSubmitting
-              }
+              className="w-full h-12 bg-green-600 hover:bg-green-700 text-white font-bold text-base"
+              disabled={isSubmitting}
               onClick={handleSalvarAlteracaoRapida}
             >
               {isSubmitting ? (
@@ -788,7 +786,11 @@ export default function AlteracaoEstoquePage() {
               ) : (
                 <ArrowLeftRight className="mr-2 h-5 w-5" />
               )}
-              {isSubmitting ? "Salvando..." : "Salvar Alteracao"}
+              {isSubmitting
+                ? "Salvando..."
+                : popupEtiquetas.length > 0
+                  ? `Salvar Alteração (${popupEtiquetas.length} pacote${popupEtiquetas.length > 1 ? "s" : ""})`
+                  : "Salvar Alteração"}
             </Button>
           </div>
         </DialogContent>

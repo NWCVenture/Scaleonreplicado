@@ -91,32 +91,22 @@ export default function ColetasPage() {
 
   // ── Auto-persist bipagem to localStorage (1 day TTL) ─────────────────────
   const AUTO_SAVE_KEY = "coletas_bipagem_auto";
+  const [hydrated, setHydrated] = useState(false);
 
-  useEffect(() => {
-    if (bipagem.ids.length === 0) {
-      localStorage.removeItem(AUTO_SAVE_KEY);
-      return;
-    }
-    const state = {
-      ids: bipagem.ids,
-      devolucoesData: bipagem.devolucoesData,
-      currentFunction: bipagem.currentFunction,
-      currentAccount: bipagem.currentAccount,
-      savedAt: Date.now(),
-    };
-    localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(state));
-  }, [bipagem.ids, bipagem.devolucoesData, bipagem.currentFunction, bipagem.currentAccount]);
-
-  // ── Restore from localStorage on session load ─────────────────────────────
+  // Restore from localStorage on session load (runs ANTES do save effect)
   useEffect(() => {
     if (!session) return;
     try {
       const raw = localStorage.getItem(AUTO_SAVE_KEY);
-      if (!raw) return;
+      if (!raw) {
+        setHydrated(true);
+        return;
+      }
       const state = JSON.parse(raw);
       const ONE_DAY = 24 * 60 * 60 * 1000;
       if (!state.savedAt || Date.now() - state.savedAt > ONE_DAY) {
         localStorage.removeItem(AUTO_SAVE_KEY);
+        setHydrated(true);
         return;
       }
       if (state.ids?.length > 0) {
@@ -130,11 +120,30 @@ export default function ColetasPage() {
         );
         toast.info(`Bipagem restaurada automaticamente (${state.ids.length} pacotes)`);
       }
+      setHydrated(true);
     } catch {
       localStorage.removeItem(AUTO_SAVE_KEY);
+      setHydrated(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
+
+  // Save (apenas depois do restore terminar — evita apagar dados na montagem inicial)
+  useEffect(() => {
+    if (!hydrated) return;
+    if (bipagem.ids.length === 0) {
+      localStorage.removeItem(AUTO_SAVE_KEY);
+      return;
+    }
+    const state = {
+      ids: bipagem.ids,
+      devolucoesData: bipagem.devolucoesData,
+      currentFunction: bipagem.currentFunction,
+      currentAccount: bipagem.currentAccount,
+      savedAt: Date.now(),
+    };
+    localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(state));
+  }, [hydrated, bipagem.ids, bipagem.devolucoesData, bipagem.currentFunction, bipagem.currentAccount]);
 
   // ── Fetch configs on mount ────────────────────────────────────────────────
   useEffect(() => {

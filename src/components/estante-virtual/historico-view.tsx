@@ -319,7 +319,14 @@ export function HistoricoView({ onBack }: HistoricoViewProps) {
                     {mov.totalAntes} → {mov.totalDepois} fardos
                   </span>
                 )}
-                {mov.usuarioNome && <span>{mov.usuarioNome}</span>}
+                {mov.usuarioNome && (
+                  <span className={cn(
+                    "inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-semibold",
+                    mov.tipo === "SAIDA" ? "bg-red-950/50 text-red-200" : "bg-slate-800 text-slate-200"
+                  )}>
+                    👤 {mov.usuarioNome}
+                  </span>
+                )}
               </div>
             </div>
           ))}
