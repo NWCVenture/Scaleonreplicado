@@ -931,7 +931,7 @@ export default function ColetasPage() {
           <Card className="bg-zinc-950 border-zinc-800">
             <CardContent className="p-4 space-y-4">
               <div>
-                <label className="block text-xs font-bold text-zinc-400 mb-2">
+                <label className="block text-xs font-bold text-zinc-300 mb-2 uppercase tracking-wider">
                   Tipo
                 </label>
                 <div className="flex gap-2 flex-wrap">
@@ -951,7 +951,7 @@ export default function ColetasPage() {
                               : fn === "DEVOLUCAO"
                                 ? "bg-green-600 text-white border-green-600"
                                 : "bg-amber-500 text-white border-amber-500"
-                          : "border-zinc-700 text-zinc-400 hover:bg-zinc-800",
+                          : "border-zinc-500 text-zinc-200 hover:bg-zinc-700 hover:text-white",
                       )}
                     >
                       {FUNCTION_DISPLAY[fn]}
@@ -963,7 +963,7 @@ export default function ColetasPage() {
               {/* Account selector (hidden for FLEX) */}
               {bipagem.currentFunction !== "FLEX" && (
                 <div>
-                  <label className="block text-xs font-bold text-zinc-400 mb-2">
+                  <label className="block text-xs font-bold text-zinc-300 mb-2 uppercase tracking-wider">
                     Conta
                   </label>
                   <div className="flex gap-2 flex-wrap">
@@ -977,7 +977,7 @@ export default function ColetasPage() {
                           "flex-1",
                           bipagem.currentAccount === op
                             ? "bg-primary text-primary-foreground border-primary"
-                            : "border-zinc-700 text-zinc-400 hover:bg-zinc-800",
+                            : "border-zinc-500 text-zinc-200 hover:bg-zinc-700 hover:text-white",
                         )}
                       >
                         {OPERATION_DISPLAY[op]}
