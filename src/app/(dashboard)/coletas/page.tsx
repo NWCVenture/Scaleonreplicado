@@ -89,6 +89,53 @@ export default function ColetasPage() {
   const audioSuccessRef = useRef<HTMLAudioElement>(null);
   const audioErrorRef = useRef<HTMLAudioElement>(null);
 
+  // ── Auto-persist bipagem to localStorage (1 day TTL) ─────────────────────
+  const AUTO_SAVE_KEY = "coletas_bipagem_auto";
+
+  useEffect(() => {
+    if (bipagem.ids.length === 0) {
+      localStorage.removeItem(AUTO_SAVE_KEY);
+      return;
+    }
+    const state = {
+      ids: bipagem.ids,
+      devolucoesData: bipagem.devolucoesData,
+      currentFunction: bipagem.currentFunction,
+      currentAccount: bipagem.currentAccount,
+      savedAt: Date.now(),
+    };
+    localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(state));
+  }, [bipagem.ids, bipagem.devolucoesData, bipagem.currentFunction, bipagem.currentAccount]);
+
+  // ── Restore from localStorage on session load ─────────────────────────────
+  useEffect(() => {
+    if (!session) return;
+    try {
+      const raw = localStorage.getItem(AUTO_SAVE_KEY);
+      if (!raw) return;
+      const state = JSON.parse(raw);
+      const ONE_DAY = 24 * 60 * 60 * 1000;
+      if (!state.savedAt || Date.now() - state.savedAt > ONE_DAY) {
+        localStorage.removeItem(AUTO_SAVE_KEY);
+        return;
+      }
+      if (state.ids?.length > 0) {
+        bipagem.loadFromTemp(
+          {
+            pacotes: state.ids.map((id: string) => ({ codigo: id })),
+            devolucoes: state.devolucoesData ?? {},
+          },
+          state.currentFunction,
+          state.currentAccount,
+        );
+        toast.info(`Bipagem restaurada automaticamente (${state.ids.length} pacotes)`);
+      }
+    } catch {
+      localStorage.removeItem(AUTO_SAVE_KEY);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
   // ── Fetch configs on mount ────────────────────────────────────────────────
   useEffect(() => {
     if (!session) return;
@@ -293,6 +340,7 @@ export default function ColetasPage() {
   // ── Clear ─────────────────────────────────────────────────────────────────
   const handleClear = useCallback(() => {
     bipagem.clear();
+    localStorage.removeItem("coletas_bipagem_auto");
     toast.info("Lista zerada");
   }, [bipagem]);
 
@@ -500,6 +548,7 @@ export default function ColetasPage() {
       }
 
       bipagem.clear();
+      localStorage.removeItem("coletas_bipagem_auto");
       toast.success("Bipagem finalizada!");
     } catch {
       toast.error("Erro ao finalizar bipagem");

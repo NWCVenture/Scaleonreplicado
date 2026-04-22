@@ -208,20 +208,18 @@ export default function AlteracaoEstoquePage() {
       const saidaUpper = popupSaidaSku.trim().toUpperCase();
       const entradaUpper = replaceSize(saidaUpper, popupNovoTamanho);
 
-      for (const etiqueta of popupEtiquetas) {
-        const res = await fetch("/api/alteracoes-estoque", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            saidas: [{ sku: saidaUpper, quantidade: 1 }],
-            entradas: [{ sku: entradaUpper, quantidade: 1 }],
-            codigoPacote: etiqueta,
-          }),
-        });
-        if (!res.ok) {
-          const error = await res.json();
-          throw new Error(error.error || "Erro ao registrar");
-        }
+      const res = await fetch("/api/alteracoes-estoque", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          saidas: [{ sku: saidaUpper, quantidade: popupEtiquetas.length }],
+          entradas: [{ sku: entradaUpper, quantidade: popupEtiquetas.length }],
+          codigoPacote: popupEtiquetas.join(", "),
+        }),
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Erro ao registrar");
       }
 
       toast.success(
@@ -768,6 +766,16 @@ export default function AlteracaoEstoquePage() {
             </div>
 
             {/* Save button */}
+            {!popupNovoTamanho && (
+              <p className="text-xs text-amber-400 text-center">
+                Selecione um tamanho para habilitar o salvamento
+              </p>
+            )}
+            {popupNovoTamanho && popupEtiquetas.length === 0 && (
+              <p className="text-xs text-amber-400 text-center">
+                Bipe ao menos uma etiqueta para salvar
+              </p>
+            )}
             <Button
               className="w-full h-12"
               disabled={

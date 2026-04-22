@@ -524,6 +524,24 @@ export default function PacotesUrgentes() {
 
   const [copiedMissing, setCopiedMissing] = useState(false);
 
+  // Tab navigation
+  const [pageTab, setPageTab] = useState<"urgentes" | "expedicao">("urgentes");
+
+  // Expedicao Diaria tab state
+  const [expPdfBytes, setExpPdfBytes] = useState<Uint8Array | null>(null);
+  const [expPdfFileNames, setExpPdfFileNames] = useState<string[]>([]);
+  const [expPdfPages, setExpPdfPages] = useState<PageInfo[] | null>(null);
+  const [expFilterGroups, setExpFilterGroups] = useState<FilterGroup[]>([]);
+  const [expSelectedGroupIds, setExpSelectedGroupIds] = useState<Set<string>>(new Set());
+  const [expIsPDFProcessing, setExpIsPDFProcessing] = useState(false);
+  const [expPdfProgress, setExpPdfProgress] = useState(0);
+  const [expPdfProgressText, setExpPdfProgressText] = useState("");
+  const [expIsDragging, setExpIsDragging] = useState(false);
+  const [expAddMoon, setExpAddMoon] = useState(true);
+  const [expAddBasketball, setExpAddBasketball] = useState(true);
+  const expPdfInputRef = useRef<HTMLInputElement>(null);
+  const expFilterGroupsRef = useRef<FilterGroup[]>([]);
+
   // Refs
   const csvInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -795,6 +813,86 @@ export default function PacotesUrgentes() {
     e.preventDefault(); setIsDraggingPDF(false);
     handlePDFFiles(e.dataTransfer.files);
   }, [handlePDFFiles]);
+
+  // ── Expedicao Diaria handlers ─────────────────────────────────────────────
+  const handleExpPDFFiles = useCallback(async (files: FileList | File[]) => {
+    const arr = Array.from(files).filter((f) => f.name.endsWith(".pdf"));
+    if (!arr.length) { toast.error("Nenhum PDF encontrado"); return; }
+
+    const previousDownloaded = new Set(
+      expFilterGroupsRef.current.filter((g) => g.downloaded).map((g) => g.id)
+    );
+
+    setExpPdfPages(null); setExpFilterGroups([]); setExpSelectedGroupIds(new Set());
+    setExpIsPDFProcessing(true); setExpPdfProgress(5); setExpPdfProgressText("Carregando bibliotecas…");
+
+    try {
+      await loadPDFLibraries();
+      setExpPdfProgress(10); setExpPdfProgressText("Mesclando PDFs…");
+
+      let bytes: Uint8Array;
+      if (arr.length > 1) {
+        bytes = await mergePDFs(arr);
+      } else {
+        bytes = new Uint8Array(await arr[0].arrayBuffer());
+      }
+      setExpPdfBytes(bytes);
+      setExpPdfFileNames(arr.map((f) => f.name));
+
+      const pages = await analyzePDFPages(bytes, (val, text) => {
+        setExpPdfProgress(val); setExpPdfProgressText(text);
+      });
+      setExpPdfProgress(90); setExpPdfProgressText("Construindo grupos…");
+      const groups = buildFilterGroups(pages);
+
+      const restoredGroups = groups.map((g) => ({
+        ...g,
+        downloaded: previousDownloaded.has(g.id),
+      }));
+
+      const newGroupIds = new Set(
+        restoredGroups.filter((g) => !g.downloaded).map((g) => g.id)
+      );
+
+      setExpPdfPages(pages);
+      setExpFilterGroups(restoredGroups);
+      expFilterGroupsRef.current = restoredGroups;
+      setExpSelectedGroupIds(newGroupIds);
+      setExpPdfProgress(100); setExpPdfProgressText("Concluído");
+      toast.success(`PDF analisado: ${pages.length} página(s) em ${groups.length} grupo(s)`);
+    } catch (e: any) {
+      toast.error(`Erro ao processar PDF: ${e.message}`);
+    } finally {
+      setExpIsPDFProcessing(false);
+    }
+  }, []);
+
+  const handleExpPDFDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); setExpIsDragging(false);
+    handleExpPDFFiles(e.dataTransfer.files);
+  }, [handleExpPDFFiles]);
+
+  const handleExpDownloadGroup = useCallback(async (group: FilterGroup) => {
+    if (!expPdfBytes) return;
+    try {
+      await downloadFilteredPDF(expPdfBytes, group.pageIndexes, group.label, expAddMoon, expAddBasketball, group.products);
+      setExpFilterGroups((prev) => prev.map((g) => g.id === group.id ? { ...g, downloaded: true } : g));
+    } catch (e: any) {
+      toast.error(`Erro ao gerar PDF: ${e.message}`);
+    }
+  }, [expPdfBytes, expAddMoon, expAddBasketball]);
+
+  const handleExpDownloadSelected = useCallback(async () => {
+    if (!expPdfBytes) return;
+    const selected = expFilterGroups.filter((g) => expSelectedGroupIds.has(g.id));
+    for (const group of selected) {
+      try {
+        await downloadFilteredPDF(expPdfBytes, group.pageIndexes, group.label, expAddMoon, expAddBasketball, group.products);
+        setExpFilterGroups((prev) => prev.map((g) => g.id === group.id ? { ...g, downloaded: true } : g));
+      } catch {}
+    }
+    toast.success(`${selected.length} grupo(s) baixado(s)!`);
+  }, [expPdfBytes, expFilterGroups, expSelectedGroupIds, expAddMoon, expAddBasketball]);
 
   const toggleGroupSelection = (id: string) => {
     setSelectedGroupIds((prev) => {
@@ -1202,12 +1300,190 @@ export default function PacotesUrgentes() {
           description="TikTok Shop · Fluxo completo de expedição"
           icon={<Package className="h-8 w-8 text-primary" />}
         />
-        {hasOrders && (
+        {hasOrders && pageTab === "urgentes" && (
           <Button variant="outline" size="sm" onClick={handleClearAll} className="mt-1">
             <Trash2 className="h-4 w-4 mr-1" /> Limpar sessão
           </Button>
         )}
       </div>
+
+      {/* Tab navigation */}
+      <div className="flex gap-2">
+        <Button
+          variant={pageTab === "urgentes" ? "default" : "outline"}
+          onClick={() => setPageTab("urgentes")}
+          className={cn(pageTab === "urgentes" ? "bg-orange-500 hover:bg-orange-600 text-white" : "border-zinc-700 text-zinc-300 hover:bg-zinc-800")}
+        >
+          <AlertTriangle className="mr-2 h-4 w-4" /> Pacotes Urgentes
+        </Button>
+        <Button
+          variant={pageTab === "expedicao" ? "default" : "outline"}
+          onClick={() => setPageTab("expedicao")}
+          className={cn(pageTab === "expedicao" ? "bg-blue-600 hover:bg-blue-700 text-white" : "border-zinc-700 text-zinc-300 hover:bg-zinc-800")}
+        >
+          <Truck className="mr-2 h-4 w-4" /> Expedição Diária
+        </Button>
+      </div>
+
+      {/* ── EXPEDICAO DIARIA TAB ─────────────────────────────────────────── */}
+      {pageTab === "expedicao" && (
+        <div className="flex flex-col gap-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Upload className="h-5 w-5" /> Upload de Etiquetas (ML + TikTok)
+              </CardTitle>
+              <CardDescription>Carregue os PDFs de etiquetas misturadas para separar por tipo de kit</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div
+                className={cn(
+                  "border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors",
+                  expIsDragging ? "border-blue-500 bg-blue-500/5" : "border-muted-foreground/30 hover:border-blue-500/50"
+                )}
+                onDragOver={(e) => { e.preventDefault(); setExpIsDragging(true); }}
+                onDragLeave={() => setExpIsDragging(false)}
+                onDrop={handleExpPDFDrop}
+                onClick={() => expPdfInputRef.current?.click()}
+              >
+                <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">Arraste os PDFs de etiquetas ou clique para selecionar</p>
+                <p className="text-xs text-muted-foreground mt-1">Suporta múltiplos PDFs (ML + TikTok misturados)</p>
+              </div>
+              <input
+                ref={expPdfInputRef}
+                type="file"
+                accept=".pdf"
+                multiple
+                className="hidden"
+                onChange={(e) => e.target.files && handleExpPDFFiles(e.target.files)}
+              />
+              {expPdfFileNames.length > 0 && (
+                <ul className="space-y-1">
+                  {expPdfFileNames.map((name, i) => (
+                    <li key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <FileText className="h-3 w-3 shrink-0" />
+                      <span className="truncate">{name}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {expIsPDFProcessing && (
+                <div className="space-y-1">
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-blue-500 transition-all duration-300"
+                      style={{ width: `${expPdfProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground text-center">{expPdfProgressText}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {expPdfBytes && !expIsPDFProcessing && expFilterGroups.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Filter className="h-5 w-5" /> Fila de Impressão por Kit
+                </CardTitle>
+                <CardDescription>
+                  {expFilterGroups.filter((g) => g.downloaded).length}/{expFilterGroups.length} grupos baixados
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Icon toggles */}
+                <div className="flex gap-4 text-sm">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={expAddMoon} onChange={(e) => setExpAddMoon(e.target.checked)} className="accent-blue-500" />
+                    Ícone lua (LUA)
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={expAddBasketball} onChange={(e) => setExpAddBasketball(e.target.checked)} className="accent-blue-500" />
+                    Ícone bola (NBA)
+                  </label>
+                </div>
+
+                {/* Group list */}
+                <div className="space-y-2">
+                  {expFilterGroups.map((g) => (
+                    <div
+                      key={g.id}
+                      className={cn(
+                        "flex items-center justify-between p-3 rounded-lg border",
+                        g.downloaded ? "border-green-800 bg-green-950/20" : "border-slate-700 bg-slate-900"
+                      )}
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={expSelectedGroupIds.has(g.id)}
+                          onChange={() => {
+                            setExpSelectedGroupIds((prev) => {
+                              const next = new Set(prev);
+                              next.has(g.id) ? next.delete(g.id) : next.add(g.id);
+                              return next;
+                            });
+                          }}
+                          className="accent-blue-500"
+                        />
+                        <div>
+                          <p className="font-semibold text-sm">{g.label}</p>
+                          <p className="text-xs text-muted-foreground">{g.pageIndexes.length} página(s)</p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 items-center">
+                        {g.downloaded && (
+                          <span className="text-xs text-green-400 font-medium">Baixado</span>
+                        )}
+                        <Button
+                          size="sm"
+                          variant={g.downloaded ? "outline" : "default"}
+                          className={cn(!g.downloaded && "bg-blue-600 hover:bg-blue-700 text-white")}
+                          onClick={() => handleExpDownloadGroup(g)}
+                        >
+                          <Download className="h-4 w-4 mr-1" /> PDF
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Bulk actions */}
+                <div className="flex gap-2 flex-wrap pt-2 border-t border-slate-800">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setExpSelectedGroupIds(new Set(expFilterGroups.map((g) => g.id)))}
+                  >
+                    Selecionar Todos
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setExpSelectedGroupIds(new Set())}
+                  >
+                    Limpar Seleção
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={expSelectedGroupIds.size === 0}
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                    onClick={handleExpDownloadSelected}
+                  >
+                    <Download className="h-4 w-4 mr-1" /> Baixar Selecionados ({expSelectedGroupIds.size})
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* ── PACOTES URGENTES TAB ─────────────────────────────────────────── */}
+      {pageTab === "urgentes" && (
+        <>
 
       {/* ── PASSO 1: Upload CSVs ─────────────────────────────────────────── */}
       <Card>
@@ -1970,6 +2246,8 @@ export default function PacotesUrgentes() {
             </CardContent>
           </Card>
         </>
+      )}
+      </>
       )}
     </div>
   );
