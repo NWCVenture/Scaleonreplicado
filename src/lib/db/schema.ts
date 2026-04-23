@@ -5,12 +5,13 @@ import {
   boolean,
   integer,
   json,
+  jsonb,
   pgEnum,
   real,
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, type InferSelectModel } from "drizzle-orm";
 
 // ============================================================
 // 1. ENUMS
@@ -1037,3 +1038,211 @@ export type LocalizacaoAvaria =
   | "ESTANTE"
   | "LOTE_DE_COSTURA";
 export type UserRole = "admin" | "funcionario";
+
+// ============================================================
+// 13. CANAIS DE VENDA (Integração Marketplaces — Onda 0)
+// ============================================================
+
+export const plataformaCanalEnum = pgEnum("plataforma_canal", [
+  "tiktok_shop",
+  "shopee",
+  "mercado_livre",
+]);
+
+export const emissorNotaEnum = pgEnum("emissor_nota", [
+  "proprio",
+  "bling",
+  "manual",
+]);
+
+export const statusRenovacaoOauthEnum = pgEnum("status_renovacao_oauth", [
+  "ativo",
+  "falha_reauth",
+  "expirado",
+]);
+
+export const canaisVenda = pgTable(
+  "canais_venda",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    cnpjId: text("cnpj_id"),
+    plataforma: plataformaCanalEnum("plataforma").notNull(),
+    identificadorLoja: text("identificador_loja").notNull(),
+    nomeExibicao: text("nome_exibicao").notNull(),
+    emissorNota: emissorNotaEnum("emissor_nota").notNull().default("proprio"),
+    ativo: boolean("ativo").notNull().default(true),
+    ultimaSyncEm: timestamp("ultima_sync_em"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_canais_conta_plataforma").on(table.contaId, table.plataforma),
+    uniqueIndex("unq_canal_cnpj_loja").on(
+      table.cnpjId,
+      table.plataforma,
+      table.identificadorLoja,
+    ),
+    uniqueIndex("unq_canal_conta_plataforma_loja").on(
+      table.contaId,
+      table.plataforma,
+      table.identificadorLoja,
+    ),
+  ],
+);
+
+export const credenciaisOauthTiktok = pgTable(
+  "credenciais_oauth_tiktok",
+  {
+    id: text("id").primaryKey(),
+    canalVendaId: text("canal_venda_id")
+      .notNull()
+      .unique()
+      .references(() => canaisVenda.id, { onDelete: "cascade" }),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    shopId: text("shop_id").notNull(),
+    shopCipher: text("shop_cipher").notNull(),
+    accessTokenCriptografado: text("access_token_criptografado").notNull(),
+    accessTokenExpiraEm: timestamp("access_token_expira_em").notNull(),
+    refreshTokenCriptografado: text("refresh_token_criptografado").notNull(),
+    refreshTokenExpiraEm: timestamp("refresh_token_expira_em").notNull(),
+    escoposAutorizados: jsonb("escopos_autorizados")
+      .$type<string[]>()
+      .notNull(),
+    sellerName: text("seller_name"),
+    ultimaRenovacaoEm: timestamp("ultima_renovacao_em"),
+    statusRenovacao: statusRenovacaoOauthEnum("status_renovacao")
+      .notNull()
+      .default("ativo"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_tiktok_oauth_expiracao").on(table.accessTokenExpiraEm),
+    index("idx_tiktok_oauth_conta").on(table.contaId),
+  ],
+);
+
+export const eventosWebhookTiktok = pgTable(
+  "eventos_webhook_tiktok",
+  {
+    id: text("id").primaryKey(),
+    canalVendaId: text("canal_venda_id").references(() => canaisVenda.id, {
+      onDelete: "set null",
+    }),
+    contaId: text("conta_id").references(() => conta.id, {
+      onDelete: "set null",
+    }),
+    tipoEvento: text("tipo_evento").notNull(),
+    shopIdExterno: text("shop_id_externo"),
+    payloadJson: jsonb("payload_json").notNull(),
+    headersJson: jsonb("headers_json").notNull(),
+    assinaturaValida: boolean("assinatura_valida").notNull(),
+    processadoEm: timestamp("processado_em"),
+    erroProcessamento: text("erro_processamento"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_webhook_tipo_data").on(table.tipoEvento, table.createdAt),
+    index("idx_webhook_shop").on(table.shopIdExterno),
+  ],
+);
+
+export const logSincronizacaoCanal = pgTable(
+  "log_sincronizacao_canal",
+  {
+    id: text("id").primaryKey(),
+    canalVendaId: text("canal_venda_id")
+      .notNull()
+      .references(() => canaisVenda.id, { onDelete: "cascade" }),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    tipo: text("tipo").notNull(),
+    operacao: text("operacao").notNull(),
+    payloadEnviado: jsonb("payload_enviado"),
+    respostaRecebida: jsonb("resposta_recebida"),
+    statusHttp: integer("status_http"),
+    sucesso: boolean("sucesso").notNull(),
+    erroMensagem: text("erro_mensagem"),
+    duracaoMs: integer("duracao_ms"),
+    tentativa: integer("tentativa").notNull().default(1),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_log_canal_data").on(table.canalVendaId, table.createdAt),
+    index("idx_log_sucesso").on(table.sucesso, table.createdAt),
+  ],
+);
+
+export const skuCanal = pgTable(
+  "sku_canal",
+  {
+    id: text("id").primaryKey(),
+    canalVendaId: text("canal_venda_id")
+      .notNull()
+      .references(() => canaisVenda.id, { onDelete: "cascade" }),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    produtoId: text("produto_id"),
+    skuInterno: text("sku_interno").notNull(),
+    skuExterno: text("sku_externo").notNull(),
+    productIdExterno: text("product_id_externo"),
+    skuIdExterno: text("sku_id_externo"),
+    bufferSeguranca: integer("buffer_seguranca").notNull().default(0),
+    ultimaQtdPublicada: integer("ultima_qtd_publicada"),
+    ultimaSyncEm: timestamp("ultima_sync_em"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_sku_canal_produto").on(table.canalVendaId, table.produtoId),
+    uniqueIndex("unq_sku_canal_externo").on(
+      table.canalVendaId,
+      table.skuExterno,
+    ),
+  ],
+);
+
+export const canaisVendaRelations = relations(canaisVenda, ({ one, many }) => ({
+  conta: one(conta, {
+    fields: [canaisVenda.contaId],
+    references: [conta.id],
+  }),
+  credenciaisTiktok: one(credenciaisOauthTiktok, {
+    fields: [canaisVenda.id],
+    references: [credenciaisOauthTiktok.canalVendaId],
+  }),
+  eventosWebhook: many(eventosWebhookTiktok),
+  logs: many(logSincronizacaoCanal),
+  skus: many(skuCanal),
+}));
+
+export const credenciaisOauthTiktokRelations = relations(
+  credenciaisOauthTiktok,
+  ({ one }) => ({
+    canal: one(canaisVenda, {
+      fields: [credenciaisOauthTiktok.canalVendaId],
+      references: [canaisVenda.id],
+    }),
+  }),
+);
+
+// Inferred types
+export type CanalVenda = InferSelectModel<typeof canaisVenda>;
+export type CredenciaisOauthTiktok = InferSelectModel<
+  typeof credenciaisOauthTiktok
+>;
+export type EventoWebhookTiktok = InferSelectModel<typeof eventosWebhookTiktok>;
+export type LogSincronizacaoCanal = InferSelectModel<
+  typeof logSincronizacaoCanal
+>;
+export type SkuCanal = InferSelectModel<typeof skuCanal>;
+export type PlataformaCanal = (typeof plataformaCanalEnum.enumValues)[number];
+export type EmissorNota = (typeof emissorNotaEnum.enumValues)[number];
+export type StatusRenovacaoOauth =
+  (typeof statusRenovacaoOauthEnum.enumValues)[number];
