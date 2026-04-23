@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "check": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\"",
     "format": "prettier --write .",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
