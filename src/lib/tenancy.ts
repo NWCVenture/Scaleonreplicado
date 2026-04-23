@@ -134,6 +134,7 @@ export async function listarContasDoUsuario(userId: string) {
       nome: conta.nome,
       plano: conta.plano,
       status: conta.status,
+      emailPrincipal: conta.emailPrincipal,
       papel: usuarioConta.papel,
     })
     .from(usuarioConta)

@@ -182,7 +182,7 @@ export default function GerenciarContaPage() {
           <div className="flex items-center gap-2">
             <Mail className="h-4 w-4 text-muted-foreground" />
             <span>Email do owner:</span>
-            <span className="font-mono text-xs">{me?.user.email ?? "—"}</span>
+            <span className="font-mono text-xs">{contaAtiva?.emailPrincipal ?? "—"}</span>
           </div>
         </CardContent>
       </Card>

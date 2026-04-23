@@ -29,6 +29,7 @@ type MeResponse = {
     nome: string;
     plano: string;
     status: string;
+    emailPrincipal: string;
     papel: PapelConta;
   }>;
 };
