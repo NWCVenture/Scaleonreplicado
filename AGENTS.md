@@ -37,3 +37,101 @@ This version has breaking changes — APIs, conventions, and file structure may 
 | `db:studio:prod` | Abre Drizzle Studio contra o banco prod |
 | `db:seed:dev` | Seed de dados padrão no banco local |
 | `db:seed:prod` | Seed de dados padrão no banco prod |
+
+# Módulo de Canais (Integração Marketplaces)
+
+Em implementação. Primeira integração: TikTok Shop.
+
+## Documentos de referência
+
+- **Arquitetura:** `docs/arquitetura/modulo-canais.md` (ler antes de mexer no módulo)
+- **Especificações de implementação:** `specs/canais/tiktok/*.md` (uma por tarefa/RITM)
+- **Referência da API TikTok:** `docs/referencias/tiktok-shop-api.md` (alimentada manualmente com trechos da doc oficial)
+
+## Princípio chave
+
+O ERP núcleo **não conhece marketplace específico**. Existe a abstração `ICanalAdapter` em `src/lib/canais/types.ts`; cada marketplace é uma implementação da interface.
+
+**Ao adicionar marketplace novo:** criar novo adapter em `src/lib/canais/<marketplace>/`. **Nunca** alterar código do núcleo pra acomodar especificidade de marketplace.
+
+## Stack do módulo
+
+- **Jobs/crons/webhooks duráveis:** Inngest (`src/inngest/functions/`)
+- **Criptografia de credenciais:** AES-256-GCM via `src/lib/crypto.ts` (node:crypto nativo, sem libs)
+- **Validação de payloads:** Zod
+- **Logs estruturados:** tabela `log_sincronizacao_canal` no Postgres (não `console.log`)
+- **HTTP client:** `fetch` nativo (sem axios)
+- **State OAuth:** HMAC-SHA256 em query param (`src/lib/oauth-state.ts`), não cookie
+
+## Regras inegociáveis
+
+- ❌ **NUNCA** logar `access_token`, `refresh_token`, `app_secret`, `shop_cipher` em plaintext
+- ❌ **NUNCA** salvar tokens no banco sem passar por `encrypt()` do `src/lib/crypto.ts`
+- ❌ **NUNCA** processar webhook síncrono dentro do route handler (sempre disparar evento Inngest, responder 200 rápido)
+- ❌ **NUNCA** responder 4xx/5xx pra webhook do TikTok, exceto erro de infra nossa (evita suspensão do webhook)
+- ❌ **NUNCA** comparar HMAC/assinaturas com `===` ou `==` (sempre `timingSafeEqual` do `node:crypto`)
+- ❌ **NUNCA** chamar API externa dentro de transação de banco (lock longo, risco de deadlock)
+- ✅ **SEMPRE** usar `sanitizar()` de `src/lib/canais/tiktok-shop/http.ts` antes de gravar payloads em `log_sincronizacao_canal`
+
+# Workflow de features via `specs/`
+
+Features complexas são organizadas em `specs/<feature>/`, com **um arquivo MD por tarefa** (padrão RITM, inspirado em ServiceNow). Cada MD é auto-contido: descreve arquivos a criar, especificação, testes obrigatórios e critérios de aceitação.
+
+## Como executar um RITM
+
+Prompt padrão ao começar uma tarefa:
+
+```
+Leia CLAUDE.md (que aponta pra AGENTS.md) e docs/arquitetura/<feature>.md.
+Depois implemente specs/<feature>/RITM-<NN>-<nome>.md seguindo exatamente
+a especificação. Execute os critérios de aceitação descritos no final do
+documento antes de considerar pronto.
+
+Se precisar de detalhes de API externa, consulte docs/referencias/. Se a
+seção necessária estiver vazia ou marcada com ⚠️, pare e me avise antes
+de chutar formato.
+```
+
+## Regras
+
+- **Um RITM por commit/PR.** Não misturar tarefas.
+- **Validar critérios de aceitação** antes de considerar done — eles estão no fim de cada MD.
+- **Se a spec estiver ambígua ou algo não bater com a realidade do código**, pausar e perguntar. Não inventar/chutar.
+- **Se seção de `docs/referencias/` estiver vazia**, pausar. Não implementar com formato assumido.
+
+# Variáveis de ambiente (módulo de canais)
+
+Adicionar ao `.env.local` (dev) e `.env.prod` (Neon):
+
+```bash
+# Criptografia de credenciais OAuth
+# Gerar com: openssl rand -base64 32
+ENCRYPTION_MASTER_KEY=<32 bytes base64>
+OAUTH_STATE_SECRET=<32 bytes base64, DIFERENTE da ENCRYPTION_MASTER_KEY>
+
+# TikTok Shop (Custom App criado em partner.tiktokshop.com)
+TIKTOK_SHOP_APP_KEY=
+TIKTOK_SHOP_APP_SECRET=
+TIKTOK_SHOP_WEBHOOK_KEY=
+TIKTOK_SHOP_API_VERSION=202309      # validar versão atual na doc
+TIKTOK_SHOP_REGION=BR
+
+# URL pública da app (pra redirect de OAuth e webhooks)
+# Em dev: URL do túnel HTTPS (Cloudflare Tunnel, ngrok, etc)
+# Em prod: URL real do Vercel
+NEXT_PUBLIC_APP_URL=https://<tunel-dev-ou-prod>
+
+# Inngest (conta gratuita em inngest.com)
+INNGEST_EVENT_KEY=
+INNGEST_SIGNING_KEY=
+```
+
+⚠️ OAuth e webhooks do TikTok **exigem HTTPS público**. Em dev local (Docker), Next.js roda em `localhost:3000` sem HTTPS, então é obrigatório um túnel (Cloudflare Tunnel recomendado). A URL do túnel vai em `NEXT_PUBLIC_APP_URL` e precisa ser cadastrada no Partner Center como Redirect URL + Webhook URL.
+
+# Gestão de segredos
+
+- **Em env vars:** ok pra MVP. Nunca commitar (`.env.local`, `.env.prod` no `.gitignore`).
+- **No banco:** tudo sensível (tokens OAuth, futuros certificados digitais A1, credenciais de outros canais) passa por `encrypt()` antes do INSERT.
+- **Em logs:** usar `sanitizar()` de `src/lib/canais/tiktok-shop/http.ts` pra redactar campos sensíveis antes de serializar. Lista atual de campos redactados: `access_token`, `refresh_token`, `app_secret`, `shop_cipher`, `authorization`.
+- **Em respostas de API (endpoints do ERP):** jamais retornar tokens ou credenciais completas no JSON. Só metadados (expira em, status, etc).
+- **Migração pra KMS:** planejada pra quando o ERP começar a ter clientes SaaS externos. Ponto de reabertura: antes do primeiro onboarding de cliente pagante fora da NWC/AVZ.
