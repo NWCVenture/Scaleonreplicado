@@ -1,42 +1,54 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { skuKitRegra, skuKitComponente } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
+import { withContaAtiva } from "@/lib/tenancy";
 
-export async function GET(request: NextRequest) {
+function isTenancyAuthError(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? "";
+  return msg.includes("conta ativa") || msg.includes("Sessão");
+}
+
+export async function GET() {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
+    const kitRules = await withContaAtiva(async (tx, contaId) => {
+      const rules = await tx
+        .select()
+        .from(skuKitRegra)
+        .where(eq(skuKitRegra.contaId, contaId));
 
-    const rules = await db.select().from(skuKitRegra);
+      return await Promise.all(
+        rules.map(async (rule) => {
+          const components = await tx
+            .select({
+              id: skuKitComponente.id,
+              sku: skuKitComponente.sku,
+              quantidade: skuKitComponente.quantidade,
+            })
+            .from(skuKitComponente)
+            .where(
+              and(
+                eq(skuKitComponente.kitRegraId, rule.id),
+                eq(skuKitComponente.contaId, contaId)
+              )
+            );
 
-    const kitRules = await Promise.all(
-      rules.map(async (rule) => {
-        const components = await db
-          .select({
-            id: skuKitComponente.id,
-            sku: skuKitComponente.sku,
-            quantidade: skuKitComponente.quantidade,
-          })
-          .from(skuKitComponente)
-          .where(eq(skuKitComponente.kitRegraId, rule.id));
-
-        return {
-          id: rule.id,
-          kitSku: rule.kitSku,
-          createdAt: rule.createdAt,
-          components,
-        };
-      })
-    );
+          return {
+            id: rule.id,
+            kitSku: rule.kitSku,
+            createdAt: rule.createdAt,
+            components,
+          };
+        })
+      );
+    });
 
     return NextResponse.json({ kitRules });
   } catch (error) {
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
     console.error("Error fetching kit rules:", error);
     return NextResponse.json(
       { error: "Erro ao buscar regras de kit" },
@@ -59,15 +71,10 @@ const createSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
-
     const body = await request.json();
     const data = createSchema.parse(body);
 
-    const result = await db.transaction(async (tx) => {
+    const result = await withContaAtiva(async (tx, contaId) => {
       const regraId = generateId();
 
       const [regra] = await tx
@@ -75,6 +82,7 @@ export async function POST(request: NextRequest) {
         .values({
           id: regraId,
           kitSku: data.kitSku,
+          contaId,
         })
         .returning();
 
@@ -83,6 +91,7 @@ export async function POST(request: NextRequest) {
         kitRegraId: regraId,
         sku: c.sku,
         quantidade: c.quantidade,
+        contaId,
       }));
 
       await tx.insert(skuKitComponente).values(componenteValues);
@@ -107,6 +116,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
 
     console.error("Error creating kit rule:", error);
     return NextResponse.json(
@@ -122,18 +134,18 @@ const deleteSchema = z.object({
 
 export async function DELETE(request: NextRequest) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
-
     const body = await request.json();
     const data = deleteSchema.parse(body);
 
-    const [deleted] = await db
-      .delete(skuKitRegra)
-      .where(eq(skuKitRegra.id, data.id))
-      .returning();
+    const deleted = await withContaAtiva(async (tx, contaId) => {
+      const [row] = await tx
+        .delete(skuKitRegra)
+        .where(
+          and(eq(skuKitRegra.id, data.id), eq(skuKitRegra.contaId, contaId))
+        )
+        .returning();
+      return row;
+    });
 
     if (!deleted) {
       return NextResponse.json(
@@ -149,6 +161,9 @@ export async function DELETE(request: NextRequest) {
         { error: "Dados invalidos", details: error.issues },
         { status: 400 }
       );
+    }
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
 
     console.error("Error deleting kit rule:", error);

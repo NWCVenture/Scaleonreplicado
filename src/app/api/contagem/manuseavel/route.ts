@@ -1,25 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { contagemManuseavel } from "@/lib/db/schema";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
+import { withContaAtiva } from "@/lib/tenancy";
 
-export async function GET(request: NextRequest) {
+function isTenancyAuthError(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? "";
+  return msg.includes("conta ativa") || msg.includes("Sessão");
+}
+
+export async function GET(_request: NextRequest) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
-
-    const items = await db
-      .select()
-      .from(contagemManuseavel)
-      .orderBy(asc(contagemManuseavel.sku));
+    const items = await withContaAtiva(async (tx, contaId) => {
+      return tx
+        .select()
+        .from(contagemManuseavel)
+        .where(eq(contagemManuseavel.contaId, contaId))
+        .orderBy(asc(contagemManuseavel.sku));
+    });
 
     return NextResponse.json({ items });
   } catch (error) {
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
     console.error("Error fetching contagem manuseavel:", error);
     return NextResponse.json(
       { error: "Erro ao buscar manuseavel" },
@@ -35,32 +40,40 @@ const upsertSchema = z.object({
 
 export async function PUT(request: NextRequest) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
-
     const body = await request.json();
     const data = upsertSchema.parse(body);
 
-    const existing = await db
-      .select()
-      .from(contagemManuseavel)
-      .where(eq(contagemManuseavel.sku, data.sku))
-      .limit(1);
+    await withContaAtiva(async (tx, contaId) => {
+      const existing = await tx
+        .select()
+        .from(contagemManuseavel)
+        .where(
+          and(
+            eq(contagemManuseavel.contaId, contaId),
+            eq(contagemManuseavel.sku, data.sku)
+          )
+        )
+        .limit(1);
 
-    if (existing.length > 0) {
-      await db
-        .update(contagemManuseavel)
-        .set({ quantidade: data.quantidade, updatedAt: new Date() })
-        .where(eq(contagemManuseavel.id, existing[0].id));
-    } else {
-      await db.insert(contagemManuseavel).values({
-        id: generateId(),
-        sku: data.sku,
-        quantidade: data.quantidade,
-      });
-    }
+      if (existing.length > 0) {
+        await tx
+          .update(contagemManuseavel)
+          .set({ quantidade: data.quantidade, updatedAt: new Date() })
+          .where(
+            and(
+              eq(contagemManuseavel.contaId, contaId),
+              eq(contagemManuseavel.id, existing[0].id)
+            )
+          );
+      } else {
+        await tx.insert(contagemManuseavel).values({
+          id: generateId(),
+          sku: data.sku,
+          quantidade: data.quantidade,
+          contaId,
+        });
+      }
+    });
 
     return NextResponse.json({ ok: true });
   } catch (error) {
@@ -69,6 +82,9 @@ export async function PUT(request: NextRequest) {
         { error: "Dados invalidos", details: error.issues },
         { status: 400 }
       );
+    }
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
 
     console.error("Error upserting contagem manuseavel:", error);

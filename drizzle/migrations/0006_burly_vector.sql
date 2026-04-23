@@ -1,0 +1,1 @@
+ALTER TABLE "session" ADD COLUMN "conta_ativa_id" text;

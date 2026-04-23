@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "@/lib/auth-client";
 import { toast } from "sonner";
@@ -104,6 +105,13 @@ export default function LoginPage() {
                 "Entrar"
               )}
             </Button>
+
+            <p className="text-center text-sm text-muted-foreground">
+              Não tem conta?{" "}
+              <Link href="/signup" className="text-primary font-medium hover:underline">
+                Cadastre-se grátis
+              </Link>
+            </p>
           </form>
         </CardContent>
       </Card>

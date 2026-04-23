@@ -1,25 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { produtoAvariado } from "@/lib/db/schema";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
+import { withContaAtiva } from "@/lib/tenancy";
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
-
-    const registros = await db
-      .select()
-      .from(produtoAvariado)
-      .orderBy(desc(produtoAvariado.createdAt));
+    const registros = await withContaAtiva(async (tx, contaId) => {
+      return tx
+        .select()
+        .from(produtoAvariado)
+        .where(eq(produtoAvariado.contaId, contaId))
+        .orderBy(desc(produtoAvariado.createdAt));
+    });
 
     return NextResponse.json({ registros });
   } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message.includes("conta ativa") ||
+        error.message.includes("Sessão"))
+    ) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
     console.error("Error fetching produtos avariados:", error);
     return NextResponse.json(
       { error: "Erro ao buscar produtos avariados" },
@@ -52,17 +57,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const [novo] = await db
-      .insert(produtoAvariado)
-      .values({
-        id: generateId(),
-        sku: data.sku,
-        avaria: data.avaria,
-        localizacao: data.localizacao,
-        codigoFardo: data.localizacao === "LOTE_DE_COSTURA" ? data.codigoFardo : null,
-        usuarioId: session.user.id,
-      })
-      .returning();
+    const novo = await withContaAtiva(async (tx, contaId) => {
+      const [created] = await tx
+        .insert(produtoAvariado)
+        .values({
+          id: generateId(),
+          sku: data.sku,
+          avaria: data.avaria,
+          localizacao: data.localizacao,
+          codigoFardo:
+            data.localizacao === "LOTE_DE_COSTURA" ? data.codigoFardo : null,
+          usuarioId: session.user.id,
+          contaId,
+        })
+        .returning();
+      return created;
+    });
 
     return NextResponse.json(novo, { status: 201 });
   } catch (error) {
@@ -71,6 +81,14 @@ export async function POST(request: NextRequest) {
         { error: "Dados invalidos", details: error.issues },
         { status: 400 }
       );
+    }
+
+    if (
+      error instanceof Error &&
+      (error.message.includes("conta ativa") ||
+        error.message.includes("Sessão"))
+    ) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
 
     console.error("Error creating produto avariado:", error);

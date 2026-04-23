@@ -1,25 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { loteCadastrado } from "@/lib/db/schema";
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
+import { withContaAtiva } from "@/lib/tenancy";
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
-
-    const lotes = await db
-      .select()
-      .from(loteCadastrado)
-      .orderBy(asc(loteCadastrado.nome));
+    const lotes = await withContaAtiva(async (tx, contaId) => {
+      return tx
+        .select()
+        .from(loteCadastrado)
+        .where(eq(loteCadastrado.contaId, contaId))
+        .orderBy(asc(loteCadastrado.nome));
+    });
 
     return NextResponse.json({ lotes });
   } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message.includes("conta ativa") ||
+        error.message.includes("Sessão"))
+    ) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
+
     console.error("Error fetching lotes:", error);
     return NextResponse.json(
       { error: "Erro ao buscar lotes" },
@@ -38,18 +43,16 @@ const createLoteSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
-
     const body = await request.json();
     const { nome } = createLoteSchema.parse(body);
 
-    const [newLote] = await db
-      .insert(loteCadastrado)
-      .values({ id: generateId(), nome })
-      .returning();
+    const newLote = await withContaAtiva(async (tx, contaId) => {
+      const [created] = await tx
+        .insert(loteCadastrado)
+        .values({ id: generateId(), nome, contaId })
+        .returning();
+      return created;
+    });
 
     return NextResponse.json(newLote, { status: 201 });
   } catch (error) {
@@ -58,6 +61,14 @@ export async function POST(request: NextRequest) {
         { error: "Dados invalidos", details: error.issues },
         { status: 400 }
       );
+    }
+
+    if (
+      error instanceof Error &&
+      (error.message.includes("conta ativa") ||
+        error.message.includes("Sessão"))
+    ) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
 
     if (

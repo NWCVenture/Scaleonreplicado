@@ -8,6 +8,7 @@ import {
   pgEnum,
   real,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -52,6 +53,33 @@ export const localizacaoAvariaEnum = pgEnum("localizacao_avaria", [
   "LOTE_DE_COSTURA",
 ]);
 
+export const papelContaEnum = pgEnum("papel_conta", [
+  "owner",
+  "admin",
+  "gerente",
+  "operador",
+  "costureiro",
+  "financeiro",
+  "fiscal",
+  "supervisor",
+  "funcionario",
+  "expedicao",
+]);
+
+export const planoEnum = pgEnum("plano", [
+  "trial",
+  "starter",
+  "pro",
+  "enterprise",
+]);
+
+export const statusContaEnum = pgEnum("status_conta", [
+  "trial",
+  "ativa",
+  "suspensa",
+  "cancelada",
+]);
+
 // ============================================================
 // 2. BETTER-AUTH TABLES (managed by Better-Auth)
 // ============================================================
@@ -76,6 +104,7 @@ export const session = pgTable("session", {
   userId: text("user_id")
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
+  contaAtivaId: text("conta_ativa_id"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -111,38 +140,123 @@ export const verification = pgTable("verification", {
 // 3. DOMAIN TABLES — Reference Data
 // ============================================================
 
-export const skuCatalogo = pgTable("sku_catalogo", {
-  id: text("id").primaryKey(),
-  codigo: text("codigo").notNull().unique(),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+export const skuCatalogo = pgTable(
+  "sku_catalogo",
+  {
+    id: text("id").primaryKey(),
+    codigo: text("codigo").notNull(),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+    ativo: boolean("ativo").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_sku_catalogo_conta").on(table.contaId),
+    uniqueIndex("uq_sku_catalogo_codigo_conta").on(table.codigo, table.contaId),
+  ]
+);
 
-export const skuKitRegra = pgTable("sku_kit_regra", {
-  id: text("id").primaryKey(),
-  kitSku: text("kit_sku").notNull(),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+export const corCatalogo = pgTable(
+  "cor_catalogo",
+  {
+    id: text("id").primaryKey(),
+    codigo: text("codigo").notNull(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    ativo: boolean("ativo").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_cor_catalogo_conta").on(table.contaId),
+    uniqueIndex("uq_cor_catalogo_codigo_conta").on(table.codigo, table.contaId),
+  ]
+);
 
-export const skuKitComponente = pgTable("sku_kit_componente", {
-  id: text("id").primaryKey(),
-  kitRegraId: text("kit_regra_id")
-    .notNull()
-    .references(() => skuKitRegra.id, { onDelete: "cascade" }),
-  sku: text("sku").notNull(),
-  quantidade: integer("quantidade").notNull().default(1),
-});
+export const tamanhoCatalogo = pgTable(
+  "tamanho_catalogo",
+  {
+    id: text("id").primaryKey(),
+    codigo: text("codigo").notNull(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    ativo: boolean("ativo").notNull().default(true),
+    ordem: integer("ordem").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_tamanho_catalogo_conta").on(table.contaId),
+    uniqueIndex("uq_tamanho_catalogo_codigo_conta").on(
+      table.codigo,
+      table.contaId,
+    ),
+  ]
+);
 
-export const loteCadastrado = pgTable("lote_cadastrado", {
-  id: text("id").primaryKey(),
-  nome: text("nome").notNull().unique(),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+export const skuKitRegra = pgTable(
+  "sku_kit_regra",
+  {
+    id: text("id").primaryKey(),
+    kitSku: text("kit_sku").notNull(),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [index("idx_sku_kit_regra_conta").on(table.contaId)]
+);
 
-export const transportadoraPadrao = pgTable("transportadora_padrao", {
-  id: text("id").primaryKey(),
-  transportadora: text("transportadora").notNull(),
-  prefixos: json("prefixos").$type<string[]>().notNull().default([]),
-});
+export const skuKitComponente = pgTable(
+  "sku_kit_componente",
+  {
+    id: text("id").primaryKey(),
+    kitRegraId: text("kit_regra_id")
+      .notNull()
+      .references(() => skuKitRegra.id, { onDelete: "cascade" }),
+    sku: text("sku").notNull(),
+    quantidade: integer("quantidade").notNull().default(1),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+  },
+  (table) => [index("idx_sku_kit_componente_conta").on(table.contaId)]
+);
+
+export const loteCadastrado = pgTable(
+  "lote_cadastrado",
+  {
+    id: text("id").primaryKey(),
+    nome: text("nome").notNull(),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_lote_cadastrado_conta").on(table.contaId),
+    uniqueIndex("uq_lote_cadastrado_nome_conta").on(table.nome, table.contaId),
+  ]
+);
+
+export const transportadoraPadrao = pgTable(
+  "transportadora_padrao",
+  {
+    id: text("id").primaryKey(),
+    transportadora: text("transportadora").notNull(),
+    prefixos: json("prefixos").$type<string[]>().notNull().default([]),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+  },
+  (table) => [index("idx_transportadora_padrao_conta").on(table.contaId)]
+);
 
 // ============================================================
 // 4. DOMAIN TABLES — Stock / Cadastro
@@ -159,12 +273,17 @@ export const stockItem = pgTable(
     usuarioId: text("usuario_id").references(() => user.id, {
       onDelete: "set null",
     }),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
     index("idx_stock_item_sku").on(table.sku),
     index("idx_stock_item_created_at").on(table.createdAt),
     index("idx_stock_item_codigo_fardo").on(table.codigoFardo),
+    index("idx_stock_item_conta").on(table.contaId),
   ]
 );
 
@@ -180,24 +299,47 @@ export const contagemBipagem = pgTable(
     lote: text("lote").notNull(),
     quantidade: integer("quantidade").notNull(),
     raw: text("raw").notNull(),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
-  (table) => [index("idx_contagem_bipagem_sku").on(table.sku)]
+  (table) => [
+    index("idx_contagem_bipagem_sku").on(table.sku),
+    index("idx_contagem_bipagem_conta").on(table.contaId),
+  ]
 );
 
-export const contagemManuseavel = pgTable("contagem_manuseavel", {
-  id: text("id").primaryKey(),
-  sku: text("sku").notNull(),
-  quantidade: integer("quantidade").notNull().default(0),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+export const contagemManuseavel = pgTable(
+  "contagem_manuseavel",
+  {
+    id: text("id").primaryKey(),
+    sku: text("sku").notNull(),
+    quantidade: integer("quantidade").notNull().default(0),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [index("idx_contagem_manuseavel_conta").on(table.contaId)]
+);
 
-export const contagemEmbalado = pgTable("contagem_embalado", {
-  id: text("id").primaryKey(),
-  sku: text("sku").notNull(),
-  quantidade: integer("quantidade").notNull(),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+export const contagemEmbalado = pgTable(
+  "contagem_embalado",
+  {
+    id: text("id").primaryKey(),
+    sku: text("sku").notNull(),
+    quantidade: integer("quantidade").notNull(),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [index("idx_contagem_embalado_conta").on(table.contaId)]
+);
 
 // ============================================================
 // 6. DOMAIN TABLES — Coletas (Bipagem de Pacotes)
@@ -218,14 +360,19 @@ export const coletaBipagem = pgTable(
     usuarioId: text("usuario_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
     index("idx_coleta_bipagem_tipo").on(table.tipo),
-    index("idx_coleta_bipagem_conta").on(table.conta),
+    index("idx_coleta_bipagem_conta_op").on(table.conta),
     index("idx_coleta_bipagem_revisado").on(table.revisado),
     index("idx_coleta_bipagem_created_at").on(table.createdAt),
     index("idx_coleta_bipagem_usuario").on(table.usuarioId),
+    index("idx_coleta_bipagem_conta").on(table.contaId),
   ]
 );
 
@@ -238,57 +385,88 @@ export const coletaBipagemPacote = pgTable(
       .references(() => coletaBipagem.id, { onDelete: "cascade" }),
     codigo: text("codigo").notNull(),
     transportadora: transportadoraLabelEnum("transportadora"),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
   },
-  (table) => [index("idx_coleta_pacote_bipagem").on(table.bipagemId)]
+  (table) => [
+    index("idx_coleta_pacote_bipagem").on(table.bipagemId),
+    index("idx_coleta_pacote_conta").on(table.contaId),
+  ]
 );
 
-export const coletaDevolucao = pgTable("coleta_devolucao", {
-  id: text("id").primaryKey(),
-  pacoteId: text("pacote_id")
-    .notNull()
-    .references(() => coletaBipagemPacote.id, { onDelete: "cascade" }),
-  operacao: contaOperacaoEnum("operacao").notNull(),
-  avaria: boolean("avaria").notNull().default(false),
-  observacao: text("observacao"),
-  tipo: tipoColetaEnum("tipo").notNull(),
-  fotoPacoteUrl: text("foto_pacote_url"),
-  fotoAvariaUrl: text("foto_avaria_url"),
-});
+export const coletaDevolucao = pgTable(
+  "coleta_devolucao",
+  {
+    id: text("id").primaryKey(),
+    pacoteId: text("pacote_id")
+      .notNull()
+      .references(() => coletaBipagemPacote.id, { onDelete: "cascade" }),
+    operacao: contaOperacaoEnum("operacao").notNull(),
+    avaria: boolean("avaria").notNull().default(false),
+    observacao: text("observacao"),
+    tipo: tipoColetaEnum("tipo").notNull(),
+    fotoPacoteUrl: text("foto_pacote_url"),
+    fotoAvariaUrl: text("foto_avaria_url"),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+  },
+  (table) => [index("idx_coleta_devolucao_conta").on(table.contaId)]
+);
 
-export const coletaDevolucaoSku = pgTable("coleta_devolucao_sku", {
-  id: text("id").primaryKey(),
-  devolucaoId: text("devolucao_id")
-    .notNull()
-    .references(() => coletaDevolucao.id, { onDelete: "cascade" }),
-  sku: text("sku").notNull(),
-  quantidade: integer("quantidade").notNull().default(1),
-});
+export const coletaDevolucaoSku = pgTable(
+  "coleta_devolucao_sku",
+  {
+    id: text("id").primaryKey(),
+    devolucaoId: text("devolucao_id")
+      .notNull()
+      .references(() => coletaDevolucao.id, { onDelete: "cascade" }),
+    sku: text("sku").notNull(),
+    quantidade: integer("quantidade").notNull().default(1),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+  },
+  (table) => [index("idx_coleta_devolucao_sku_conta").on(table.contaId)]
+);
 
-export const coletaBipagemTemporaria = pgTable("coleta_bipagem_temporaria", {
-  id: text("id").primaryKey(),
-  tipo: tipoColetaEnum("tipo").notNull(),
-  conta: contaOperacaoEnum("conta").notNull(),
-  total: integer("total").notNull(),
-  dados: json("dados")
-    .$type<{
-      pacotes: Array<{ codigo: string; transportadora?: string }>;
-      devolucoes: Record<
-        string,
-        {
-          skuLines: Array<{ sku: string; qtd: number }>;
-          operacao: string;
-          avaria: string;
-          obs: string;
-          tipo: string;
-        }
-      >;
-    }>()
-    .notNull(),
-  usuarioId: text("usuario_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+export const coletaBipagemTemporaria = pgTable(
+  "coleta_bipagem_temporaria",
+  {
+    id: text("id").primaryKey(),
+    tipo: tipoColetaEnum("tipo").notNull(),
+    conta: contaOperacaoEnum("conta").notNull(),
+    total: integer("total").notNull(),
+    dados: json("dados")
+      .$type<{
+        pacotes: Array<{ codigo: string; transportadora?: string }>;
+        devolucoes: Record<
+          string,
+          {
+            skuLines: Array<{ sku: string; qtd: number }>;
+            operacao: string;
+            avaria: string;
+            obs: string;
+            tipo: string;
+          }
+        >;
+      }>()
+      .notNull(),
+    usuarioId: text("usuario_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [index("idx_coleta_temp_conta").on(table.contaId)]
+);
 
 // ============================================================
 // 7. DOMAIN TABLES — Alteração de Estoque (Stock Transfers)
@@ -313,11 +491,16 @@ export const alteracaoEstoque = pgTable(
       onDelete: "set null",
     }),
     revisadoEm: timestamp("revisado_em"),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
     index("idx_alteracao_revisado").on(table.revisado),
     index("idx_alteracao_created_at").on(table.createdAt),
+    index("idx_alteracao_conta").on(table.contaId),
   ]
 );
 
@@ -336,12 +519,17 @@ export const produtoAvariado = pgTable(
     usuarioId: text("usuario_id").references(() => user.id, {
       onDelete: "set null",
     }),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
     index("idx_avariado_sku").on(table.sku),
     index("idx_avariado_localizacao").on(table.localizacao),
     index("idx_avariado_created_at").on(table.createdAt),
+    index("idx_avariado_conta").on(table.contaId),
   ]
 );
 
@@ -349,19 +537,27 @@ export const produtoAvariado = pgTable(
 // 9. DOMAIN TABLES — Estante Virtual (Virtual Shelves)
 // ============================================================
 
-export const estante = pgTable("estante", {
-  id: text("id").primaryKey(),
-  nome: text("nome").notNull(),
-  descricao: text("descricao"),
-  ultimaBipagem: timestamp("ultima_bipagem"),
-  ultimaBipagemPor: text("ultima_bipagem_por").references(() => user.id, {
-    onDelete: "set null",
-  }),
-  usuarioId: text("usuario_id")
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+export const estante = pgTable(
+  "estante",
+  {
+    id: text("id").primaryKey(),
+    nome: text("nome").notNull(),
+    descricao: text("descricao"),
+    ultimaBipagem: timestamp("ultima_bipagem"),
+    ultimaBipagemPor: text("ultima_bipagem_por").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    usuarioId: text("usuario_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [index("idx_estante_conta").on(table.contaId)]
+);
 
 export const estanteFardo = pgTable(
   "estante_fardo",
@@ -377,11 +573,16 @@ export const estanteFardo = pgTable(
     adicionadoPor: text("adicionado_por")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
     index("idx_estante_fardo_estante").on(table.estanteId),
     index("idx_estante_fardo_sku").on(table.sku),
+    index("idx_estante_fardo_conta").on(table.contaId),
   ]
 );
 
@@ -403,12 +604,17 @@ export const estanteMovimentacao = pgTable(
     usuarioId: text("usuario_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
     index("idx_estante_mov_estante").on(table.estanteId),
     index("idx_estante_mov_tipo").on(table.tipo),
     index("idx_estante_mov_created_at").on(table.createdAt),
+    index("idx_estante_mov_conta").on(table.contaId),
   ]
 );
 
@@ -423,9 +629,16 @@ export const etiquetaAssociacao = pgTable(
     etiqueta: text("etiqueta").notNull(),
     sku: text("sku").notNull(),
     quantidade: integer("quantidade").notNull(),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
-  (table) => [index("idx_etiqueta_etiqueta").on(table.etiqueta)]
+  (table) => [
+    index("idx_etiqueta_etiqueta").on(table.etiqueta),
+    index("idx_etiqueta_conta").on(table.contaId),
+  ]
 );
 
 // ============================================================
@@ -472,13 +685,170 @@ export const textilLote = pgTable(
     usuarioId: text("usuario_id").references(() => user.id, {
       onDelete: "set null",
     }),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
-  (table) => [index("idx_textil_created_at").on(table.createdAt)]
+  (table) => [
+    index("idx_textil_created_at").on(table.createdAt),
+    index("idx_textil_conta").on(table.contaId),
+  ]
 );
 
 // ============================================================
-// 12. RELATIONS
+// 12. TENANCY (Multi-tenant SaaS — Onda 1)
+// ============================================================
+
+export const conta = pgTable(
+  "conta",
+  {
+    id: text("id").primaryKey(),
+    nome: text("nome").notNull(),
+    emailPrincipal: text("email_principal").notNull(),
+    telefone: text("telefone"),
+    cpfResponsavel: text("cpf_responsavel"),
+    plano: planoEnum("plano").notNull().default("trial"),
+    status: statusContaEnum("status").notNull().default("trial"),
+    trialExpiraEm: timestamp("trial_expira_em"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_conta_status").on(table.status),
+    index("idx_conta_plano").on(table.plano),
+  ]
+);
+
+export const usuarioConta = pgTable(
+  "usuario_conta",
+  {
+    id: text("id").primaryKey(),
+    usuarioId: text("usuario_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+    papel: papelContaEnum("papel").notNull().default("operador"),
+    convidadoPorId: text("convidado_por_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    aceitoEm: timestamp("aceito_em"),
+    ativo: boolean("ativo").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uniq_usuario_conta").on(table.usuarioId, table.contaId),
+    index("idx_usuario_conta_conta").on(table.contaId),
+    index("idx_usuario_conta_usuario").on(table.usuarioId),
+  ]
+);
+
+export const convite = pgTable(
+  "convite",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    papel: papelContaEnum("papel").notNull().default("operador"),
+    tokenUnico: text("token_unico").notNull().unique(),
+    convidadoPorId: text("convidado_por_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    expiraEm: timestamp("expira_em").notNull(),
+    aceitoEm: timestamp("aceito_em"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_convite_conta").on(table.contaId),
+    index("idx_convite_email").on(table.email),
+    index("idx_convite_expira").on(table.expiraEm),
+  ]
+);
+
+export const contaRelations = relations(conta, ({ many }) => ({
+  membros: many(usuarioConta),
+  convites: many(convite),
+}));
+
+export const usuarioContaRelations = relations(usuarioConta, ({ one }) => ({
+  usuario: one(user, {
+    fields: [usuarioConta.usuarioId],
+    references: [user.id],
+    relationName: "usuarioContaUsuario",
+  }),
+  conta: one(conta, {
+    fields: [usuarioConta.contaId],
+    references: [conta.id],
+  }),
+  convidadoPor: one(user, {
+    fields: [usuarioConta.convidadoPorId],
+    references: [user.id],
+    relationName: "usuarioContaConvidadoPor",
+  }),
+}));
+
+export const conviteRelations = relations(convite, ({ one }) => ({
+  conta: one(conta, {
+    fields: [convite.contaId],
+    references: [conta.id],
+  }),
+  convidadoPor: one(user, {
+    fields: [convite.convidadoPorId],
+    references: [user.id],
+  }),
+}));
+
+export const emailChangeRequest = pgTable(
+  "email_change_request",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    emailAtual: text("email_atual").notNull(),
+    emailNovo: text("email_novo").notNull(),
+    tokenAtual: text("token_atual").notNull().unique(),
+    tokenNovo: text("token_novo").notNull().unique(),
+    confirmadoAtualEm: timestamp("confirmado_atual_em"),
+    confirmadoNovoEm: timestamp("confirmado_novo_em"),
+    aplicadoEm: timestamp("aplicado_em"),
+    canceladoEm: timestamp("cancelado_em"),
+    expiraEm: timestamp("expira_em").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_email_change_conta").on(table.contaId),
+    index("idx_email_change_owner").on(table.ownerUserId),
+    index("idx_email_change_expira").on(table.expiraEm),
+  ]
+);
+
+export const emailChangeRequestRelations = relations(
+  emailChangeRequest,
+  ({ one }) => ({
+    conta: one(conta, {
+      fields: [emailChangeRequest.contaId],
+      references: [conta.id],
+    }),
+    owner: one(user, {
+      fields: [emailChangeRequest.ownerUserId],
+      references: [user.id],
+    }),
+  })
+);
+
+// ============================================================
+// 13. RELATIONS
 // ============================================================
 
 export const userRelations = relations(user, ({ many }) => ({
@@ -597,11 +967,32 @@ export const produtoAvariadoRelations = relations(
 );
 
 // ============================================================
-// 13. TYPE EXPORTS
+// 14. TYPE EXPORTS
 // ============================================================
 
 export type User = typeof user.$inferSelect;
 export type NewUser = typeof user.$inferInsert;
+
+export type Conta = typeof conta.$inferSelect;
+export type NewConta = typeof conta.$inferInsert;
+export type UsuarioConta = typeof usuarioConta.$inferSelect;
+export type NewUsuarioConta = typeof usuarioConta.$inferInsert;
+export type Convite = typeof convite.$inferSelect;
+export type NewConvite = typeof convite.$inferInsert;
+
+export type PapelConta =
+  | "owner"
+  | "admin"
+  | "gerente"
+  | "operador"
+  | "costureiro"
+  | "financeiro"
+  | "fiscal"
+  | "supervisor"
+  | "funcionario"
+  | "expedicao";
+export type Plano = "trial" | "starter" | "pro" | "enterprise";
+export type StatusConta = "trial" | "ativa" | "suspensa" | "cancelada";
 
 export type SkuCatalogo = typeof skuCatalogo.$inferSelect;
 export type SkuKitRegra = typeof skuKitRegra.$inferSelect;

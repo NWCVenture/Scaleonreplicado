@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { MobileHeader } from "@/components/layout/header";
+import { ContaSelector } from "@/components/layout/conta-selector";
+import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import {
   ClipboardList,
   Truck,
@@ -30,6 +32,7 @@ import {
   ChevronRight,
   Loader2,
   UserCog,
+  Building2,
 } from "lucide-react";
 
 const expedicaoHrefs = [
@@ -40,6 +43,7 @@ const expedicaoHrefs = [
   "/alteracao-estoque",
   "/produtos-avariados",
   "/pedidos-urgentes",
+  "/gerenciar-skus",
 ];
 
 const outrosHrefs = [
@@ -52,7 +56,7 @@ const outrosHrefs = [
   "/recuperar-dados",
 ];
 
-const adminOnlyPages = ["/gerenciar-usuarios"];
+const adminOnlyPages = ["/gerenciar-usuarios", "/gerenciar-conta"];
 
 const expedicaoAllowedPaths = [
   "/",
@@ -61,10 +65,12 @@ const expedicaoAllowedPaths = [
   "/cadastro",
   "/estante-virtual",
   "/contagem",
+  "/gerenciar-skus",
 ];
 
 const adminItems = [
   { href: "/gerenciar-usuarios", label: "Gerenciar Usuários", icon: UserCog },
+  { href: "/gerenciar-conta", label: "Gerenciar Conta", icon: Building2 },
 ];
 
 const expedicaoItems = [
@@ -87,6 +93,7 @@ const expedicaoItems = [
     label: "Pedidos Urgentes",
     icon: Package,
   },
+  { href: "/gerenciar-skus", label: "Gerenciar SKUs", icon: Tag },
 ];
 
 const outrosItems = [
@@ -127,6 +134,8 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const router = useRouter();
   const { data: session, isPending } = useSession();
+  const { papelAtivo, isAdmin: isAdminAtivo, loading: papelLoading } =
+    usePapelAtivo();
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [modoLivre, setModoLivre] = useState(false);
@@ -149,15 +158,26 @@ export default function DashboardLayout({
       router.replace("/login");
       return;
     }
-    const role = (session.user as Record<string, unknown>).role as string;
-    if (adminOnlyPages.includes(pathname) && role !== "admin") {
+    if (papelLoading || !papelAtivo) return;
+    if (adminOnlyPages.includes(pathname) && !isAdminAtivo) {
       router.replace("/");
       return;
     }
-    if (role === "expedicao" && !expedicaoAllowedPaths.includes(pathname)) {
+    if (
+      papelAtivo === "expedicao" &&
+      !expedicaoAllowedPaths.includes(pathname)
+    ) {
       router.replace("/");
     }
-  }, [isPending, session, pathname, router]);
+  }, [
+    isPending,
+    session,
+    pathname,
+    router,
+    papelAtivo,
+    isAdminAtivo,
+    papelLoading,
+  ]);
 
   // Block Tab key when modoLivre is false (scanner mode)
   useEffect(() => {
@@ -213,9 +233,8 @@ export default function DashboardLayout({
     );
   }
 
-  const userRole = (session.user as Record<string, unknown>).role as string;
-  const isAdmin = userRole === "admin";
-  const isExpedicao = userRole === "expedicao";
+  const isAdmin = isAdminAtivo;
+  const isExpedicao = papelAtivo === "expedicao";
 
   if (
     (adminOnlyPages.includes(pathname) && !isAdmin) ||
@@ -228,7 +247,7 @@ export default function DashboardLayout({
     );
   }
 
-  const expedicaoRoleAllowed = new Set(["/coletas", "/pedidos-urgentes", "/cadastro", "/estante-virtual", "/contagem"]);
+  const expedicaoRoleAllowed = new Set(["/coletas", "/pedidos-urgentes", "/cadastro", "/estante-virtual", "/contagem", "/gerenciar-skus"]);
   const filteredExpedicao = isExpedicao
     ? expedicaoItems.filter((item) => expedicaoRoleAllowed.has(item.href))
     : expedicaoItems;
@@ -373,12 +392,28 @@ export default function DashboardLayout({
 
         {/* Bottom section */}
         <div className="p-4 border-t border-sidebar-border">
+          <div className="mb-3">
+            <ContaSelector />
+          </div>
           <div className="mb-3 pb-3 border-b border-sidebar-border">
             <p className="text-xs font-medium text-sidebar-foreground">
               {session.user.name}
             </p>
             <p className="text-xs text-sidebar-foreground/50 capitalize">
-              {{ admin: "Administrador", supervisor: "Supervisor", funcionario: "Funcionário", expedicao: "Expedição" }[userRole] ?? userRole}
+              {papelAtivo
+                ? ({
+                    owner: "Owner",
+                    admin: "Administrador",
+                    gerente: "Gerente",
+                    operador: "Operador",
+                    costureiro: "Costureiro",
+                    financeiro: "Financeiro",
+                    fiscal: "Fiscal",
+                    supervisor: "Supervisor",
+                    funcionario: "Funcionário",
+                    expedicao: "Expedição",
+                  } as Record<string, string>)[papelAtivo] ?? papelAtivo
+                : "—"}
             </p>
           </div>
 

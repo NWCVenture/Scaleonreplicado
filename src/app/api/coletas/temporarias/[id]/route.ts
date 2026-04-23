@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { coletaBipagemTemporaria } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { withContaAtiva } from "@/lib/tenancy";
+
+function isTenancyAuthError(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? "";
+  return msg.includes("conta ativa") || msg.includes("Sessão");
+}
 
 export async function DELETE(
   request: NextRequest,
@@ -16,31 +21,55 @@ export async function DELETE(
 
     const { id } = await params;
 
-    const [record] = await db
-      .select()
-      .from(coletaBipagemTemporaria)
-      .where(eq(coletaBipagemTemporaria.id, id));
+    const outcome = await withContaAtiva(async (tx, contaId) => {
+      const [record] = await tx
+        .select()
+        .from(coletaBipagemTemporaria)
+        .where(
+          and(
+            eq(coletaBipagemTemporaria.id, id),
+            eq(coletaBipagemTemporaria.contaId, contaId)
+          )
+        );
 
-    if (!record) {
+      if (!record) {
+        return { status: "notFound" as const };
+      }
+
+      if (record.usuarioId !== session.user.id) {
+        return { status: "forbidden" as const };
+      }
+
+      await tx
+        .delete(coletaBipagemTemporaria)
+        .where(
+          and(
+            eq(coletaBipagemTemporaria.id, id),
+            eq(coletaBipagemTemporaria.contaId, contaId)
+          )
+        );
+
+      return { status: "ok" as const };
+    });
+
+    if (outcome.status === "notFound") {
       return NextResponse.json(
         { error: "Bipagem temporaria nao encontrada" },
         { status: 404 }
       );
     }
-
-    if (record.usuarioId !== session.user.id) {
+    if (outcome.status === "forbidden") {
       return NextResponse.json(
         { error: "Sem permissao para remover esta bipagem" },
         { status: 403 }
       );
     }
 
-    await db
-      .delete(coletaBipagemTemporaria)
-      .where(eq(coletaBipagemTemporaria.id, id));
-
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
     console.error("Error deleting temporaria:", error);
     return NextResponse.json(
       { error: "Erro ao remover bipagem temporaria" },

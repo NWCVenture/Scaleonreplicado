@@ -1,41 +1,56 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { estante, estanteFardo } from "@/lib/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
+import { withContaAtiva } from "@/lib/tenancy";
+
+function isTenancyAuthError(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? "";
+  return msg.includes("conta ativa") || msg.includes("Sessão");
+}
 
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
-
     const { id } = await params;
 
-    const [found] = await db
-      .select()
-      .from(estante)
-      .where(eq(estante.id, id));
+    const result = await withContaAtiva(async (tx, contaId) => {
+      const [found] = await tx
+        .select()
+        .from(estante)
+        .where(and(eq(estante.contaId, contaId), eq(estante.id, id)));
 
-    if (!found) {
+      if (!found) {
+        return null;
+      }
+
+      const fardos = await tx
+        .select()
+        .from(estanteFardo)
+        .where(
+          and(
+            eq(estanteFardo.contaId, contaId),
+            eq(estanteFardo.estanteId, id)
+          )
+        )
+        .orderBy(desc(estanteFardo.createdAt));
+
+      return { estante: found, fardos };
+    });
+
+    if (!result) {
       return NextResponse.json(
         { error: "Estante nao encontrada" },
         { status: 404 }
       );
     }
 
-    const fardos = await db
-      .select()
-      .from(estanteFardo)
-      .where(eq(estanteFardo.estanteId, id))
-      .orderBy(desc(estanteFardo.createdAt));
-
-    return NextResponse.json({ estante: found, fardos });
+    return NextResponse.json(result);
   } catch (error) {
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
     console.error("Error fetching estante:", error);
     return NextResponse.json(
       { error: "Erro ao buscar estante" },
@@ -45,21 +60,41 @@ export async function GET(
 }
 
 export async function DELETE(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
-
     const { id } = await params;
 
-    await db.delete(estante).where(eq(estante.id, id));
+    const deleted = await withContaAtiva(async (tx, contaId) => {
+      const [existing] = await tx
+        .select({ id: estante.id })
+        .from(estante)
+        .where(and(eq(estante.contaId, contaId), eq(estante.id, id)));
+
+      if (!existing) {
+        return false;
+      }
+
+      await tx
+        .delete(estante)
+        .where(and(eq(estante.contaId, contaId), eq(estante.id, id)));
+
+      return true;
+    });
+
+    if (!deleted) {
+      return NextResponse.json(
+        { error: "Estante nao encontrada" },
+        { status: 404 }
+      );
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
     console.error("Error deleting estante:", error);
     return NextResponse.json(
       { error: "Erro ao remover estante" },

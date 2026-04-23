@@ -43,6 +43,12 @@ export const auth = betterAuth({
   session: {
     expiresIn: 60 * 60 * 24 * 7, // 7 days
     updateAge: 60 * 60 * 24, // update every day
+    additionalFields: {
+      contaAtivaId: {
+        type: "string",
+        required: false,
+      },
+    },
   },
   secret: process.env.BETTER_AUTH_SECRET,
   basePath: "/api/auth",

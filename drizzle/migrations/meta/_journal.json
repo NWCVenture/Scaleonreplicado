@@ -22,6 +22,83 @@
       "when": 1776719832501,
       "tag": "0002_open_blackheart",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1776891332018,
+      "tag": "0003_worried_korvac",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1776892554930,
+      "tag": "0004_lucky_metal_master",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1776892681323,
+      "tag": "0005_absent_multiple_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1776892815175,
+      "tag": "0006_burly_vector",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1776894105234,
+      "tag": "0007_enable_rls_tenancy",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1776894352485,
+      "tag": "0008_relax_rls_force",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1776894464400,
+      "tag": "0009_ordinary_matthew_murdock",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1776899600611,
+      "tag": "0010_brown_black_widow",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1776899970362,
+      "tag": "0011_gifted_the_hand",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1776901987404,
+      "tag": "0012_brave_warlock",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1776903684169,
+      "tag": "0013_elite_bloodstorm",
+      "breakpoints": true
     }
   ]
 }

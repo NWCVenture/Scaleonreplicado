@@ -1,0 +1,23 @@
+ALTER TABLE "alteracao_estoque" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "coleta_bipagem" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "coleta_bipagem_pacote" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "coleta_bipagem_temporaria" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "coleta_devolucao" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "coleta_devolucao_sku" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "contagem_bipagem" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "contagem_embalado" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "contagem_manuseavel" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "convite" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "estante" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "estante_fardo" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "estante_movimentacao" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "etiqueta_associacao" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "lote_cadastrado" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "produto_avariado" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "sku_catalogo" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "sku_kit_componente" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "sku_kit_regra" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "stock_item" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "textil_lote" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "transportadora_padrao" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';--> statement-breakpoint
+ALTER TABLE "usuario_conta" ALTER COLUMN "conta_id" SET DEFAULT 'nwc-root';

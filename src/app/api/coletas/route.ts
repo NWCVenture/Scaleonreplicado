@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import {
   coletaBipagem,
   coletaBipagemPacote,
@@ -12,14 +11,15 @@ import { and, count, desc, eq, gte, lte } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
+import { withContaAtiva } from "@/lib/tenancy";
+
+function isTenancyAuthError(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? "";
+  return msg.includes("conta ativa") || msg.includes("Sessão");
+}
 
 export async function GET(request: NextRequest) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
-
     const searchParams = request.nextUrl.searchParams;
     const dataInicio = searchParams.get("dataInicio");
     const dataFim = searchParams.get("dataFim");
@@ -32,74 +32,81 @@ export async function GET(request: NextRequest) {
     );
     const offset = parseInt(searchParams.get("offset") || "0", 10) || 0;
 
-    const conditions = [];
+    const result = await withContaAtiva(async (tx, contaId) => {
+      const conditions = [eq(coletaBipagem.contaId, contaId)];
 
-    if (dataInicio) {
-      conditions.push(gte(coletaBipagem.createdAt, new Date(dataInicio)));
-    }
-    if (dataFim) {
-      const endOfDay = new Date(dataFim);
-      endOfDay.setHours(23, 59, 59, 999);
-      conditions.push(lte(coletaBipagem.createdAt, endOfDay));
-    }
-    if (tipo) {
-      conditions.push(
-        eq(
-          coletaBipagem.tipo,
-          tipo as "FLEX" | "COLETA" | "DEVOLUCAO" | "CANCELADO"
+      if (dataInicio) {
+        conditions.push(gte(coletaBipagem.createdAt, new Date(dataInicio)));
+      }
+      if (dataFim) {
+        const endOfDay = new Date(dataFim);
+        endOfDay.setHours(23, 59, 59, 999);
+        conditions.push(lte(coletaBipagem.createdAt, endOfDay));
+      }
+      if (tipo) {
+        conditions.push(
+          eq(
+            coletaBipagem.tipo,
+            tipo as "FLEX" | "COLETA" | "DEVOLUCAO" | "CANCELADO"
+          )
+        );
+      }
+      if (conta) {
+        conditions.push(
+          eq(
+            coletaBipagem.conta,
+            conta as "TIKTOK_SHOP" | "MERCADO_LIVRE" | "SHOPEE"
+          )
+        );
+      }
+      if (revisado === "revisados") {
+        conditions.push(eq(coletaBipagem.revisado, true));
+      } else if (revisado === "pendentes") {
+        conditions.push(eq(coletaBipagem.revisado, false));
+      }
+
+      const whereClause = and(...conditions);
+
+      const revisadoPorUser = alias(user, "revisado_por_user");
+
+      const bipagens = await tx
+        .select({
+          id: coletaBipagem.id,
+          tipo: coletaBipagem.tipo,
+          conta: coletaBipagem.conta,
+          total: coletaBipagem.total,
+          revisado: coletaBipagem.revisado,
+          revisadoPor: coletaBipagem.revisadoPor,
+          revisadoPorNome: revisadoPorUser.name,
+          revisadoEm: coletaBipagem.revisadoEm,
+          usuarioId: coletaBipagem.usuarioId,
+          usuarioNome: user.name,
+          createdAt: coletaBipagem.createdAt,
+        })
+        .from(coletaBipagem)
+        .leftJoin(user, eq(coletaBipagem.usuarioId, user.id))
+        .leftJoin(
+          revisadoPorUser,
+          eq(coletaBipagem.revisadoPor, revisadoPorUser.id)
         )
-      );
-    }
-    if (conta) {
-      conditions.push(
-        eq(
-          coletaBipagem.conta,
-          conta as "TIKTOK_SHOP" | "MERCADO_LIVRE" | "SHOPEE"
-        )
-      );
-    }
-    if (revisado === "revisados") {
-      conditions.push(eq(coletaBipagem.revisado, true));
-    } else if (revisado === "pendentes") {
-      conditions.push(eq(coletaBipagem.revisado, false));
-    }
+        .where(whereClause)
+        .orderBy(desc(coletaBipagem.createdAt))
+        .limit(limit)
+        .offset(offset);
 
-    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+      const [{ total }] = await tx
+        .select({ total: count() })
+        .from(coletaBipagem)
+        .where(whereClause);
 
-    const revisadoPorUser = alias(user, "revisado_por_user");
+      return { bipagens, total };
+    });
 
-    const bipagens = await db
-      .select({
-        id: coletaBipagem.id,
-        tipo: coletaBipagem.tipo,
-        conta: coletaBipagem.conta,
-        total: coletaBipagem.total,
-        revisado: coletaBipagem.revisado,
-        revisadoPor: coletaBipagem.revisadoPor,
-        revisadoPorNome: revisadoPorUser.name,
-        revisadoEm: coletaBipagem.revisadoEm,
-        usuarioId: coletaBipagem.usuarioId,
-        usuarioNome: user.name,
-        createdAt: coletaBipagem.createdAt,
-      })
-      .from(coletaBipagem)
-      .leftJoin(user, eq(coletaBipagem.usuarioId, user.id))
-      .leftJoin(
-        revisadoPorUser,
-        eq(coletaBipagem.revisadoPor, revisadoPorUser.id)
-      )
-      .where(whereClause)
-      .orderBy(desc(coletaBipagem.createdAt))
-      .limit(limit)
-      .offset(offset);
-
-    const [{ total }] = await db
-      .select({ total: count() })
-      .from(coletaBipagem)
-      .where(whereClause);
-
-    return NextResponse.json({ bipagens, total });
+    return NextResponse.json(result);
   } catch (error) {
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
     console.error("Error fetching coletas:", error);
     return NextResponse.json(
       { error: "Erro ao buscar bipagens" },
@@ -178,7 +185,69 @@ export async function POST(request: NextRequest) {
 
     const bipagemId = generateId();
 
-    await db.transaction(async (tx) => {
+    // Pre-compute pacote rows so we can upload photos outside the transaction
+    const pacoteRows = data.pacotes.map((p) => ({
+      id: generateId(),
+      bipagemId,
+      codigo: p.codigo,
+      transportadora: p.transportadora ?? null,
+    }));
+
+    // Upload photos BEFORE opening the transaction (non-critical, external I/O)
+    type DevolucaoPrepared = {
+      pacoteId: string;
+      devolucaoId: string;
+      operacao: "TIKTOK_SHOP" | "MERCADO_LIVRE" | "SHOPEE";
+      avaria: boolean;
+      observacao: string | null;
+      tipo: "FLEX" | "COLETA" | "DEVOLUCAO" | "CANCELADO";
+      fotoPacoteUrl: string | null;
+      fotoAvariaUrl: string | null;
+      skuLines: { id: string; sku: string; quantidade: number }[];
+    };
+
+    const devolucoesPrepared: DevolucaoPrepared[] = [];
+    for (const pacoteRow of pacoteRows) {
+      const devData = data.devolucoes[pacoteRow.codigo];
+      if (!devData) continue;
+
+      let fotoPacoteUrl: string | null = null;
+      let fotoAvariaUrl: string | null = null;
+
+      if (devData.fotoPacoteBase64) {
+        fotoPacoteUrl = await uploadPhoto(
+          bipagemId,
+          `${pacoteRow.id}-pacote.png`,
+          devData.fotoPacoteBase64
+        );
+      }
+      if (devData.fotoAvariaBase64) {
+        fotoAvariaUrl = await uploadPhoto(
+          bipagemId,
+          `${pacoteRow.id}-avaria.png`,
+          devData.fotoAvariaBase64
+        );
+      }
+
+      const devolucaoId = generateId();
+      devolucoesPrepared.push({
+        pacoteId: pacoteRow.id,
+        devolucaoId,
+        operacao: devData.operacao,
+        avaria: devData.avaria,
+        observacao: devData.obs || null,
+        tipo: devData.tipo,
+        fotoPacoteUrl,
+        fotoAvariaUrl,
+        skuLines: devData.skuLines.map((line) => ({
+          id: generateId(),
+          sku: line.sku,
+          quantidade: line.qtd,
+        })),
+      });
+    }
+
+    await withContaAtiva(async (tx, contaId) => {
       // 1. Insert coleta_bipagem
       await tx.insert(coletaBipagem).values({
         id: bipagemId,
@@ -186,64 +255,40 @@ export async function POST(request: NextRequest) {
         conta: data.conta,
         total: data.pacotes.length,
         usuarioId: session.user.id,
+        contaId,
       });
 
       // 2. Batch insert pacotes
-      const pacoteRows = data.pacotes.map((p) => ({
-        id: generateId(),
-        bipagemId,
-        codigo: p.codigo,
-        transportadora: p.transportadora ?? null,
-      }));
+      await tx.insert(coletaBipagemPacote).values(
+        pacoteRows.map((row) => ({
+          ...row,
+          contaId,
+        }))
+      );
 
-      await tx.insert(coletaBipagemPacote).values(pacoteRows);
-
-      // 3. Process devolucoes for matching pacotes
-      for (const pacoteRow of pacoteRows) {
-        const devData = data.devolucoes[pacoteRow.codigo];
-        if (!devData) continue;
-
-        // Upload photos outside transaction (non-critical)
-        let fotoPacoteUrl: string | null = null;
-        let fotoAvariaUrl: string | null = null;
-
-        if (devData.fotoPacoteBase64) {
-          fotoPacoteUrl = await uploadPhoto(
-            bipagemId,
-            `${pacoteRow.id}-pacote.png`,
-            devData.fotoPacoteBase64
-          );
-        }
-        if (devData.fotoAvariaBase64) {
-          fotoAvariaUrl = await uploadPhoto(
-            bipagemId,
-            `${pacoteRow.id}-avaria.png`,
-            devData.fotoAvariaBase64
-          );
-        }
-
-        const devolucaoId = generateId();
-
+      // 3. Insert devolucoes + sku lines
+      for (const dev of devolucoesPrepared) {
         await tx.insert(coletaDevolucao).values({
-          id: devolucaoId,
-          pacoteId: pacoteRow.id,
-          operacao: devData.operacao,
-          avaria: devData.avaria,
-          observacao: devData.obs || null,
-          tipo: devData.tipo,
-          fotoPacoteUrl,
-          fotoAvariaUrl,
+          id: dev.devolucaoId,
+          pacoteId: dev.pacoteId,
+          operacao: dev.operacao,
+          avaria: dev.avaria,
+          observacao: dev.observacao,
+          tipo: dev.tipo,
+          fotoPacoteUrl: dev.fotoPacoteUrl,
+          fotoAvariaUrl: dev.fotoAvariaUrl,
+          contaId,
         });
 
-        // Batch insert SKU lines
-        const skuValues = devData.skuLines.map((line) => ({
-          id: generateId(),
-          devolucaoId,
-          sku: line.sku,
-          quantidade: line.qtd,
-        }));
-
-        await tx.insert(coletaDevolucaoSku).values(skuValues);
+        await tx.insert(coletaDevolucaoSku).values(
+          dev.skuLines.map((line) => ({
+            id: line.id,
+            devolucaoId: dev.devolucaoId,
+            sku: line.sku,
+            quantidade: line.quantidade,
+            contaId,
+          }))
+        );
       }
     });
 
@@ -254,6 +299,9 @@ export async function POST(request: NextRequest) {
         { error: "Dados invalidos", details: error.issues },
         { status: 400 }
       );
+    }
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
 
     console.error("Error creating bipagem:", error);

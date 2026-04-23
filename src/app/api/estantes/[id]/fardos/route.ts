@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { estante, estanteFardo, estanteMovimentacao } from "@/lib/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
+import { withContaAtiva } from "@/lib/tenancy";
+
+function isTenancyAuthError(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? "";
+  return msg.includes("conta ativa") || msg.includes("Sessão");
+}
 
 const addFardoSchema = z.object({
   fardos: z
@@ -24,7 +30,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
+    const session = await auth.api.getSession({ headers: await headers() });
     if (!session) {
       return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
@@ -33,11 +39,11 @@ export async function POST(
     const body = await request.json();
     const data = addFardoSchema.parse(body);
 
-    const result = await db.transaction(async (tx) => {
+    const result = await withContaAtiva(async (tx, contaId) => {
       const [found] = await tx
         .select({ nome: estante.nome })
         .from(estante)
-        .where(eq(estante.id, id));
+        .where(and(eq(estante.contaId, contaId), eq(estante.id, id)));
 
       if (!found) {
         return null;
@@ -46,7 +52,12 @@ export async function POST(
       const [{ count: totalAntes }] = await tx
         .select({ count: sql<number>`cast(count(*) as int)` })
         .from(estanteFardo)
-        .where(eq(estanteFardo.estanteId, id));
+        .where(
+          and(
+            eq(estanteFardo.contaId, contaId),
+            eq(estanteFardo.estanteId, id)
+          )
+        );
 
       const newFardos = data.fardos.map((f) => ({
         id: generateId(),
@@ -56,6 +67,7 @@ export async function POST(
         lote: f.lote,
         quantidade: f.quantidade,
         adicionadoPor: session.user.id,
+        contaId,
       }));
 
       await tx.insert(estanteFardo).values(newFardos);
@@ -63,14 +75,24 @@ export async function POST(
       const [{ count: totalDepois }] = await tx
         .select({ count: sql<number>`cast(count(*) as int)` })
         .from(estanteFardo)
-        .where(eq(estanteFardo.estanteId, id));
+        .where(
+          and(
+            eq(estanteFardo.contaId, contaId),
+            eq(estanteFardo.estanteId, id)
+          )
+        );
 
       const [{ total: totalPecas }] = await tx
         .select({
           total: sql<number>`coalesce(cast(sum(${estanteFardo.quantidade}) as int), 0)`,
         })
         .from(estanteFardo)
-        .where(eq(estanteFardo.estanteId, id));
+        .where(
+          and(
+            eq(estanteFardo.contaId, contaId),
+            eq(estanteFardo.estanteId, id)
+          )
+        );
 
       const isSingle = data.fardos.length === 1;
 
@@ -86,6 +108,7 @@ export async function POST(
         totalDepois,
         totalPecas,
         usuarioId: session.user.id,
+        contaId,
       });
 
       return { added: data.fardos.length };
@@ -105,6 +128,9 @@ export async function POST(
         { error: "Dados invalidos", details: error.issues },
         { status: 400 }
       );
+    }
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
 
     console.error("Error adding fardos:", error);

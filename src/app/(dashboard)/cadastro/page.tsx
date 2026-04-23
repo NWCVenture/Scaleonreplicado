@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { useSession } from "@/lib/auth-client";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -33,16 +32,29 @@ import {
   FileText,
   Pencil,
   AlertCircle,
+  Tag,
 } from "lucide-react";
 import { generateId } from "@/lib/utils";
 
-// Types
 type PrintQueueItem = {
   id: string;
   sku: string;
   lote: string;
   qtd: number;
   codigoFardo: string;
+};
+
+type LoteCadastrado = {
+  id: string;
+  nome: string;
+  createdAt: string;
+};
+
+type SkuCatalogo = {
+  id: string;
+  codigo: string;
+  contaId: string;
+  createdAt: string;
 };
 
 function gerarCodigoFardo(): string {
@@ -54,29 +66,21 @@ function gerarCodigoFardo(): string {
   return `F-${date}-${rand}`;
 }
 
-type LoteCadastrado = {
-  id: string;
-  nome: string;
-  createdAt: string;
-};
-
-// Constants
-const PRODUCTS = ["LUA", "SOL", "PUFFER", "NBA", "CJ"];
-const COLORS: Record<string, string[]> = {
-  LUA: ["AZ", "BR", "PT", "CZ"],
-  SOL: ["AZ", "BR", "PT", "CZ"],
-  NBA: ["AZ", "BR", "PT", "CZ"],
-};
-const SIZES = ["P", "M", "G", "GG", "EGG"];
-const PRODUTOS_SEM_COR = ["PUFFER", "CJ"];
+function normalizeSku(raw: string): string {
+  return raw.trim().toUpperCase().replace(/\s+/g, " ");
+}
 
 export default function CadastroEstoque() {
-  const { data: session } = useSession();
+  // SKU input
+  const [skuInput, setSkuInput] = useState("");
+  const [skuCatalogo, setSkuCatalogo] = useState<SkuCatalogo[]>([]);
+  const [isLoadingSkus, setIsLoadingSkus] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
-  // Selection state
-  const [selectedProduct, setSelectedProduct] = useState("");
-  const [selectedColor, setSelectedColor] = useState("");
-  const [selectedSize, setSelectedSize] = useState("");
+  // SKU registration dialog
+  const [isAddingSku, setIsAddingSku] = useState(false);
+  const [newSkuCodigo, setNewSkuCodigo] = useState("");
+  const [isCreatingSku, setIsCreatingSku] = useState(false);
 
   // Lote state
   const [lote, setLote] = useState("ESTOQUE PADRAO");
@@ -99,14 +103,14 @@ export default function CadastroEstoque() {
   const [isTxtDialogOpen, setIsTxtDialogOpen] = useState(false);
   const [txtInput, setTxtInput] = useState("");
   const [txtPreview, setTxtPreview] = useState<
-    Array<{ sku: string; qtd: number }>
+    Array<{ sku: string; qtd: number; novo: boolean }>
   >([]);
   const [txtErrors, setTxtErrors] = useState<string[]>([]);
   const txtFileRef = useRef<HTMLInputElement>(null);
 
-  // Fetch lotes on mount
   useEffect(() => {
     fetchLotes();
+    fetchSkus();
   }, []);
 
   const fetchLotes = async () => {
@@ -122,6 +126,33 @@ export default function CadastroEstoque() {
       setIsLoadingLotes(false);
     }
   };
+
+  const fetchSkus = async () => {
+    setIsLoadingSkus(true);
+    try {
+      const res = await fetch("/api/sku-catalogo?apenasUnitarios=1");
+      if (!res.ok) throw new Error("Falha ao buscar SKUs");
+      const data = await res.json();
+      setSkuCatalogo(data.skus ?? []);
+    } catch {
+      toast.error("Erro ao carregar catalogo de SKUs");
+    } finally {
+      setIsLoadingSkus(false);
+    }
+  };
+
+  const skuCodigoSet = useMemo(
+    () => new Set(skuCatalogo.map((s) => s.codigo.toUpperCase())),
+    [skuCatalogo]
+  );
+
+  const suggestions = useMemo(() => {
+    const q = skuInput.trim().toUpperCase();
+    if (!q) return skuCatalogo.slice(0, 8);
+    return skuCatalogo
+      .filter((s) => s.codigo.toUpperCase().includes(q))
+      .slice(0, 8);
+  }, [skuInput, skuCatalogo]);
 
   const handleAddLote = async () => {
     if (!newLoteName.trim()) return;
@@ -150,19 +181,51 @@ export default function CadastroEstoque() {
     }
   };
 
+  const handleCreateSku = async (codigoOverride?: string): Promise<SkuCatalogo | null> => {
+    const codigo = normalizeSku(codigoOverride ?? newSkuCodigo);
+    if (!codigo) return null;
+    setIsCreatingSku(true);
+    try {
+      const res = await fetch("/api/sku-catalogo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codigo }),
+      });
+      if (res.status === 409) {
+        toast.error("SKU ja existe no catalogo");
+        return null;
+      }
+      if (!res.ok) {
+        const { error: serverError } = await res.json().catch(() => ({}));
+        throw new Error(serverError || "Falha ao criar SKU");
+      }
+      const created = (await res.json()) as SkuCatalogo;
+      setSkuCatalogo((prev) =>
+        [...prev, created].sort((a, b) => a.codigo.localeCompare(b.codigo))
+      );
+      toast.success(`SKU "${created.codigo}" cadastrado!`);
+      if (!codigoOverride) {
+        setNewSkuCodigo("");
+        setIsAddingSku(false);
+      }
+      return created;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Erro ao cadastrar SKU";
+      toast.error(msg);
+      return null;
+    } finally {
+      setIsCreatingSku(false);
+    }
+  };
+
   const handleAddToQueue = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
 
-    if (!selectedProduct || !selectedSize) {
-      toast.error("Selecione Produto e Tamanho!");
+    const sku = normalizeSku(skuInput);
+    if (!sku) {
+      toast.error("Informe o SKU!");
       return;
     }
-
-    if (!PRODUTOS_SEM_COR.includes(selectedProduct) && !selectedColor) {
-      toast.error("Selecione a Cor!");
-      return;
-    }
-
     if (!qtd) {
       toast.error("Informe a quantidade!");
       return;
@@ -172,9 +235,6 @@ export default function CadastroEstoque() {
       return;
     }
 
-    const sku = PRODUTOS_SEM_COR.includes(selectedProduct)
-      ? `${selectedProduct} ${selectedSize}`
-      : `${selectedProduct} ${selectedColor} ${selectedSize}`;
     const qtdFardos = parseInt(quantidadeFardos);
     const qtdUnidades = parseInt(qtd);
 
@@ -190,8 +250,9 @@ export default function CadastroEstoque() {
     }
 
     setPrintQueue([...printQueue, ...newItems]);
+    const isNew = !skuCodigoSet.has(sku);
     toast.success(`${qtdFardos} fardo(s) adicionado(s) a fila!`, {
-      description: `${qtdUnidades} unidades cada - ${sku}`,
+      description: `${qtdUnidades} unidades cada - ${sku}${isNew ? " (SKU novo)" : ""}`,
     });
 
     setQtd("");
@@ -203,12 +264,9 @@ export default function CadastroEstoque() {
     toast.info("Item removido da fila.");
   };
 
-  // TXT parsing
-  const allColors = ["AZ", "BR", "PT", "CZ"];
-
   const parseTxtLines = (text: string) => {
     const lines = text.split("\n");
-    const items: Array<{ sku: string; qtd: number }> = [];
+    const items: Array<{ sku: string; qtd: number; novo: boolean }> = [];
     const errors: string[] = [];
 
     for (let i = 0; i < lines.length; i++) {
@@ -216,47 +274,27 @@ export default function CadastroEstoque() {
       if (!line) continue;
 
       const tokens = line.split(/\s+/);
-      if (tokens.length < 3) {
-        errors.push(`Linha ${i + 1}: "${line}" -- formato invalido`);
-        continue;
-      }
-
-      const product = tokens[0].toUpperCase();
-      if (!PRODUCTS.includes(product)) {
-        errors.push(`Linha ${i + 1}: produto "${product}" nao reconhecido`);
-        continue;
-      }
-
-      let color = "";
-      let sizeIdx = 2;
-
-      if (PRODUTOS_SEM_COR.includes(product)) {
-        sizeIdx = 1;
-      } else {
-        color = tokens[1].toUpperCase();
-        if (!allColors.includes(color)) {
-          errors.push(`Linha ${i + 1}: cor "${color}" nao reconhecida`);
-          continue;
+      // Find first token that is a positive integer — everything before is the SKU
+      let qtyStartIdx = -1;
+      for (let j = 1; j < tokens.length; j++) {
+        if (/^\d+$/.test(tokens[j])) {
+          qtyStartIdx = j;
+          break;
         }
-        sizeIdx = 2;
       }
-
-      const size = tokens[sizeIdx]?.toUpperCase();
-      if (!size || !SIZES.includes(size)) {
-        errors.push(`Linha ${i + 1}: tamanho "${size}" nao reconhecido`);
+      if (qtyStartIdx === -1) {
+        errors.push(`Linha ${i + 1}: "${line}" -- sem quantidades numericas`);
         continue;
       }
 
-      const sku = PRODUTOS_SEM_COR.includes(product)
-        ? `${product} ${size}`
-        : `${product} ${color} ${size}`;
-
-      const quantities = tokens.slice(sizeIdx + 1);
-      if (quantities.length === 0) {
-        errors.push(`Linha ${i + 1}: "${sku}" sem quantidades`);
+      const sku = normalizeSku(tokens.slice(0, qtyStartIdx).join(" "));
+      if (!sku) {
+        errors.push(`Linha ${i + 1}: "${line}" -- SKU vazio`);
         continue;
       }
+      const novo = !skuCodigoSet.has(sku);
 
+      const quantities = tokens.slice(qtyStartIdx);
       for (const q of quantities) {
         const qtdNum = parseInt(q);
         if (isNaN(qtdNum) || qtdNum <= 0) {
@@ -265,7 +303,7 @@ export default function CadastroEstoque() {
           );
           continue;
         }
-        items.push({ sku, qtd: qtdNum });
+        items.push({ sku, qtd: qtdNum, novo });
       }
     }
 
@@ -292,8 +330,19 @@ export default function CadastroEstoque() {
     e.target.value = "";
   };
 
-  const handleImportTxt = () => {
+  const handleImportTxt = async () => {
     if (txtPreview.length === 0) return;
+
+    // Auto-cadastra SKUs novos (uma vez por código)
+    const novosUnicos = Array.from(
+      new Set(txtPreview.filter((i) => i.novo).map((i) => i.sku))
+    );
+    if (novosUnicos.length > 0) {
+      for (const codigo of novosUnicos) {
+        await handleCreateSku(codigo);
+      }
+    }
+
     const newItems: PrintQueueItem[] = txtPreview.map((item) => ({
       id: generateId(),
       sku: item.sku,
@@ -311,18 +360,15 @@ export default function CadastroEstoque() {
     setIsTxtDialogOpen(false);
   };
 
-  // QR Code payload — includes unique fardo code so each physical fardo is identifiable
   const getQrPayload = (item: PrintQueueItem) =>
     `${item.sku}}${item.lote}}${item.qtd}}${item.codigoFardo}`;
 
-  // Pages for print queue
   const itemsPerPage = isFardoAgrupado ? 1 : 4;
   const pages: PrintQueueItem[][] = [];
   for (let i = 0; i < printQueue.length; i += itemsPerPage) {
     pages.push(printQueue.slice(i, i + itemsPerPage));
   }
 
-  // Print handler with window.open
   const handlePrint = () => {
     if (printQueue.length === 0) return;
 
@@ -428,7 +474,6 @@ export default function CadastroEstoque() {
     printWindow.document.write(html);
     printWindow.document.close();
 
-    // After print, ask to save
     setTimeout(() => {
       if (confirm("Salvar itens no estoque?")) {
         saveToStock();
@@ -440,6 +485,14 @@ export default function CadastroEstoque() {
     if (printQueue.length === 0) return;
     setIsSaving(true);
     try {
+      // Garante que todos os SKUs novos estão no catálogo antes de salvar estoque
+      const novosUnicos = Array.from(
+        new Set(printQueue.map((i) => i.sku).filter((s) => !skuCodigoSet.has(s)))
+      );
+      for (const codigo of novosUnicos) {
+        await handleCreateSku(codigo);
+      }
+
       const res = await fetch("/api/stock-items", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -463,10 +516,7 @@ export default function CadastroEstoque() {
     }
   };
 
-  // Available colors for selected product
-  const availableColors = selectedProduct
-    ? COLORS[selectedProduct] || []
-    : [];
+  const skuJaCadastrado = skuInput && skuCodigoSet.has(normalizeSku(skuInput));
 
   return (
     <div className="space-y-8">
@@ -506,64 +556,99 @@ export default function CadastroEstoque() {
             )}
           </CardHeader>
           <CardContent className="space-y-6">
-            {/* Product Selection */}
+            {/* SKU input + autocomplete */}
             <div className="space-y-3">
-              <Label>Produto</Label>
-              <div className="flex gap-3">
-                {PRODUCTS.map((p) => (
-                  <Button
-                    key={p}
-                    type="button"
-                    variant={selectedProduct === p ? "default" : "outline"}
-                    onClick={() => {
-                      setSelectedProduct(p);
-                      if (PRODUTOS_SEM_COR.includes(p)) setSelectedColor("");
-                    }}
-                    className="flex-1 h-12 text-lg font-bold"
-                  >
-                    {p}
-                  </Button>
-                ))}
-              </div>
-            </div>
-
-            {/* Color Selection */}
-            {!PRODUTOS_SEM_COR.includes(selectedProduct) &&
-              selectedProduct && (
-                <div className="space-y-3">
-                  <Label>Cor</Label>
-                  <div className="flex gap-3">
-                    {availableColors.map((c) => (
+              <div className="flex items-center justify-between">
+                <Label>SKU</Label>
+                <Dialog open={isAddingSku} onOpenChange={setIsAddingSku}>
+                  <DialogTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1"
+                    >
+                      <Tag className="h-3.5 w-3.5" />
+                      Cadastrar SKU
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Cadastrar Novo SKU</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                      <div className="space-y-2">
+                        <Label>Código do SKU</Label>
+                        <Input
+                          value={newSkuCodigo}
+                          onChange={(e) => setNewSkuCodigo(e.target.value)}
+                          placeholder="Ex: CAMISA AZ G"
+                          className="uppercase font-mono"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleCreateSku();
+                          }}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Use espaços para separar produto, cor, tamanho, etc.
+                          O código será normalizado em maiúsculas.
+                        </p>
+                      </div>
                       <Button
-                        key={c}
-                        type="button"
-                        variant={selectedColor === c ? "default" : "outline"}
-                        onClick={() => setSelectedColor(c)}
-                        className="flex-1 h-12 text-lg font-bold"
+                        onClick={() => handleCreateSku()}
+                        className="w-full"
+                        disabled={isCreatingSku || !newSkuCodigo.trim()}
                       >
-                        {c}
+                        {isCreatingSku && (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        )}
+                        Salvar SKU
                       </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              </div>
+              <div className="relative">
+                <Input
+                  value={skuInput}
+                  onChange={(e) => setSkuInput(e.target.value.toUpperCase())}
+                  onFocus={() => setShowSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                  placeholder={
+                    isLoadingSkus
+                      ? "Carregando catálogo..."
+                      : skuCatalogo.length === 0
+                        ? "Cadastre seu primeiro SKU →"
+                        : "Digite ou selecione um SKU"
+                  }
+                  className="h-12 text-lg font-mono uppercase"
+                  disabled={isLoadingSkus}
+                />
+                {showSuggestions && suggestions.length > 0 && (
+                  <div className="absolute z-10 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-60 overflow-y-auto">
+                    {suggestions.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:bg-accent text-sm font-mono"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setSkuInput(s.codigo);
+                          setShowSuggestions(false);
+                        }}
+                      >
+                        {s.codigo}
+                      </button>
                     ))}
                   </div>
-                </div>
-              )}
-
-            {/* Size Selection */}
-            <div className="space-y-3">
-              <Label>Tamanho</Label>
-              <div className="flex gap-3">
-                {SIZES.map((s) => (
-                  <Button
-                    key={s}
-                    type="button"
-                    variant={selectedSize === s ? "default" : "outline"}
-                    onClick={() => setSelectedSize(s)}
-                    className="flex-1 h-12 text-lg font-bold"
-                  >
-                    {s}
-                  </Button>
-                ))}
+                )}
               </div>
+              {skuInput && !skuJaCadastrado && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3" />
+                  SKU não está no catálogo — será cadastrado automaticamente ao
+                  salvar.
+                </p>
+              )}
             </div>
 
             {/* Lote Selection */}
@@ -661,39 +746,16 @@ export default function CadastroEstoque() {
             <div className="p-4 bg-secondary/50 rounded-lg border border-border text-center relative">
               <p className="text-sm text-muted-foreground mb-1">SKU Gerado</p>
               <p className="text-2xl font-mono font-bold tracking-wider">
-                {selectedProduct || "..."}{" "}
-                {!PRODUTOS_SEM_COR.includes(selectedProduct || "") &&
-                  (selectedColor || "...")}{" "}
-                {selectedSize || "..."}
+                {normalizeSku(skuInput) || "..."}
               </p>
-              {selectedProduct && selectedSize && (
+              {skuInput && (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="absolute top-2 right-2 h-8 w-8"
                   onClick={() => {
-                    const currentSku = PRODUTOS_SEM_COR.includes(
-                      selectedProduct
-                    )
-                      ? `${selectedProduct} ${selectedSize}`
-                      : `${selectedProduct} ${selectedColor} ${selectedSize}`;
-                    const novoSKU = prompt("Editar SKU:", currentSku);
-                    if (novoSKU) {
-                      const partes = novoSKU.trim().split(" ");
-                      if (partes.length >= 2) {
-                        setSelectedProduct(partes[0]);
-                        if (
-                          partes.length === 3 &&
-                          !PRODUTOS_SEM_COR.includes(partes[0])
-                        ) {
-                          setSelectedColor(partes[1]);
-                          setSelectedSize(partes[2]);
-                        } else {
-                          setSelectedColor("");
-                          setSelectedSize(partes[partes.length - 1]);
-                        }
-                      }
-                    }
+                    const novoSKU = prompt("Editar SKU:", normalizeSku(skuInput));
+                    if (novoSKU) setSkuInput(normalizeSku(novoSKU));
                   }}
                   title="Editar SKU"
                 >
@@ -733,14 +795,16 @@ export default function CadastroEstoque() {
                       <p className="font-semibold text-foreground">
                         Formato esperado:
                       </p>
-                      <p className="font-mono">
-                        PRODUTO COR TAMANHO QTD1 QTD2 QTD3...
-                      </p>
+                      <p className="font-mono">SKU QTD1 QTD2 QTD3...</p>
                       <p className="font-mono text-xs">
                         Ex: NBA AZ G 80 60 -- 2 fardos (80 e 60 unidades)
                       </p>
                       <p className="font-mono text-xs">
-                        Ex: LUA PT M 40 60 40 -- 3 fardos
+                        Ex: CAMISA PT M 40 60 40 -- 3 fardos
+                      </p>
+                      <p className="text-xs mt-2">
+                        SKUs novos serão cadastrados automaticamente no
+                        catálogo.
                       </p>
                     </div>
 
@@ -798,6 +862,11 @@ export default function CadastroEstoque() {
                           <span className="text-primary">
                             {new Set(txtPreview.map((i) => i.sku)).size} SKUs
                           </span>
+                          {txtPreview.some((i) => i.novo) && (
+                            <span className="text-amber-600 dark:text-amber-400 ml-2">
+                              ({Array.from(new Set(txtPreview.filter((i) => i.novo).map((i) => i.sku))).length} novos)
+                            </span>
+                          )}
                         </p>
                         <div className="max-h-48 overflow-y-auto space-y-1 pr-1">
                           {txtPreview.map((item, idx) => (
@@ -805,8 +874,13 @@ export default function CadastroEstoque() {
                               key={idx}
                               className="flex items-center justify-between px-3 py-1.5 bg-secondary/40 rounded text-sm"
                             >
-                              <span className="font-mono font-bold">
+                              <span className="font-mono font-bold flex items-center gap-2">
                                 {item.sku}
+                                {item.novo && (
+                                  <span className="text-[10px] uppercase font-semibold text-amber-600 dark:text-amber-400 border border-amber-500/40 rounded px-1">
+                                    novo
+                                  </span>
+                                )}
                               </span>
                               <span className="text-muted-foreground">
                                 {item.qtd} unidades
@@ -856,7 +930,6 @@ export default function CadastroEstoque() {
               </CardDescription>
             </CardHeader>
             <CardContent className="flex-1 overflow-hidden flex flex-col">
-              {/* Queue list */}
               <div className="flex-1 overflow-auto space-y-2 pr-2 mb-4 max-h-[400px]">
                 {printQueue.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-50 py-12">
@@ -897,7 +970,6 @@ export default function CadastroEstoque() {
                 )}
               </div>
 
-              {/* Hidden QR Codes for print serialization */}
               <div className="hidden">
                 {printQueue.map((item) => (
                   <QRCodeSVG
@@ -918,7 +990,6 @@ export default function CadastroEstoque() {
                 ))}
               </div>
 
-              {/* Action buttons */}
               <div className="flex gap-4 mt-auto pt-4 border-t">
                 <Button
                   onClick={handlePrint}

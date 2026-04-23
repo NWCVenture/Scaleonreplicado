@@ -7,6 +7,8 @@ const beatrizRestrictedRoutes = [
   "/processador-anuncios",
 ];
 
+const PUBLIC_PATHS = new Set(["/login", "/signup", "/comecar"]);
+
 export async function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
 
@@ -14,11 +16,11 @@ export async function proxy(request: NextRequest) {
     headers: request.headers,
   });
 
-  if (!session && path !== "/login") {
+  if (!session && !PUBLIC_PATHS.has(path)) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  if (session && path === "/login") {
+  if (session && PUBLIC_PATHS.has(path)) {
     return NextResponse.redirect(new URL("/", request.url));
   }
 

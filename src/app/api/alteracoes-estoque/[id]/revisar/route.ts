@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { alteracaoEstoque } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { withContaAtiva } from "@/lib/tenancy";
 
 export async function PUT(
   request: NextRequest,
@@ -16,17 +16,31 @@ export async function PUT(
 
     const { id } = await params;
 
-    await db
-      .update(alteracaoEstoque)
-      .set({
-        revisado: true,
-        revisadoPor: session.user.id,
-        revisadoEm: new Date(),
-      })
-      .where(eq(alteracaoEstoque.id, id));
+    await withContaAtiva(async (tx, contaId) => {
+      await tx
+        .update(alteracaoEstoque)
+        .set({
+          revisado: true,
+          revisadoPor: session.user.id,
+          revisadoEm: new Date(),
+        })
+        .where(
+          and(
+            eq(alteracaoEstoque.id, id),
+            eq(alteracaoEstoque.contaId, contaId)
+          )
+        );
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message.includes("conta ativa") ||
+        error.message.includes("Sessão"))
+    ) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
     console.error("Error reviewing alteracao estoque:", error);
     return NextResponse.json(
       { error: "Erro ao revisar alteracao de estoque" },

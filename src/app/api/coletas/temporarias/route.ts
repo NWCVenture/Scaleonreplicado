@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { coletaBipagemTemporaria } from "@/lib/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
+import { withContaAtiva } from "@/lib/tenancy";
+
+function isTenancyAuthError(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? "";
+  return msg.includes("conta ativa") || msg.includes("Sessão");
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -13,14 +18,24 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
 
-    const temporarias = await db
-      .select()
-      .from(coletaBipagemTemporaria)
-      .where(eq(coletaBipagemTemporaria.usuarioId, session.user.id))
-      .orderBy(desc(coletaBipagemTemporaria.createdAt));
+    const temporarias = await withContaAtiva(async (tx, contaId) => {
+      return tx
+        .select()
+        .from(coletaBipagemTemporaria)
+        .where(
+          and(
+            eq(coletaBipagemTemporaria.usuarioId, session.user.id),
+            eq(coletaBipagemTemporaria.contaId, contaId)
+          )
+        )
+        .orderBy(desc(coletaBipagemTemporaria.createdAt));
+    });
 
     return NextResponse.json({ temporarias });
   } catch (error) {
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
     console.error("Error fetching temporarias:", error);
     return NextResponse.json(
       { error: "Erro ao buscar bipagens temporarias" },
@@ -62,13 +77,16 @@ export async function POST(request: NextRequest) {
 
     const id = generateId();
 
-    await db.insert(coletaBipagemTemporaria).values({
-      id,
-      tipo: data.tipo,
-      conta: data.conta,
-      total: data.total,
-      dados: data.dados,
-      usuarioId: session.user.id,
+    await withContaAtiva(async (tx, contaId) => {
+      await tx.insert(coletaBipagemTemporaria).values({
+        id,
+        tipo: data.tipo,
+        conta: data.conta,
+        total: data.total,
+        dados: data.dados,
+        usuarioId: session.user.id,
+        contaId,
+      });
     });
 
     return NextResponse.json({ id }, { status: 201 });
@@ -78,6 +96,9 @@ export async function POST(request: NextRequest) {
         { error: "Dados invalidos", details: error.issues },
         { status: 400 }
       );
+    }
+    if (isTenancyAuthError(error)) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
 
     console.error("Error saving temporaria:", error);

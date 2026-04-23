@@ -79,6 +79,12 @@ const ALL_NAV_ITEMS = [
     icon: FileSpreadsheet,
     description: "Processar planilhas para atualizacao de estoque.",
   },
+  {
+    href: "/gerenciar-skus",
+    label: "Gerenciar SKUs",
+    icon: Tag,
+    description: "Catalogo de SKUs da conta. Cadastrar, desativar, reativar.",
+  },
 ];
 
 const restrictedPages = [

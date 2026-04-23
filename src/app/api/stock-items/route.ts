@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { stockItem } from "@/lib/db/schema";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
+import { withContaAtiva } from "@/lib/tenancy";
 
 const createStockItemsSchema = z.object({
   items: z
@@ -28,27 +28,37 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { items } = createStockItemsSchema.parse(body);
 
-    const values = items.map((item) => ({
-      id: generateId(),
-      sku: item.sku,
-      lote: item.lote,
-      quantidade: item.quantidade,
-      codigoFardo: item.codigoFardo ?? null,
-      usuarioId: session.user.id,
-    }));
+    const result = await withContaAtiva(async (tx, contaId) => {
+      const values = items.map((item) => ({
+        id: generateId(),
+        sku: item.sku,
+        lote: item.lote,
+        quantidade: item.quantidade,
+        codigoFardo: item.codigoFardo ?? null,
+        usuarioId: session.user.id,
+        contaId,
+      }));
 
-    await db.insert(stockItem).values(values);
+      await tx.insert(stockItem).values(values);
 
-    return NextResponse.json(
-      { count: values.length, ids: values.map((v) => v.id) },
-      { status: 201 }
-    );
+      return { count: values.length, ids: values.map((v) => v.id) };
+    });
+
+    return NextResponse.json(result, { status: 201 });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
         { error: "Dados invalidos", details: error.issues },
         { status: 400 }
       );
+    }
+
+    if (
+      error instanceof Error &&
+      (error.message.includes("conta ativa") ||
+        error.message.includes("Sessão"))
+    ) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
 
     console.error("Error creating stock items:", error);

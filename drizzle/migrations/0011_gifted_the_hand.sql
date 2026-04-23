@@ -1,0 +1,1 @@
+ALTER TABLE "sku_catalogo" ADD COLUMN "ativo" boolean DEFAULT true NOT NULL;

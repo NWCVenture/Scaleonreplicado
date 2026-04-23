@@ -31,7 +31,7 @@ export default function CriarQRCode() {
   useEffect(() => {
     if (emSkuInput.length < 1) { setEmSuggestions([]); setShowEmSuggestions(false); return; }
     const controller = new AbortController();
-    fetch(`/api/sku-catalogo?search=${encodeURIComponent(emSkuInput)}`, { signal: controller.signal })
+    fetch(`/api/sku-catalogo?apenasUnitarios=1&search=${encodeURIComponent(emSkuInput)}`, { signal: controller.signal })
       .then(r => r.ok ? r.json() : { skus: [] })
       .then(data => {
         const list = (data.skus as { codigo: string }[]).map(s => s.codigo).slice(0, 10);

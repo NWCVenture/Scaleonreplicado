@@ -1,25 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { produtoAvariado } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { withContaAtiva } from "@/lib/tenancy";
 
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
-    }
-
     const { id } = await params;
 
-    await db.delete(produtoAvariado).where(eq(produtoAvariado.id, id));
+    await withContaAtiva(async (tx, contaId) => {
+      await tx
+        .delete(produtoAvariado)
+        .where(
+          and(
+            eq(produtoAvariado.id, id),
+            eq(produtoAvariado.contaId, contaId)
+          )
+        );
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message.includes("conta ativa") ||
+        error.message.includes("Sessão"))
+    ) {
+      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
     console.error("Error deleting produto avariado:", error);
     return NextResponse.json(
       { error: "Erro ao remover produto avariado" },
