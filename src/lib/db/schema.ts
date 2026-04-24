@@ -11,7 +11,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { relations, type InferSelectModel } from "drizzle-orm";
+import { relations, sql, type InferSelectModel } from "drizzle-orm";
 
 // ============================================================
 // 1. ENUMS
@@ -1231,6 +1231,162 @@ export const credenciaisOauthTiktokRelations = relations(
     }),
   }),
 );
+
+// ============================================================
+// MODELO PRINCIPAL (SKU Principal) — variações por modelo
+// ============================================================
+// Cada modelo (LUA, NBA, ...) tem autonomia nas suas próprias
+// cores e tamanhos. Separado dos catálogos globais
+// (cor_catalogo / tamanho_catalogo) que permanecem para SKUs
+// combinados livremente.
+
+export const modeloPrincipal = pgTable(
+  "modelo_principal",
+  {
+    id: text("id").primaryKey(),
+    codigo: text("codigo").notNull(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    ativo: boolean("ativo").notNull().default(true),
+    etiquetaImagemUrl: text("etiqueta_imagem_url"),
+    etiquetaImagemAtualizadaEm: timestamp("etiqueta_imagem_atualizada_em"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_modelo_principal_conta").on(t.contaId),
+    uniqueIndex("uq_modelo_principal_codigo_conta").on(t.codigo, t.contaId),
+  ],
+);
+
+export const modeloCor = pgTable(
+  "modelo_cor",
+  {
+    id: text("id").primaryKey(),
+    modeloId: text("modelo_id")
+      .notNull()
+      .references(() => modeloPrincipal.id, { onDelete: "cascade" }),
+    codigo: text("codigo").notNull(),
+    ativo: boolean("ativo").notNull().default(true),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_modelo_cor_conta").on(t.contaId),
+    index("idx_modelo_cor_modelo").on(t.modeloId),
+    uniqueIndex("uq_modelo_cor_codigo_modelo").on(t.modeloId, t.codigo),
+  ],
+);
+
+export const modeloTamanho = pgTable(
+  "modelo_tamanho",
+  {
+    id: text("id").primaryKey(),
+    modeloId: text("modelo_id")
+      .notNull()
+      .references(() => modeloPrincipal.id, { onDelete: "cascade" }),
+    codigo: text("codigo").notNull(),
+    ativo: boolean("ativo").notNull().default(true),
+    ordem: integer("ordem").notNull().default(0),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_modelo_tamanho_conta").on(t.contaId),
+    index("idx_modelo_tamanho_modelo").on(t.modeloId),
+    uniqueIndex("uq_modelo_tamanho_codigo_modelo").on(t.modeloId, t.codigo),
+  ],
+);
+
+export type ModeloPrincipal = InferSelectModel<typeof modeloPrincipal>;
+export type ModeloCor = InferSelectModel<typeof modeloCor>;
+export type ModeloTamanho = InferSelectModel<typeof modeloTamanho>;
+
+// ============================================================
+// SESSÃO DE EXPEDIÇÃO (Expedição Diária)
+// ============================================================
+// Cada usuário tem no máximo uma sessão ativa por vez (status=ativa).
+// Ao encerrar, gera relatório e envia por email.
+
+export const sessaoExpedicaoStatusEnum = pgEnum("sessao_expedicao_status", [
+  "ativa",
+  "encerrada",
+]);
+
+export const sessaoExpedicao = pgTable(
+  "sessao_expedicao",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    usuarioId: text("usuario_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    status: sessaoExpedicaoStatusEnum("status").notNull().default("ativa"),
+    iniciouEm: timestamp("iniciou_em").notNull().defaultNow(),
+    encerrouEm: timestamp("encerrou_em"),
+    totalEtiquetas: integer("total_etiquetas").notNull().default(0),
+    skusContagem: jsonb("skus_contagem")
+      .$type<Record<string, number>>()
+      .notNull()
+      .default({}),
+    relatorioEnviado: boolean("relatorio_enviado").notNull().default(false),
+  },
+  (table) => [
+    index("idx_sessao_expedicao_conta").on(table.contaId),
+    index("idx_sessao_expedicao_usuario").on(table.usuarioId),
+    uniqueIndex("uq_sessao_expedicao_ativa_por_usuario")
+      .on(table.usuarioId)
+      .where(sql`status = 'ativa'`),
+  ],
+);
+
+export type SessaoExpedicao = InferSelectModel<typeof sessaoExpedicao>;
+
+// ============================================================
+// HISTÓRICO DE IMPRESSÃO DE ETIQUETAS (Expedição Diária)
+// ============================================================
+// Retenção: 48h. Usado para detectar reimpressão e permitir
+// rebaixar o PDF caso necessário. sessao_id é nullable — impressões
+// fora de sessão ainda são permitidas (comportamento legado).
+
+export const historicoImpressaoEtiquetas = pgTable(
+  "historico_impressao_etiquetas",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    usuarioId: text("usuario_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    sessaoId: text("sessao_id").references(() => sessaoExpedicao.id, {
+      onDelete: "set null",
+    }),
+    blobUrl: text("blob_url").notNull(),
+    fileName: text("file_name").notNull(),
+    groupLabel: text("group_label").notNull(),
+    subgroupIds: text("subgroup_ids").array().notNull().default([]),
+    pageCount: integer("page_count").notNull().default(0),
+    cleanedUp: boolean("cleaned_up").notNull().default(false),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_hist_impressao_conta").on(table.contaId),
+    index("idx_hist_impressao_expires").on(table.expiresAt),
+    index("idx_hist_impressao_sessao").on(table.sessaoId),
+  ],
+);
+
+export type HistoricoImpressaoEtiquetas = InferSelectModel<
+  typeof historicoImpressaoEtiquetas
+>;
 
 // Inferred types
 export type CanalVenda = InferSelectModel<typeof canaisVenda>;

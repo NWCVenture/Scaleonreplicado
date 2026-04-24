@@ -106,6 +106,27 @@
       "when": 1776919990375,
       "tag": "0014_nappy_ben_parker",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1776974257941,
+      "tag": "0015_graceful_adam_warlock",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1776974969226,
+      "tag": "0016_clean_toro",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1776981817462,
+      "tag": "0017_careful_vance_astro",
+      "breakpoints": true
     }
   ]
 }
