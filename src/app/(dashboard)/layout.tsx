@@ -25,6 +25,7 @@ import {
   Boxes,
   FileSpreadsheet,
   FileText,
+  FileDown,
   LogOut,
   Lock,
   MousePointerClick,
@@ -43,6 +44,7 @@ const expedicaoHrefs = [
   "/alteracao-estoque",
   "/produtos-avariados",
   "/pedidos-urgentes",
+  "/expedicao-diaria",
   "/gerenciar-skus",
 ];
 
@@ -62,6 +64,7 @@ const expedicaoAllowedPaths = [
   "/",
   "/coletas",
   "/pedidos-urgentes",
+  "/expedicao-diaria",
   "/cadastro",
   "/estante-virtual",
   "/contagem",
@@ -92,6 +95,11 @@ const expedicaoItems = [
     href: "/pedidos-urgentes",
     label: "Pedidos Urgentes",
     icon: Package,
+  },
+  {
+    href: "/expedicao-diaria",
+    label: "Expedicao Diaria",
+    icon: FileDown,
   },
   { href: "/gerenciar-skus", label: "Gerenciar SKUs", icon: Tag },
 ];
@@ -247,7 +255,7 @@ export default function DashboardLayout({
     );
   }
 
-  const expedicaoRoleAllowed = new Set(["/coletas", "/pedidos-urgentes", "/cadastro", "/estante-virtual", "/contagem", "/gerenciar-skus"]);
+  const expedicaoRoleAllowed = new Set(["/coletas", "/pedidos-urgentes", "/expedicao-diaria", "/cadastro", "/estante-virtual", "/contagem", "/gerenciar-skus"]);
   const filteredExpedicao = isExpedicao
     ? expedicaoItems.filter((item) => expedicaoRoleAllowed.has(item.href))
     : expedicaoItems;
