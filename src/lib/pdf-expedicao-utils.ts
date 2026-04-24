@@ -23,6 +23,7 @@ export type PageInfo = {
   kitType: string | null;
   size: string | null;
   skus: string[];
+  totalQtd: number | null;
   trackingId: string;
   jadlogBarcode: string;
   jtBarcode: string;
@@ -220,6 +221,13 @@ export async function analyzePDFPages(
       text.match(/\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})\b/);
     if (cpfMatch) cpfFromPDF = cpfMatch[1].replace(/\D/g, "");
 
+    // QTD total da DDC (campo "Total N" no fim da Declaração de Conteúdo).
+    // É a fonte de verdade pra "quantas unidades nesta sacola" — regex de
+    // SKU não serve porque nomes como "KIT 3 SOL 1 AZ 2 PT P" contêm KIT
+    // mesmo sendo 1 unidade promocional.
+    const totalMatch = text.match(/\bTotal\s+(\d+)\b/i);
+    const totalQtd = totalMatch ? parseInt(totalMatch[1], 10) : null;
+
     pages.push({
       index: i,
       pageNum: i + 1,
@@ -228,6 +236,7 @@ export async function analyzePDFPages(
       kitType,
       size,
       skus,
+      totalQtd,
       trackingId,
       jadlogBarcode,
       jtBarcode,
@@ -426,13 +435,17 @@ export async function generateFilteredPDF(
     };
     const { width, height } = page.getSize();
 
-    // Quadrado preto — canto superior direito, indica QTD > 1 (KIT/MIX)
-    if (pageInfo.isKit) {
+    // Quadrado preto — canto superior DIREITO (na visualização impressa).
+    // O conteúdo do Upseller é desenhado com rotação 90° CCW (textos usam
+    // rotate 270°), então o "visual top-right" da etiqueta corresponde à
+    // mediabox bottom-right, não top-right. Condição: QTD total da DDC > 1
+    // (o campo "Total N" — nome do SKU pode conter KIT mesmo sendo 1 un).
+    if (pageInfo.totalQtd != null && pageInfo.totalQtd > 1) {
       const size = 15;
       const margin = 10;
       page.drawRectangle({
         x: width - margin - size,
-        y: height - margin - size,
+        y: margin,
         width: size,
         height: size,
         color: rgb(0, 0, 0),
@@ -458,15 +471,14 @@ export async function generateFilteredPDF(
       });
     }
 
-    // Figuras no canto inferior direito. Prioridade:
-    //   1) Imagem embutida cadastrada para o modelo
-    //   2) Fallback vetorial hardcoded (LUA minguante / NBA bola)
-    // Empilhadas horizontalmente quando há múltiplos modelos.
+    // Figuras no canto inferior DIREITO (visualização impressa) —
+    // mediabox bottom-left na mesma lógica do quadrado. Progressão
+    // horizontal no display = progressão vertical (+y) na mediabox.
     const iconRadius = 10;
     const iconSize = iconRadius * 2; // 20pt de largura/altura para imagem
     const iconMargin = 12;
     const iconSpacing = 28;
-    const iconY = iconMargin + iconRadius;
+    const iconX = iconMargin + iconRadius;
 
     const toDraw: Array<
       | { kind: "image"; model: string; embed: unknown }
@@ -486,8 +498,8 @@ export async function generateFilteredPDF(
     }
 
     toDraw.forEach((item, idx) => {
-      const cx = width - iconMargin - iconRadius - idx * iconSpacing;
-      const cy = iconY;
+      const cx = iconX;
+      const cy = iconMargin + iconRadius + idx * iconSpacing;
       if (item.kind === "image") {
         page.drawImage(item.embed, {
           x: cx - iconRadius,
