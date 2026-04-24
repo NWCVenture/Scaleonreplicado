@@ -6,20 +6,37 @@ const resend = process.env.RESEND_API_KEY
 
 const FROM = process.env.RESEND_FROM_EMAIL || "SCALEON ERP <noreply@resend.dev>";
 
+export type EmailAttachment = {
+  filename: string;
+  content: string | Buffer;
+  contentType?: string;
+};
+
 export async function sendEmail({
   to,
   subject,
   html,
+  text,
+  attachments,
 }: {
-  to: string;
+  to: string | string[];
   subject: string;
   html: string;
+  text?: string;
+  attachments?: EmailAttachment[];
 }) {
   if (!resend) {
     console.warn("[email] RESEND_API_KEY não configurado — email não enviado");
     return { simulated: true };
   }
-  const { error } = await resend.emails.send({ from: FROM, to, subject, html });
+  const { error } = await resend.emails.send({
+    from: FROM,
+    to,
+    subject,
+    html,
+    text,
+    attachments,
+  });
   if (error) throw new Error(error.message);
   return { sent: true };
 }

@@ -21,6 +21,7 @@ import {
   Minus,
   Trash2,
   Download,
+  Mail,
   RotateCcw,
   Loader2,
   X,
@@ -82,23 +83,38 @@ const COLOR_MAP: Record<string, { bg: string; text: string; label: string }> = {
 // Helpers
 // ============================================================
 
-function parseScannedData(raw: string) {
-  let clean = raw.trim();
-  clean = clean.replace(/^\|+/, "").trim();
+// Aceita todos os formatos de QR emitidos pelo módulo de cadastro:
+//   v1 (antigo):  SKU}LOTE}QTD                                   — 3 campos
+//   v2 (antigo+): SKU}LOTE}QTD}CODIGO_FARDO                      — 4 campos
+//   v3 (atual):   SKU}LOTE}QTD}CODIGO_FARDO}ISO}USUARIO}UUID     — 7 campos
+// Também aceita `|` como separador (bipagem antiga copiada/colada).
+// SKU, LOTE e QTD ocupam sempre as 3 primeiras posições, então quaisquer
+// campos adicionais são ignorados para manter compatibilidade.
+function parseScannedData(
+  raw: string
+): { sku: string; lote: string; qtd: number } | null {
+  if (!raw) return null;
+  const clean = raw.trim().replace(/^\|+/, "").trim();
+  if (!clean) return null;
+
   let parts = clean.split("}");
+  if (parts.length < 3) parts = clean.split("|");
   if (parts.length < 3) {
-    parts = clean.split("|");
+    console.warn("[contagem] QR nao reconhecido (menos de 3 campos):", raw);
+    return null;
   }
-  if (parts.length >= 3) {
-    let sku = parts[0].trim();
-    // Remove leading digits/separators from old QR format (e.g. "1LUA AZ GG" → "LUA AZ GG")
-    sku = sku.replace(/^\d+\s*/, "").trim();
-    const qtd = parseInt(parts[2].trim());
-    if (sku && !isNaN(qtd)) {
-      return { sku, lote: parts[1].trim(), qtd };
-    }
+
+  // Remove prefixo numerico herdado do formato mais antigo
+  // (ex: "1LUA AZ GG" -> "LUA AZ GG")
+  const sku = parts[0].trim().replace(/^\d+\s*/, "").trim();
+  const lote = parts[1].trim();
+  const qtd = parseInt(parts[2].trim(), 10);
+
+  if (!sku || !lote || isNaN(qtd) || qtd <= 0) {
+    console.warn("[contagem] QR invalido apos parse:", { raw, sku, lote, qtd });
+    return null;
   }
-  return null;
+  return { sku, lote, qtd };
 }
 
 function playBeep(type: "success" | "error") {
@@ -145,6 +161,7 @@ export default function ContagemPage() {
   const [scannedItems, setScannedItems] = useState<ScannedItem[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isScanningMode, setIsScanningMode] = useState(false);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
   const modalInputRef = useRef<HTMLInputElement>(null);
   const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastProcessedValue = useRef<string>("");
@@ -448,6 +465,33 @@ export default function ContagemPage() {
     link.click();
     document.body.removeChild(link);
     toast.success("Relatorio baixado com sucesso!");
+  }, [scannedItems]);
+
+  const handleEnviarEmail = useCallback(async () => {
+    if (scannedItems.length === 0) {
+      toast.error("Nada para enviar!");
+      return;
+    }
+    setIsSendingEmail(true);
+    try {
+      const res = await fetch("/api/contagem/enviar-email", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Erro ao enviar");
+      }
+      const destinos = Array.isArray(data.destinatarios)
+        ? data.destinatarios.length
+        : data.sent ?? 0;
+      toast.success("Balanço enviado por email!", {
+        description: `${data.sent ?? destinos} destinatário(s)${data.failed ? ` · ${data.failed} falha(s)` : ""}`,
+      });
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Erro ao enviar email",
+      );
+    } finally {
+      setIsSendingEmail(false);
+    }
   }, [scannedItems]);
 
   // ============================================================
@@ -768,6 +812,19 @@ export default function ContagemPage() {
                   className="h-10"
                 >
                   <RotateCcw className="mr-2 h-4 w-4" /> Reiniciar
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleEnviarEmail}
+                  disabled={isSendingEmail || scannedItems.length === 0}
+                  className="h-10"
+                >
+                  {isSendingEmail ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Mail className="mr-2 h-4 w-4" />
+                  )}
+                  Enviar por Email
                 </Button>
                 <Button
                   onClick={generateReport}
