@@ -35,6 +35,7 @@ import {
   Tag,
 } from "lucide-react";
 import { generateId } from "@/lib/utils";
+import { useSession } from "@/lib/auth-client";
 
 type PrintQueueItem = {
   id: string;
@@ -42,6 +43,8 @@ type PrintQueueItem = {
   lote: string;
   qtd: number;
   codigoFardo: string;
+  criadoEm: string; // ISO timestamp (UTC)
+  criadoPor: string; // nome ou email do usuário, sanitizado
 };
 
 type LoteCadastrado = {
@@ -70,7 +73,23 @@ function normalizeSku(raw: string): string {
   return raw.trim().toUpperCase().replace(/\s+/g, " ");
 }
 
+// Remove caracteres que poderiam conflitar com o separador `}` / `|` do
+// payload do QR. Mantém letras (incl. acentuadas), números, espaço, ponto,
+// underscore e hífen.
+function sanitizarLabelUsuario(raw: string): string {
+  return raw.replace(/[}|]/g, "_").trim().slice(0, 80) || "desconhecido";
+}
+
 export default function CadastroEstoque() {
+  const { data: session } = useSession();
+  const userLabel = useMemo(
+    () =>
+      sanitizarLabelUsuario(
+        session?.user?.name ?? session?.user?.email ?? "",
+      ),
+    [session],
+  );
+
   // SKU input
   const [skuInput, setSkuInput] = useState("");
   const [skuCatalogo, setSkuCatalogo] = useState<SkuCatalogo[]>([]);
@@ -239,6 +258,7 @@ export default function CadastroEstoque() {
     const qtdUnidades = parseInt(qtd);
 
     const newItems: PrintQueueItem[] = [];
+    const criadoEm = new Date().toISOString();
     for (let i = 0; i < qtdFardos; i++) {
       newItems.push({
         id: generateId(),
@@ -246,6 +266,8 @@ export default function CadastroEstoque() {
         lote,
         qtd: qtdUnidades,
         codigoFardo: gerarCodigoFardo(),
+        criadoEm,
+        criadoPor: userLabel,
       });
     }
 
@@ -343,12 +365,15 @@ export default function CadastroEstoque() {
       }
     }
 
+    const criadoEm = new Date().toISOString();
     const newItems: PrintQueueItem[] = txtPreview.map((item) => ({
       id: generateId(),
       sku: item.sku,
       lote,
       qtd: item.qtd,
       codigoFardo: gerarCodigoFardo(),
+      criadoEm,
+      criadoPor: userLabel,
     }));
     setPrintQueue((prev) => [...prev, ...newItems]);
     toast.success(`${newItems.length} fardos importados!`, {
@@ -360,8 +385,13 @@ export default function CadastroEstoque() {
     setIsTxtDialogOpen(false);
   };
 
+  // Payload do QR: SKU}LOTE}QTD}CODIGO_FARDO}ISO_CRIACAO}USUARIO}UUID
+  // Mantém compatibilidade com parseQRCode (estante-utils.ts), que só lê os
+  // 3 primeiros campos (SKU, LOTE, QTD). Campos adicionais são metadados
+  // de rastreamento (quem criou, quando). O UUID final (item.id) garante
+  // unicidade absoluta — dois QRs nunca colidem mesmo com mesmos SKU/LOTE.
   const getQrPayload = (item: PrintQueueItem) =>
-    `${item.sku}}${item.lote}}${item.qtd}}${item.codigoFardo}`;
+    `${item.sku}}${item.lote}}${item.qtd}}${item.codigoFardo}}${item.criadoEm}}${item.criadoPor}}${item.id}`;
 
   const itemsPerPage = isFardoAgrupado ? 1 : 4;
   const pages: PrintQueueItem[][] = [];
