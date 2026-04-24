@@ -25,6 +25,16 @@ This version has breaking changes — APIs, conventions, and file structure may 
 > `db:migrate:prod` usa `drizzle-kit push` (sync direto do schema no Neon).
 > Nunca execute push em prod sem ter passado pelo passo local primeiro.
 
+> ⚠️ **RLS policies não estão declaradas no `schema.ts`** — vivem nas migrations
+> 0007/0008/0014. `drizzle-kit push` considera qualquer objeto fora do schema
+> como "remover pra sincronizar" e vai dropar RLS + policies silenciosamente.
+> Antes de rodar `db:migrate:prod`:
+>  - rode `npm run db:generate:prod` primeiro pra ver o diff proposto, OU
+>  - passe `--strict` no push pra confirmação interativa
+>
+> Se policies foram dropadas por acidente, restaurar com:
+> `dotenv -e .env.prod -- npx tsx src/lib/db/restore-rls-policies.ts`
+
 ## Scripts disponíveis
 
 | Script | Descrição |
