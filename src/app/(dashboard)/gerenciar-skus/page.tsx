@@ -36,7 +36,9 @@ import {
   Search,
   X,
 } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { generateAll, type SkuGenOptions } from "@/lib/sku-generator";
+import { ModeloPrincipalTab } from "./_components/modelo-principal-tab";
 
 type SkuRow = {
   id: string;
@@ -365,24 +367,31 @@ export default function GerenciarSkusPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Tag className="h-6 w-6" />
-            Gerenciar SKUs
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Catálogo de produtos da sua conta. {totalAtivos} ativos
-            {totalInativos > 0 && `, ${totalInativos} inativos`}.
-          </p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)} className="gap-2">
-          <Plus className="h-4 w-4" />
-          Novo SKU
-        </Button>
+      <div>
+        <h1 className="text-2xl font-bold flex items-center gap-2">
+          <Tag className="h-6 w-6" />
+          Gerenciar SKUs
+        </h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Catálogo de produtos da sua conta. {totalAtivos} ativos
+          {totalInativos > 0 && `, ${totalInativos} inativos`}.
+        </p>
       </div>
 
-      <div className="flex items-center gap-4">
+      <Tabs defaultValue="skus" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="skus">SKUs</TabsTrigger>
+          <TabsTrigger value="modelos">SKU Principal</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="skus" className="space-y-4">
+          <div className="flex items-center justify-end">
+            <Button onClick={() => setCreateOpen(true)} className="gap-2">
+              <Plus className="h-4 w-4" />
+              Novo SKU
+            </Button>
+          </div>
+          <div className="flex items-center gap-4">
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -479,6 +488,12 @@ export default function GerenciarSkusPage() {
           </tbody>
         </table>
       </div>
+        </TabsContent>
+
+        <TabsContent value="modelos">
+          <ModeloPrincipalTab />
+        </TabsContent>
+      </Tabs>
 
       {/* Create SKU dialog */}
       <Dialog
