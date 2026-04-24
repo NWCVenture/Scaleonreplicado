@@ -16,10 +16,12 @@ import {
   Settings,
   Trash2,
   Copy,
-  Save,
   Send,
   FileDown,
   Search,
+  Mail,
+  StopCircle,
+  FileText,
 } from "lucide-react";
 import { useColetasBipagem } from "@/hooks/use-coletas-bipagem";
 import {
@@ -42,6 +44,8 @@ import type {
   DevolucaoFormData,
   BipagemRecord,
   TransportadoraLabel,
+  TipoColeta,
+  ContaOperacao,
 } from "@/types/coletas";
 import {
   FUNCTION_TYPES,
@@ -82,68 +86,134 @@ export default function ColetasPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [isForcingStop, setIsForcingStop] = useState(false);
+
+  // ── Sessão server-side ───────────────────────────────────────────────────
+  // Substitui o localStorage. Sessão com TTL de 8h, gerenciada no servidor.
+  const [sessaoId, setSessaoId] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
   // Refs
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const audioSuccessRef = useRef<HTMLAudioElement>(null);
   const audioErrorRef = useRef<HTMLAudioElement>(null);
+  const sessaoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const sessaoIdRef = useRef<string | null>(null);
+  sessaoIdRef.current = sessaoId;
 
-  // ── Auto-persist bipagem to localStorage (1 day TTL) ─────────────────────
-  const AUTO_SAVE_KEY = "coletas_bipagem_auto";
-  const [hydrated, setHydrated] = useState(false);
-
-  // Restore from localStorage on session load (runs ANTES do save effect)
+  // Restore sessão ativa do servidor ao montar
   useEffect(() => {
     if (!session) return;
-    try {
-      const raw = localStorage.getItem(AUTO_SAVE_KEY);
-      if (!raw) {
-        setHydrated(true);
-        return;
+    let cancelado = false;
+
+    (async () => {
+      try {
+        const res = await fetch("/api/coletas/sessao");
+        if (!res.ok) {
+          setHydrated(true);
+          return;
+        }
+        const data = await res.json();
+        const s = data.sessao as {
+          id: string;
+          tipo: TipoColeta;
+          conta: ContaOperacao;
+          pacotes: string[];
+          devolucoesData: Record<string, unknown>;
+        } | null;
+
+        if (cancelado) return;
+
+        if (s) {
+          setSessaoId(s.id);
+          sessaoIdRef.current = s.id;
+          if (s.pacotes?.length > 0) {
+            bipagem.loadFromTemp(
+              {
+                pacotes: s.pacotes.map((codigo) => ({ codigo })),
+                devolucoes: (s.devolucoesData ?? {}) as Record<
+                  string,
+                  Record<string, unknown>
+                >,
+              },
+              s.tipo,
+              s.conta,
+            );
+            toast.info(
+              `Sessão restaurada (${s.pacotes.length} pacote(s))`,
+            );
+          }
+        }
+      } catch {
+        // Offline ou servidor instável — segue sem sessão restaurada
+      } finally {
+        if (!cancelado) setHydrated(true);
       }
-      const state = JSON.parse(raw);
-      const ONE_DAY = 24 * 60 * 60 * 1000;
-      if (!state.savedAt || Date.now() - state.savedAt > ONE_DAY) {
-        localStorage.removeItem(AUTO_SAVE_KEY);
-        setHydrated(true);
-        return;
-      }
-      if (state.ids?.length > 0) {
-        bipagem.loadFromTemp(
-          {
-            pacotes: state.ids.map((id: string) => ({ codigo: id })),
-            devolucoes: state.devolucoesData ?? {},
-          },
-          state.currentFunction,
-          state.currentAccount,
-        );
-        toast.info(`Bipagem restaurada automaticamente (${state.ids.length} pacotes)`);
-      }
-      setHydrated(true);
-    } catch {
-      localStorage.removeItem(AUTO_SAVE_KEY);
-      setHydrated(true);
-    }
+    })();
+
+    return () => {
+      cancelado = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
-  // Save (apenas depois do restore terminar — evita apagar dados na montagem inicial)
+  // Auto-save sessão no servidor (debounce 800ms). Cria sessão se ainda
+  // não existir E houver dados pra salvar.
   useEffect(() => {
-    if (!hydrated) return;
-    if (bipagem.ids.length === 0) {
-      localStorage.removeItem(AUTO_SAVE_KEY);
-      return;
+    if (!hydrated || !session) return;
+
+    // Sem dados e sem sessão — nada a fazer
+    const hasData =
+      bipagem.ids.length > 0 ||
+      Object.keys(bipagem.devolucoesData).length > 0;
+    if (!hasData && !sessaoIdRef.current) return;
+
+    if (sessaoSaveTimeoutRef.current) {
+      clearTimeout(sessaoSaveTimeoutRef.current);
     }
-    const state = {
-      ids: bipagem.ids,
-      devolucoesData: bipagem.devolucoesData,
-      currentFunction: bipagem.currentFunction,
-      currentAccount: bipagem.currentAccount,
-      savedAt: Date.now(),
+    sessaoSaveTimeoutRef.current = setTimeout(async () => {
+      try {
+        let id = sessaoIdRef.current;
+        if (!id) {
+          // Cria sessão na primeira bipagem
+          if (!hasData) return;
+          const res = await fetch("/api/coletas/sessao", { method: "POST" });
+          if (!res.ok) return;
+          const created = await res.json();
+          id = created.id as string;
+          setSessaoId(id);
+          sessaoIdRef.current = id;
+        }
+
+        await fetch(`/api/coletas/sessao/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tipo: bipagem.currentFunction,
+            conta: bipagem.currentAccount,
+            pacotes: bipagem.ids,
+            devolucoesData: bipagem.devolucoesData,
+          }),
+        });
+      } catch {
+        // best-effort — próximo save cobre
+      }
+    }, 800);
+
+    return () => {
+      if (sessaoSaveTimeoutRef.current) {
+        clearTimeout(sessaoSaveTimeoutRef.current);
+      }
     };
-    localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify(state));
-  }, [hydrated, bipagem.ids, bipagem.devolucoesData, bipagem.currentFunction, bipagem.currentAccount]);
+  }, [
+    hydrated,
+    session,
+    bipagem.ids,
+    bipagem.devolucoesData,
+    bipagem.currentFunction,
+    bipagem.currentAccount,
+  ]);
 
   // ── Fetch configs on mount ────────────────────────────────────────────────
   useEffect(() => {
@@ -346,72 +416,147 @@ export default function ColetasPage() {
     }
   }, [bipagem.ids]);
 
-  // ── Clear ─────────────────────────────────────────────────────────────────
+  // ── Limpar lista (NÃO encerra a sessão — só limpa o estado local) ────────
   const handleClear = useCallback(() => {
     bipagem.clear();
-    localStorage.removeItem("coletas_bipagem_auto");
     toast.info("Lista zerada");
   }, [bipagem]);
 
-  // ── Save Temp ─────────────────────────────────────────────────────────────
-  const handleSaveTemp = useCallback(async () => {
-    if (!bipagem.ids.length) {
-      toast.error("Sem itens para salvar");
+  // ── Forçar Parada: encerra a sessão no servidor e limpa o estado ─────────
+  const handleForcarParada = useCallback(async () => {
+    if (!sessaoIdRef.current) {
+      bipagem.clear();
       return;
     }
-
+    if (
+      !confirm(
+        "Forçar parada encerra a sessão no servidor e apaga o progresso atual. Continuar?",
+      )
+    ) {
+      return;
+    }
+    setIsForcingStop(true);
     try {
-      const pacotes = bipagem.ids.map((id) => ({
-        codigo: id,
-        transportadora: detectCarrier(id, bipagem.carrierPatterns),
-      }));
-
-      const res = await fetch("/api/coletas/temporarias", {
+      await fetch(`/api/coletas/sessao/${sessaoIdRef.current}/encerrar`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ motivo: "forcada" }),
+      });
+    } catch {
+      // segue fluxo — limpa local mesmo se falhar
+    } finally {
+      bipagem.clear();
+      setSessaoId(null);
+      sessaoIdRef.current = null;
+      setIsForcingStop(false);
+      toast.info("Sessão encerrada");
+    }
+  }, [bipagem]);
+
+  // ── Exportar resumo da sessão atual (TXT local) ──────────────────────────
+  const handleExportResumo = useCallback(() => {
+    if (!bipagem.ids.length) {
+      toast.error("Sem pacotes para exportar");
+      return;
+    }
+    const tipo = bipagem.currentFunction;
+    const conta = bipagem.currentAccount;
+    const pacotes = bipagem.ids;
+    const devolucoes = bipagem.devolucoesData;
+
+    const tipoDisplay = FUNCTION_DISPLAY[tipo];
+    const contaDisplay = OPERATION_DISPLAY[conta];
+    const now = new Date();
+
+    let out = "";
+    out += "RESUMO DA SESSAO DE COLETAS\n";
+    out += "----------------------------------------\n";
+    out += `Tipo        : ${tipoDisplay}\n`;
+    out += `Conta       : ${contaDisplay}\n`;
+    out += `Gerado em   : ${now.toLocaleString("pt-BR")}\n`;
+    out += `Total       : ${pacotes.length} pacote(s)\n`;
+    out += "\n";
+
+    const isDev = tipo === "DEVOLUCAO" || tipo === "CANCELADO";
+    if (isDev) {
+      const totals: Record<string, number> = {};
+      for (const dev of Object.values(devolucoes)) {
+        for (const line of dev.skuLines ?? []) {
+          if (!line.sku) continue;
+          totals[line.sku] = (totals[line.sku] || 0) + (line.qtd || 0);
+        }
+      }
+      const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+      if (sorted.length > 0) {
+        out += "SKUs DEVOLVIDOS\n";
+        out += "----------------------------------------\n";
+        for (const [sku, qtd] of sorted) {
+          out += `${sku.padEnd(20)} = ${qtd}\n`;
+        }
+        out += "\n";
+      }
+    }
+
+    out += "PACOTES\n";
+    out += "----------------------------------------\n";
+    for (const codigo of pacotes) {
+      out += `${codigo}${devolucoes[codigo] ? " [devolucao]" : ""}\n`;
+    }
+
+    const dateStr = `${now.getDate().toString().padStart(2, "0")}-${(now.getMonth() + 1).toString().padStart(2, "0")}-${now.getFullYear()}`;
+    downloadTxt(
+      out,
+      `RESUMO-COLETAS-${tipoDisplay}-${contaDisplay}-${dateStr}.txt`.replace(
+        / /g,
+        "_",
+      ),
+    );
+    toast.success("Resumo exportado!");
+  }, [bipagem.ids, bipagem.devolucoesData, bipagem.currentFunction, bipagem.currentAccount]);
+
+  // ── Enviar resumo da sessão por email (operador + admins) ────────────────
+  const handleEnviarEmailResumo = useCallback(async () => {
+    if (!sessaoIdRef.current || !bipagem.ids.length) {
+      toast.error("Sessão vazia — nada para enviar");
+      return;
+    }
+    setIsSendingEmail(true);
+    try {
+      // Força o flush do estado pendente antes de enviar — garante que
+      // o email reflita a UI atual mesmo com debounce pendente.
+      await fetch(`/api/coletas/sessao/${sessaoIdRef.current}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tipo: bipagem.currentFunction,
           conta: bipagem.currentAccount,
-          total: bipagem.ids.length,
-          dados: {
-            pacotes,
-            devolucoes: Object.fromEntries(
-              Object.entries(bipagem.devolucoesData).map(([k, v]) => [
-                k,
-                { ...v, avaria: v.avaria ? "SIM" : "NAO", obs: v.obs || "" },
-              ])
-            ),
-          },
+          pacotes: bipagem.ids,
+          devolucoesData: bipagem.devolucoesData,
         }),
       });
 
-      if (!res.ok) throw new Error();
-
-      const { id } = await res.json();
-      const newTemp: BipagemTemporariaRecord = {
-        id,
-        tipo: bipagem.currentFunction,
-        conta: bipagem.currentAccount,
-        total: bipagem.ids.length,
-        dados: {
-          pacotes,
-          devolucoes: Object.fromEntries(
-            Object.entries(bipagem.devolucoesData).map(([k, v]) => [
-              k,
-              { ...v, avaria: v.avaria ? "SIM" : "NAO", obs: v.obs || "" },
-            ])
-          ),
-        },
-        usuarioId: session?.user?.id || "",
-        createdAt: new Date().toISOString(),
-      };
-      setTemporarias((prev) => [newTemp, ...prev]);
-      bipagem.clear();
-      toast.success(`Bipagem salva! (${newTemp.total} itens)`);
-    } catch {
-      toast.error("Erro ao salvar bipagem temporaria");
+      const res = await fetch(
+        `/api/coletas/sessao/${sessaoIdRef.current}/enviar-email`,
+        { method: "POST" },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? "Erro ao enviar");
+      toast.success("Resumo enviado por email!", {
+        description: `${data.sent ?? 0} destinatário(s)${data.failed ? ` · ${data.failed} falha(s)` : ""}`,
+      });
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Erro ao enviar email",
+      );
+    } finally {
+      setIsSendingEmail(false);
     }
-  }, [bipagem, session]);
+  }, [
+    bipagem.ids,
+    bipagem.devolucoesData,
+    bipagem.currentFunction,
+    bipagem.currentAccount,
+  ]);
 
   // ── Resume Temp ───────────────────────────────────────────────────────────
   const handleResumeTemp = useCallback(
@@ -556,8 +701,21 @@ export default function ColetasPage() {
         setIsSendingEmail(false);
       }
 
+      // Encerra a sessão com motivo=finalizada
+      if (sessaoIdRef.current) {
+        await fetch(
+          `/api/coletas/sessao/${sessaoIdRef.current}/encerrar`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ motivo: "finalizada" }),
+          },
+        ).catch(() => {});
+        setSessaoId(null);
+        sessaoIdRef.current = null;
+      }
+
       bipagem.clear();
-      localStorage.removeItem("coletas_bipagem_auto");
       toast.success("Bipagem finalizada!");
     } catch {
       toast.error("Erro ao finalizar bipagem");
@@ -1155,11 +1313,37 @@ export default function ColetasPage() {
             </Button>
             <Button
               variant="outline"
-              onClick={handleSaveTemp}
+              onClick={handleExportResumo}
               disabled={!bipagem.ids.length}
               className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
             >
-              <Save className="mr-2 h-4 w-4" /> Salvar Temp
+              <FileText className="mr-2 h-4 w-4" /> Exportar Resumo
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleEnviarEmailResumo}
+              disabled={!bipagem.ids.length || isSendingEmail || !sessaoId}
+              className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+            >
+              {isSendingEmail ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Mail className="mr-2 h-4 w-4" />
+              )}
+              Enviar Resumo
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleForcarParada}
+              disabled={isForcingStop || (!sessaoId && !bipagem.ids.length)}
+              className="border-red-900 text-red-300 hover:bg-red-950 hover:text-red-200"
+            >
+              {isForcingStop ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <StopCircle className="mr-2 h-4 w-4" />
+              )}
+              Forçar Parada
             </Button>
             <Button
               onClick={handleFinalize}

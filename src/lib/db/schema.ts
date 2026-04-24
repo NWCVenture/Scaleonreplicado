@@ -1349,6 +1349,55 @@ export const sessaoExpedicao = pgTable(
 export type SessaoExpedicao = InferSelectModel<typeof sessaoExpedicao>;
 
 // ============================================================
+// SESSÃO DE COLETAS
+// ============================================================
+// Persistência server-side da bipagem em andamento — o usuário pode
+// trocar de módulo/browser sem perder o progresso. TTL implícito de 8h:
+// se `ultima_atividade_em` < now() - 8h, a sessão é considerada expirada
+// e o GET retorna null (após marcar encerrada). Único índice por
+// (usuario_id + status='ativa'), igual expedição.
+
+export const sessaoColetasStatusEnum = pgEnum("sessao_coletas_status", [
+  "ativa",
+  "encerrada",
+]);
+
+export const sessaoColetas = pgTable(
+  "sessao_coletas",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    usuarioId: text("usuario_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    status: sessaoColetasStatusEnum("status").notNull().default("ativa"),
+    tipo: tipoColetaEnum("tipo").notNull().default("COLETA"),
+    conta: contaOperacaoEnum("conta").notNull().default("TIKTOK_SHOP"),
+    pacotes: jsonb("pacotes").$type<string[]>().notNull().default([]),
+    devolucoesData: jsonb("devolucoes_data")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    totalPacotes: integer("total_pacotes").notNull().default(0),
+    iniciouEm: timestamp("iniciou_em").notNull().defaultNow(),
+    ultimaAtividadeEm: timestamp("ultima_atividade_em").notNull().defaultNow(),
+    encerrouEm: timestamp("encerrou_em"),
+    encerradaMotivo: text("encerrada_motivo"), // 'finalizada' | 'forcada' | 'expirada'
+  },
+  (table) => [
+    index("idx_sessao_coletas_conta").on(table.contaId),
+    index("idx_sessao_coletas_usuario").on(table.usuarioId),
+    uniqueIndex("uq_sessao_coletas_ativa_por_usuario")
+      .on(table.usuarioId)
+      .where(sql`status = 'ativa'`),
+  ],
+);
+
+export type SessaoColetas = InferSelectModel<typeof sessaoColetas>;
+
+// ============================================================
 // HISTÓRICO DE IMPRESSÃO DE ETIQUETAS (Expedição Diária)
 // ============================================================
 // Retenção: 48h. Usado para detectar reimpressão e permitir
