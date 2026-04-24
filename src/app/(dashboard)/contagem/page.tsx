@@ -87,18 +87,19 @@ const COLOR_MAP: Record<string, { bg: string; text: string; label: string }> = {
 //   v1 (antigo):  SKU}LOTE}QTD                                   — 3 campos
 //   v2 (antigo+): SKU}LOTE}QTD}CODIGO_FARDO                      — 4 campos
 //   v3 (atual):   SKU}LOTE}QTD}CODIGO_FARDO}ISO}USUARIO}UUID     — 7 campos
-// Também aceita `|` como separador (bipagem antiga copiada/colada).
-// SKU, LOTE e QTD ocupam sempre as 3 primeiras posições, então quaisquer
-// campos adicionais são ignorados para manter compatibilidade.
+//
+// Normaliza separadores antes do split: `}`, `{` e `|` são tratados como
+// equivalentes. `{` aparece quando o scanner HID emite em layout US mas o
+// Windows traduz pra ABNT2 (teclas de `}`/`{` ficam trocadas). SKU, LOTE e
+// QTD ocupam sempre as 3 primeiras posições — campos extras são ignorados.
 function parseScannedData(
   raw: string
 ): { sku: string; lote: string; qtd: number } | null {
   if (!raw) return null;
-  const clean = raw.trim().replace(/^\|+/, "").trim();
+  const clean = raw.trim().replace(/^[|{}]+/, "").trim();
   if (!clean) return null;
 
-  let parts = clean.split("}");
-  if (parts.length < 3) parts = clean.split("|");
+  const parts = clean.split(/[}{|]/);
   if (parts.length < 3) {
     console.warn("[contagem] QR nao reconhecido (menos de 3 campos):", raw);
     return null;
