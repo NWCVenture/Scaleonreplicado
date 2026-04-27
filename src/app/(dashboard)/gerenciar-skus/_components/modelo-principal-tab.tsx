@@ -15,7 +15,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -223,11 +222,30 @@ export function ModeloPrincipalTab() {
                 </td>
                 <td className="px-4 py-3">
                   {m.etiquetaImagemUrl ? (
-                    <Badge className="bg-green-600">Com imagem</Badge>
+                    // Fundo branco fixo: a impressora térmica imprime só
+                    // preto sobre etiqueta branca, então previews em fundo
+                    // escuro escondem desenhos pretos. Mantém fidelidade.
+                    <a
+                      href={m.etiquetaImagemUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-block"
+                      title="Abrir imagem em tamanho real"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={m.etiquetaImagemUrl}
+                        alt={`Etiqueta ${m.codigo}`}
+                        className="h-12 w-12 rounded border border-slate-300 bg-white object-contain p-0.5"
+                      />
+                    </a>
                   ) : (
-                    <Badge variant="outline" className="text-muted-foreground">
-                      Sem imagem
-                    </Badge>
+                    <div
+                      className="flex h-12 w-12 items-center justify-center rounded border border-dashed border-slate-600 text-muted-foreground"
+                      title="Sem imagem cadastrada"
+                    >
+                      <ImageIcon className="h-5 w-5" />
+                    </div>
                   )}
                 </td>
                 <td className="px-4 py-3 text-right">
