@@ -1,8 +1,8 @@
 // ─── Shared PDF utilities for Pedidos Urgentes + Expedição Diária ──────────
 // Processes label PDFs (Upseller/TikTok/ML) extracted manually by the user.
 // Detects per-page: tracking ID, carrier (iMile/JadLog/J&T), kit type,
-// products (LUA/NBA/etc), CPF; groups pages by product × kitType for
-// selective printing on a Zebra ZD220 thermal printer.
+// products (LUA/NBA/etc), CPF; groups pages by SKU principal × kitType ×
+// size for selective printing on a Zebra ZD220 thermal printer.
 
 declare global {
   interface Window {
@@ -14,6 +14,11 @@ declare global {
 export const PRODUCTS = ["LUA", "NBA", "BOB", "PUFFER", "CJ", "SOL"] as const;
 export const TAMANHO_ORDER = ["PP", "P", "M", "G", "GG", "EGG", "XG", "XXG"] as const;
 export const SEM_TAMANHO_LABEL = "Sem tamanho";
+export const UNITARIO_LABEL = "Unitário";
+export const NAO_CADASTRADO_ID = "__nao_cadastrado__";
+export const NAO_CADASTRADO_LABEL = "(SKU não cadastrado no sistema)";
+export const MISTO_PREFIX = "Misto: ";
+export const CARRIER_ORDER = ["iMile", "JadLog", "J&T", "Outro"] as const;
 
 export type PageInfo = {
   index: number;
@@ -31,21 +36,57 @@ export type PageInfo = {
   cpfFromPDF: string;
 };
 
-export type SizeSubGroup = {
-  id: string; // "KIT 2::M"
-  size: string; // "M", "GG", "Sem tamanho"
+// Folha da árvore (nível 4): tamanho. Único nível com checkbox direta —
+// downloaded/selection nos níveis acima são derivados.
+export type SizeLeaf = {
+  id: string; // "<carrier>::<skuId>::<qtdLabel>::<size>"
+  size: string;
   pageIndexes: number[];
   downloaded: boolean;
 };
 
-export type FilterGroup = {
-  id: string; // "KIT 2" ou "Unitários"
-  label: string; // texto exibido
-  products: string[]; // agregado de todos subgrupos
-  kitType: string | null; // null = Unitários
-  pageIndexes: number[]; // flatten de todos subgrupos
-  subGroups: SizeSubGroup[];
-  downloaded: boolean; // true quando todos subgrupos estão baixados
+// Nível 3: QTD (Unitário, KIT N, MIX N).
+export type QtdSubGroup = {
+  id: string; // "<carrier>::<skuId>::<qtdLabel>"
+  label: string; // "Unitário" | "KIT 2" | "MIX 5"
+  kitType: string | null; // null = Unitário
+  pageIndexes: number[];
+  subGroups: SizeLeaf[];
+  downloaded: boolean;
+};
+
+// Nível 2: SKU principal (modelo cadastrado), "Misto: X + Y", ou "(SKU não
+// cadastrado no sistema)".
+export type SkuSubGroup = {
+  id: string; // "<carrier>::<skuId>"
+  label: string;
+  isMisto: boolean;
+  isUnregistered: boolean;
+  products: string[];
+  pageIndexes: number[];
+  subGroups: QtdSubGroup[];
+  downloaded: boolean;
+};
+
+// Nível 1: Transportadora (iMile / JadLog / J&T / Outro).
+export type CarrierGroup = {
+  id: string; // "<carrier>"
+  label: string;
+  carrier: string;
+  pageIndexes: number[];
+  subGroups: SkuSubGroup[];
+  downloaded: boolean;
+};
+
+// Alias mantido pra reduzir churn em callers. `FilterGroup` agora é o
+// container de transportadora (nível 1).
+export type FilterGroup = CarrierGroup;
+
+export type AnalyzeOptions = {
+  // Lista de modelos cadastrados na conta. Usada pra expandir o regex
+  // de detecção além da lista hardcoded `PRODUCTS`. Quando ausente ou
+  // vazia, cai pra `PRODUCTS`.
+  models?: readonly string[];
 };
 
 export async function loadPDFLibraries(): Promise<void> {
@@ -117,7 +158,19 @@ export async function mergePDFs(files: File[]): Promise<Uint8Array> {
 export async function analyzePDFPages(
   file: File | Uint8Array,
   onProgress: (val: number, text: string) => void,
+  options: AnalyzeOptions = {},
 ): Promise<PageInfo[]> {
+  // Conjunto de modelos usado na detecção: união de PRODUCTS (seed
+  // hardcoded) + modelos vindos da conta. Garante detecção correta de
+  // modelos novos cadastrados pelo usuário sem perder os antigos.
+  const detectionModels = (() => {
+    const set = new Set<string>(PRODUCTS as readonly string[]);
+    for (const m of options.models ?? []) {
+      const trimmed = m.trim().toUpperCase();
+      if (trimmed) set.add(trimmed);
+    }
+    return Array.from(set);
+  })();
   const pdfjsLib = window.pdfjsLib as {
     getDocument: (o: { data: ArrayBuffer }) => {
       promise: Promise<{
@@ -159,7 +212,7 @@ export async function analyzePDFPages(
     const bensText = bensMatch ? bensMatch[1] : "";
 
     const products: string[] = [];
-    for (const p of PRODUCTS) {
+    for (const p of detectionModels) {
       if (new RegExp(`\\b${p}\\b`, "i").test(bensText)) products.push(p);
     }
 
@@ -172,7 +225,7 @@ export async function analyzePDFPages(
     // SKUs completos no formato "MODELO COR TAM" (ex: "LUA AZ GG")
     const skus: string[] = [];
     const tamanhoGroup = TAMANHO_ORDER.join("|");
-    const produtoGroup = PRODUCTS.join("|");
+    const produtoGroup = detectionModels.join("|");
     const skuRegex = new RegExp(
       `\\b(${produtoGroup})\\s+([A-Z]{2,4})\\s+(${tamanhoGroup})\\b`,
       "gi",
@@ -262,63 +315,172 @@ function sizeOrder(size: string): number {
   return idx < 0 ? 99 : idx;
 }
 
-export function buildFilterGroups(pages: PageInfo[]): FilterGroup[] {
-  // Agrupa por kitType (top-level) e, dentro, por tamanho (sub-level)
-  const groups = new Map<string, FilterGroup>();
+type PageClassification = {
+  groupId: string;
+  groupLabel: string;
+  isMisto: boolean;
+  isUnregistered: boolean;
+  products: string[];
+};
+
+// Decide o "SKU principal" de uma página com base nos modelos cadastrados.
+// - 0 modelos cadastrados detectados → grupo "Não cadastrado"
+// - 1 modelo → grupo daquele modelo
+// - 2+ modelos distintos cadastrados → grupo "Misto: X + Y"
+function classifyPage(
+  page: PageInfo,
+  registered: Set<string>,
+): PageClassification {
+  const detected = page.products.filter((p) => registered.has(p));
+
+  if (detected.length === 0) {
+    return {
+      groupId: NAO_CADASTRADO_ID,
+      groupLabel: NAO_CADASTRADO_LABEL,
+      isMisto: false,
+      isUnregistered: true,
+      products: [...page.products],
+    };
+  }
+
+  if (detected.length === 1) {
+    return {
+      groupId: detected[0],
+      groupLabel: detected[0],
+      isMisto: false,
+      isUnregistered: false,
+      products: detected,
+    };
+  }
+
+  const sorted = [...detected].sort();
+  return {
+    groupId: `__misto__::${sorted.join("+")}`,
+    groupLabel: `${MISTO_PREFIX}${sorted.join(" + ")}`,
+    isMisto: true,
+    isUnregistered: false,
+    products: sorted,
+  };
+}
+
+function carrierOrder(c: string): number {
+  const idx = (CARRIER_ORDER as readonly string[]).indexOf(c);
+  return idx < 0 ? 99 : idx;
+}
+
+export function buildFilterGroups(
+  pages: PageInfo[],
+  registeredModels: readonly string[] | null = null,
+): CarrierGroup[] {
+  // Conjunto de modelos cadastrados na conta. Quando vazio, cai pra
+  // PRODUCTS pra preservar comportamento antigo (todos cadastrados).
+  const registered = new Set<string>(
+    registeredModels && registeredModels.length > 0
+      ? registeredModels.map((m) => m.trim().toUpperCase())
+      : (PRODUCTS as readonly string[]),
+  );
+
+  const carriers = new Map<string, CarrierGroup>();
 
   for (const page of pages) {
-    const parentId = page.kitType ?? "Unitários";
-    const parentLabel = page.kitType ?? "Unitários";
+    const carrier = page.carrierFromPDF || "Outro";
+    const cls = classifyPage(page, registered);
+    const skuId = `${carrier}::${cls.groupId}`;
+    const qtdLabel = page.kitType ?? UNITARIO_LABEL;
+    const qtdId = `${skuId}::${qtdLabel}`;
     const sizeKey = page.size ?? SEM_TAMANHO_LABEL;
-    const subId = `${parentId}::${sizeKey}`;
+    const sizeId = `${qtdId}::${sizeKey}`;
 
-    let parent = groups.get(parentId);
-    if (!parent) {
-      parent = {
-        id: parentId,
-        label: parentLabel,
+    let cg = carriers.get(carrier);
+    if (!cg) {
+      cg = {
+        id: carrier,
+        label: carrier,
+        carrier,
+        pageIndexes: [],
+        subGroups: [],
+        downloaded: false,
+      };
+      carriers.set(carrier, cg);
+    }
+    cg.pageIndexes.push(page.index);
+
+    let sku = cg.subGroups.find((s) => s.id === skuId);
+    if (!sku) {
+      sku = {
+        id: skuId,
+        label: cls.groupLabel,
+        isMisto: cls.isMisto,
+        isUnregistered: cls.isUnregistered,
         products: [],
+        pageIndexes: [],
+        subGroups: [],
+        downloaded: false,
+      };
+      cg.subGroups.push(sku);
+    }
+    sku.pageIndexes.push(page.index);
+    for (const p of cls.products) {
+      if (!sku.products.includes(p)) sku.products.push(p);
+    }
+
+    let qtd = sku.subGroups.find((q) => q.id === qtdId);
+    if (!qtd) {
+      qtd = {
+        id: qtdId,
+        label: qtdLabel,
         kitType: page.kitType,
         pageIndexes: [],
         subGroups: [],
         downloaded: false,
       };
-      groups.set(parentId, parent);
+      sku.subGroups.push(qtd);
     }
+    qtd.pageIndexes.push(page.index);
 
-    for (const p of page.products) {
-      if (!parent.products.includes(p)) parent.products.push(p);
-    }
-    parent.pageIndexes.push(page.index);
-
-    let sub = parent.subGroups.find((s) => s.id === subId);
-    if (!sub) {
-      sub = {
-        id: subId,
+    let leaf = qtd.subGroups.find((s) => s.id === sizeId);
+    if (!leaf) {
+      leaf = {
+        id: sizeId,
         size: sizeKey,
         pageIndexes: [],
         downloaded: false,
       };
-      parent.subGroups.push(sub);
+      qtd.subGroups.push(leaf);
     }
-    sub.pageIndexes.push(page.index);
+    leaf.pageIndexes.push(page.index);
   }
 
-  // Ordena subgrupos por tamanho (Sem tamanho por último)
-  for (const parent of groups.values()) {
-    parent.subGroups.sort((a, b) => {
-      if (a.size === SEM_TAMANHO_LABEL) return 1;
-      if (b.size === SEM_TAMANHO_LABEL) return -1;
-      return sizeOrder(a.size) - sizeOrder(b.size);
+  // Ordena: tamanhos asc, QTDs por kitType, SKUs (cadastrados→Misto→Não cad).
+  for (const cg of carriers.values()) {
+    for (const sku of cg.subGroups) {
+      for (const qtd of sku.subGroups) {
+        qtd.subGroups.sort((a, b) => {
+          if (a.size === SEM_TAMANHO_LABEL) return 1;
+          if (b.size === SEM_TAMANHO_LABEL) return -1;
+          return sizeOrder(a.size) - sizeOrder(b.size);
+        });
+      }
+      sku.subGroups.sort((a, b) => {
+        const [afa, ana] = kitTypeOrder(a.kitType);
+        const [afb, anb] = kitTypeOrder(b.kitType);
+        if (afa !== afb) return afa - afb;
+        return ana - anb;
+      });
+    }
+    cg.subGroups.sort((a, b) => {
+      const aRank = a.isUnregistered ? 2 : a.isMisto ? 1 : 0;
+      const bRank = b.isUnregistered ? 2 : b.isMisto ? 1 : 0;
+      if (aRank !== bRank) return aRank - bRank;
+      return a.label.localeCompare(b.label);
     });
   }
 
-  // Ordena grupos pais: Unitários → KIT N asc → MIX N asc
-  return Array.from(groups.values()).sort((a, b) => {
-    const [afa, ana] = kitTypeOrder(a.kitType);
-    const [afb, anb] = kitTypeOrder(b.kitType);
-    if (afa !== afb) return afa - afb;
-    return ana - anb;
+  // Transportadoras: iMile → JadLog → J&T → Outro (qualquer outra ao final).
+  return Array.from(carriers.values()).sort((a, b) => {
+    const ord = carrierOrder(a.carrier) - carrierOrder(b.carrier);
+    if (ord !== 0) return ord;
+    return a.label.localeCompare(b.label);
   });
 }
 

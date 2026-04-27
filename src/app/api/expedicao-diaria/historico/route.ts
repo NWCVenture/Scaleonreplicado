@@ -104,59 +104,60 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
     }
 
-    const formData = await request.formData();
-    const file = formData.get("file");
-    const fileName = String(formData.get("fileName") ?? "etiquetas.pdf");
-    const groupLabel = String(formData.get("groupLabel") ?? "");
-    const pageCount = parseInt(String(formData.get("pageCount") ?? "0"), 10) || 0;
-    const subgroupIdsRaw = String(formData.get("subgroupIds") ?? "[]");
-    const skusCountRaw = String(formData.get("skusCount") ?? "{}");
-    const sessaoIdRaw = formData.get("sessaoId");
-    const sessaoId =
-      typeof sessaoIdRaw === "string" && sessaoIdRaw.length > 0
-        ? sessaoIdRaw
-        : null;
+    // Body é JSON: o cliente já fez upload direto pro Blob (via
+    // /historico/upload-url) e nos passa só a URL + metadata.
+    const body = (await request.json().catch(() => null)) as {
+      blobUrl?: unknown;
+      fileName?: unknown;
+      groupLabel?: unknown;
+      pageCount?: unknown;
+      subgroupIds?: unknown;
+      skusCount?: unknown;
+      sessaoId?: unknown;
+    } | null;
 
-    if (!(file instanceof Blob)) {
+    if (!body || typeof body.blobUrl !== "string" || !body.blobUrl) {
       return NextResponse.json(
-        { error: "Arquivo PDF ausente" },
+        { error: "blobUrl ausente" },
         { status: 400 },
       );
     }
 
-    let subgroupIds: string[] = [];
-    try {
-      const parsed = JSON.parse(subgroupIdsRaw);
-      if (Array.isArray(parsed)) {
-        subgroupIds = parsed.map((v) => String(v));
-      }
-    } catch {
-      subgroupIds = [];
-    }
+    const blobUrl = body.blobUrl;
+    const fileName =
+      typeof body.fileName === "string" && body.fileName
+        ? body.fileName
+        : "etiquetas.pdf";
+    const groupLabel =
+      typeof body.groupLabel === "string" ? body.groupLabel : "";
+    const pageCount =
+      typeof body.pageCount === "number" && Number.isFinite(body.pageCount)
+        ? Math.max(0, Math.floor(body.pageCount))
+        : 0;
+    const sessaoId =
+      typeof body.sessaoId === "string" && body.sessaoId
+        ? body.sessaoId
+        : null;
 
-    let skusCount: Record<string, number> = {};
-    try {
-      const parsed = JSON.parse(skusCountRaw);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        for (const [k, v] of Object.entries(parsed)) {
-          const n = Number(v);
-          if (Number.isFinite(n) && n > 0) skusCount[k] = Math.floor(n);
-        }
+    const subgroupIds: string[] = Array.isArray(body.subgroupIds)
+      ? body.subgroupIds.map((v) => String(v))
+      : [];
+
+    const skusCount: Record<string, number> = {};
+    if (
+      body.skusCount &&
+      typeof body.skusCount === "object" &&
+      !Array.isArray(body.skusCount)
+    ) {
+      for (const [k, v] of Object.entries(
+        body.skusCount as Record<string, unknown>,
+      )) {
+        const n = Number(v);
+        if (Number.isFinite(n) && n > 0) skusCount[k] = Math.floor(n);
       }
-    } catch {
-      skusCount = {};
     }
 
     const id = generateId();
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const { put } = await import("@vercel/blob");
-    const safeName = fileName.replace(/[^\w.\-]/g, "_");
-    const blob = await put(
-      `expedicao-diaria/${id}/${safeName}`,
-      buffer,
-      { access: "public" },
-    );
-
     const expiresAt = new Date(Date.now() + RETENCAO_MS);
 
     const created = await withContaAtiva(async (tx, contaId) => {
@@ -185,7 +186,7 @@ export async function POST(request: NextRequest) {
           contaId,
           usuarioId: session.user.id,
           sessaoId: sessaoIdValida,
-          blobUrl: blob.url,
+          blobUrl,
           fileName,
           groupLabel,
           subgroupIds,

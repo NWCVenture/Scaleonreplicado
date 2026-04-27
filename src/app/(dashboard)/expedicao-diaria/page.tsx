@@ -17,6 +17,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import { upload } from "@vercel/blob/client";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -54,6 +55,8 @@ import {
   type FilterGroup,
   type ModelImageMap,
   type PageInfo,
+  type QtdSubGroup,
+  type SkuSubGroup,
 } from "@/lib/pdf-expedicao-utils";
 import {
   deleteSessionFiles,
@@ -99,6 +102,9 @@ export default function ExpedicaoDiariaPage() {
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(
     new Set(),
   );
+  const [expandedSkuIds, setExpandedSkuIds] = useState<Set<string>>(new Set());
+  const [expandedQtdIds, setExpandedQtdIds] = useState<Set<string>>(new Set());
+  const [registeredModels, setRegisteredModels] = useState<string[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressText, setProgressText] = useState("");
@@ -266,6 +272,7 @@ export default function ExpedicaoDiariaPage() {
           if (m.etiquetaImagemUrl) map[m.codigo] = m.etiquetaImagemUrl;
         }
         setModelImages(map);
+        setRegisteredModels(data.modelos.map((m) => m.codigo));
       } catch {
         // silencioso
       }
@@ -281,7 +288,9 @@ export default function ExpedicaoDiariaPage() {
 
     const previousDownloaded = new Set(
       filterGroupsRef.current
-        .flatMap((g) => g.subGroups)
+        .flatMap((c) =>
+          c.subGroups.flatMap((s) => s.subGroups.flatMap((q) => q.subGroups)),
+        )
         .filter((s) => s.downloaded)
         .map((s) => s.id),
     );
@@ -290,6 +299,8 @@ export default function ExpedicaoDiariaPage() {
     setFilterGroups([]);
     setSelectedSubIds(new Set());
     setExpandedGroupIds(new Set());
+    setExpandedSkuIds(new Set());
+    setExpandedQtdIds(new Set());
     setIsProcessing(true);
     setProgress(5);
     setProgressText("Carregando bibliotecas…");
@@ -315,38 +326,71 @@ export default function ExpedicaoDiariaPage() {
         );
       }
 
-      const pages = await analyzePDFPages(bytes, (val, text) => {
-        setProgress(val);
-        setProgressText(text);
-      });
+      const pages = await analyzePDFPages(
+        bytes,
+        (val, text) => {
+          setProgress(val);
+          setProgressText(text);
+        },
+        { models: registeredModels },
+      );
       setProgress(90);
       setProgressText("Construindo grupos…");
-      const groups = buildFilterGroups(pages);
+      const groups = buildFilterGroups(pages, registeredModels);
 
-      const restored = groups.map((g) => {
-        const subs = g.subGroups.map((s) => ({
-          ...s,
-          downloaded: previousDownloaded.has(s.id),
-        }));
+      const restored = groups.map((c) => {
+        const skus = c.subGroups.map((sk) => {
+          const qtds = sk.subGroups.map((q) => {
+            const leaves = q.subGroups.map((leaf) => ({
+              ...leaf,
+              downloaded: previousDownloaded.has(leaf.id),
+            }));
+            return {
+              ...q,
+              subGroups: leaves,
+              downloaded:
+                leaves.length > 0 && leaves.every((l) => l.downloaded),
+            };
+          });
+          return {
+            ...sk,
+            subGroups: qtds,
+            downloaded: qtds.length > 0 && qtds.every((q) => q.downloaded),
+          };
+        });
         return {
-          ...g,
-          subGroups: subs,
-          downloaded: subs.length > 0 && subs.every((s) => s.downloaded),
+          ...c,
+          subGroups: skus,
+          downloaded: skus.length > 0 && skus.every((sk) => sk.downloaded),
         };
       });
 
       const freshSubIds = new Set(
         restored
-          .flatMap((g) => g.subGroups)
-          .filter((s) => !s.downloaded)
-          .map((s) => s.id),
+          .flatMap((c) =>
+            c.subGroups.flatMap((sk) =>
+              sk.subGroups.flatMap((q) => q.subGroups),
+            ),
+          )
+          .filter((leaf) => !leaf.downloaded)
+          .map((leaf) => leaf.id),
       );
 
       setPdfPages(pages);
       setFilterGroups(restored);
       filterGroupsRef.current = restored;
       setSelectedSubIds(freshSubIds);
-      setExpandedGroupIds(new Set(restored.map((g) => g.id)));
+      setExpandedGroupIds(new Set(restored.map((c) => c.id)));
+      setExpandedSkuIds(
+        new Set(restored.flatMap((c) => c.subGroups.map((sk) => sk.id))),
+      );
+      setExpandedQtdIds(
+        new Set(
+          restored.flatMap((c) =>
+            c.subGroups.flatMap((sk) => sk.subGroups.map((q) => q.id)),
+          ),
+        ),
+      );
       setProgress(100);
       setProgressText("Concluído");
       toast.success(
@@ -357,7 +401,7 @@ export default function ExpedicaoDiariaPage() {
     } finally {
       setIsProcessing(false);
     }
-  }, [sessaoAtiva]);
+  }, [sessaoAtiva, registeredModels]);
 
   // Restauração: quando descobrimos a sessão ativa, carregar PDFs do IDB
   useEffect(() => {
@@ -394,14 +438,29 @@ export default function ExpedicaoDiariaPage() {
   const markSubgroupsDownloaded = useCallback((subIds: string[]) => {
     const set = new Set(subIds);
     setFilterGroups((prev) => {
-      const updated = prev.map((g) => {
-        const subs = g.subGroups.map((s) =>
-          set.has(s.id) ? { ...s, downloaded: true } : s,
-        );
+      const updated = prev.map((c) => {
+        const skus = c.subGroups.map((sk) => {
+          const qtds = sk.subGroups.map((q) => {
+            const leaves = q.subGroups.map((leaf) =>
+              set.has(leaf.id) ? { ...leaf, downloaded: true } : leaf,
+            );
+            return {
+              ...q,
+              subGroups: leaves,
+              downloaded:
+                leaves.length > 0 && leaves.every((l) => l.downloaded),
+            };
+          });
+          return {
+            ...sk,
+            subGroups: qtds,
+            downloaded: qtds.length > 0 && qtds.every((q) => q.downloaded),
+          };
+        });
         return {
-          ...g,
-          subGroups: subs,
-          downloaded: subs.every((s) => s.downloaded),
+          ...c,
+          subGroups: skus,
+          downloaded: skus.length > 0 && skus.every((sk) => sk.downloaded),
         };
       });
       filterGroupsRef.current = updated;
@@ -411,6 +470,8 @@ export default function ExpedicaoDiariaPage() {
 
   // Grava PDF no histórico. Lança erro em falhas — o caller deve abortar o
   // download do browser pra garantir que toda exportação esteja registrada.
+  // Fluxo: client faz upload direto pro Vercel Blob (contorna o limite de
+  // ~4,5MB de body das Functions) e depois manda JSON com o blobUrl.
   const uploadToHistorico = useCallback(
     async (
       generated: { bytes: Uint8Array; fileName: string; pageCount: number },
@@ -427,22 +488,34 @@ export default function ExpedicaoDiariaPage() {
         }
       }
 
-      const form = new FormData();
-      form.append(
-        "file",
-        new Blob([generated.bytes as BlobPart], { type: "application/pdf" }),
-        generated.fileName,
-      );
-      form.append("fileName", generated.fileName);
-      form.append("groupLabel", groupLabel);
-      form.append("pageCount", String(generated.pageCount));
-      form.append("subgroupIds", JSON.stringify(subgroupIds));
-      form.append("skusCount", JSON.stringify(skusCount));
-      if (sessaoAtiva?.id) form.append("sessaoId", sessaoAtiva.id);
+      const blobFile = new Blob([generated.bytes as BlobPart], {
+        type: "application/pdf",
+      });
+      const safeName = generated.fileName.replace(/[^\w.\-]/g, "_");
+      const id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : Math.random().toString(36).slice(2);
+      const pathname = `expedicao-diaria/${id}/${safeName}`;
+
+      const blob = await upload(pathname, blobFile, {
+        access: "public",
+        handleUploadUrl: "/api/expedicao-diaria/historico/upload-url",
+        contentType: "application/pdf",
+      });
 
       const res = await fetch("/api/expedicao-diaria/historico", {
         method: "POST",
-        body: form,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          blobUrl: blob.url,
+          fileName: generated.fileName,
+          groupLabel,
+          pageCount: generated.pageCount,
+          subgroupIds,
+          skusCount,
+          sessaoId: sessaoAtiva?.id ?? null,
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -532,28 +605,72 @@ export default function ExpedicaoDiariaPage() {
     [historico, executeDownload],
   );
 
+  // Sanitiza label pra uso em filename (remove parêntese, acento, espaços).
+  const slugify = (s: string): string =>
+    s
+      .replace(/[^\w\d]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 60) || "grupo";
+
   const downloadSubgroup = useCallback(
-    (group: FilterGroup, subId: string) => {
-      const sub = group.subGroups.find((s) => s.id === subId);
-      if (!sub) return;
-      const pages = sub.pageIndexes
+    (
+      carrier: FilterGroup,
+      sku: SkuSubGroup,
+      qtd: QtdSubGroup,
+      leafId: string,
+    ) => {
+      const leaf = qtd.subGroups.find((s) => s.id === leafId);
+      if (!leaf) return;
+      const pages = leaf.pageIndexes
         .map((i) => pagesByIndex.get(i))
         .filter((p): p is PageInfo => !!p);
-      const label = `${group.label}_${sub.size}`.replace(/\s+/g, "_");
-      const groupLabel = `${group.label} · ${sub.size}`;
-      requestDownload(pages, [sub.id], groupLabel, label);
+      const label = slugify(
+        `${carrier.label}_${sku.label}_${qtd.label}_${leaf.size}`,
+      );
+      const groupLabel = `${carrier.label} · ${sku.label} · ${qtd.label} · ${leaf.size}`;
+      requestDownload(pages, [leaf.id], groupLabel, label);
+    },
+    [pagesByIndex, requestDownload],
+  );
+
+  const downloadQtdGroup = useCallback(
+    (carrier: FilterGroup, sku: SkuSubGroup, qtd: QtdSubGroup) => {
+      const pages = qtd.pageIndexes
+        .map((i) => pagesByIndex.get(i))
+        .filter((p): p is PageInfo => !!p);
+      const label = slugify(`${carrier.label}_${sku.label}_${qtd.label}`);
+      const groupLabel = `${carrier.label} · ${sku.label} · ${qtd.label}`;
+      const leafIds = qtd.subGroups.map((s) => s.id);
+      requestDownload(pages, leafIds, groupLabel, label);
+    },
+    [pagesByIndex, requestDownload],
+  );
+
+  const downloadSkuGroup = useCallback(
+    (carrier: FilterGroup, sku: SkuSubGroup) => {
+      const pages = sku.pageIndexes
+        .map((i) => pagesByIndex.get(i))
+        .filter((p): p is PageInfo => !!p);
+      const label = slugify(`${carrier.label}_${sku.label}`);
+      const groupLabel = `${carrier.label} · ${sku.label}`;
+      const leafIds = sku.subGroups.flatMap((q) =>
+        q.subGroups.map((leaf) => leaf.id),
+      );
+      requestDownload(pages, leafIds, groupLabel, label);
     },
     [pagesByIndex, requestDownload],
   );
 
   const downloadParentGroup = useCallback(
-    (group: FilterGroup) => {
-      const pages = group.pageIndexes
+    (carrier: FilterGroup) => {
+      const pages = carrier.pageIndexes
         .map((i) => pagesByIndex.get(i))
         .filter((p): p is PageInfo => !!p);
-      const label = group.label.replace(/\s+/g, "_");
-      const subIds = group.subGroups.map((s) => s.id);
-      requestDownload(pages, subIds, group.label, label);
+      const label = slugify(carrier.label);
+      const leafIds = carrier.subGroups.flatMap((sk) =>
+        sk.subGroups.flatMap((q) => q.subGroups.map((leaf) => leaf.id)),
+      );
+      requestDownload(pages, leafIds, carrier.label, label);
     },
     [pagesByIndex, requestDownload],
   );
@@ -561,13 +678,17 @@ export default function ExpedicaoDiariaPage() {
   const handleDownloadSelected = useCallback(() => {
     const selectedPages: PageInfo[] = [];
     const touchedSubIds: string[] = [];
-    for (const group of filterGroups) {
-      for (const sub of group.subGroups) {
-        if (!selectedSubIds.has(sub.id)) continue;
-        touchedSubIds.push(sub.id);
-        for (const idx of sub.pageIndexes) {
-          const p = pagesByIndex.get(idx);
-          if (p) selectedPages.push(p);
+    for (const carrier of filterGroups) {
+      for (const sku of carrier.subGroups) {
+        for (const qtd of sku.subGroups) {
+          for (const leaf of qtd.subGroups) {
+            if (!selectedSubIds.has(leaf.id)) continue;
+            touchedSubIds.push(leaf.id);
+            for (const idx of leaf.pageIndexes) {
+              const p = pagesByIndex.get(idx);
+              if (p) selectedPages.push(p);
+            }
+          }
         }
       }
     }
@@ -589,8 +710,34 @@ export default function ExpedicaoDiariaPage() {
     });
   }, []);
 
-  const toggleParent = useCallback((group: FilterGroup) => {
-    const subIds = group.subGroups.map((s) => s.id);
+  const toggleParent = useCallback((carrier: FilterGroup) => {
+    const subIds = carrier.subGroups.flatMap((sk) =>
+      sk.subGroups.flatMap((q) => q.subGroups.map((leaf) => leaf.id)),
+    );
+    setSelectedSubIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = subIds.every((id) => next.has(id));
+      if (allSelected) subIds.forEach((id) => next.delete(id));
+      else subIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }, []);
+
+  const toggleSku = useCallback((sku: SkuSubGroup) => {
+    const subIds = sku.subGroups.flatMap((q) =>
+      q.subGroups.map((leaf) => leaf.id),
+    );
+    setSelectedSubIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = subIds.every((id) => next.has(id));
+      if (allSelected) subIds.forEach((id) => next.delete(id));
+      else subIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }, []);
+
+  const toggleQtd = useCallback((qtd: QtdSubGroup) => {
+    const subIds = qtd.subGroups.map((s) => s.id);
     setSelectedSubIds((prev) => {
       const next = new Set(prev);
       const allSelected = subIds.every((id) => next.has(id));
@@ -609,6 +756,24 @@ export default function ExpedicaoDiariaPage() {
     });
   }, []);
 
+  const toggleSkuExpand = useCallback((skuId: string) => {
+    setExpandedSkuIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(skuId)) next.delete(skuId);
+      else next.add(skuId);
+      return next;
+    });
+  }, []);
+
+  const toggleQtdExpand = useCallback((qtdId: string) => {
+    setExpandedQtdIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(qtdId)) next.delete(qtdId);
+      else next.add(qtdId);
+      return next;
+    });
+  }, []);
+
   const clearQueue = useCallback(() => {
     setPdfBytes(null);
     setPdfPages(null);
@@ -616,6 +781,8 @@ export default function ExpedicaoDiariaPage() {
     setFilterGroups([]);
     setSelectedSubIds(new Set());
     setExpandedGroupIds(new Set());
+    setExpandedSkuIds(new Set());
+    setExpandedQtdIds(new Set());
     setProgress(0);
     setProgressText("");
     filterGroupsRef.current = [];
@@ -640,10 +807,34 @@ export default function ExpedicaoDiariaPage() {
     [pdfFiles, handlePDFFiles, clearQueue],
   );
 
-  const parentSelectionState = (group: FilterGroup): "none" | "some" | "all" => {
-    const total = group.subGroups.length;
+  const parentSelectionState = (
+    carrier: FilterGroup,
+  ): "none" | "some" | "all" => {
+    const leaves = carrier.subGroups.flatMap((sk) =>
+      sk.subGroups.flatMap((q) => q.subGroups),
+    );
+    const total = leaves.length;
     if (total === 0) return "none";
-    const sel = group.subGroups.filter((s) => selectedSubIds.has(s.id)).length;
+    const sel = leaves.filter((s) => selectedSubIds.has(s.id)).length;
+    if (sel === 0) return "none";
+    if (sel === total) return "all";
+    return "some";
+  };
+
+  const skuSelectionState = (sku: SkuSubGroup): "none" | "some" | "all" => {
+    const leaves = sku.subGroups.flatMap((q) => q.subGroups);
+    const total = leaves.length;
+    if (total === 0) return "none";
+    const sel = leaves.filter((s) => selectedSubIds.has(s.id)).length;
+    if (sel === 0) return "none";
+    if (sel === total) return "all";
+    return "some";
+  };
+
+  const qtdSelectionState = (qtd: QtdSubGroup): "none" | "some" | "all" => {
+    const total = qtd.subGroups.length;
+    if (total === 0) return "none";
+    const sel = qtd.subGroups.filter((s) => selectedSubIds.has(s.id)).length;
     if (sel === 0) return "none";
     if (sel === total) return "all";
     return "some";
@@ -851,10 +1042,23 @@ export default function ExpedicaoDiariaPage() {
             </CardTitle>
             <CardDescription>
               {
-                filterGroups.flatMap((g) => g.subGroups).filter((s) => s.downloaded)
-                  .length
+                filterGroups
+                  .flatMap((c) =>
+                    c.subGroups.flatMap((sk) =>
+                      sk.subGroups.flatMap((q) => q.subGroups),
+                    ),
+                  )
+                  .filter((leaf) => leaf.downloaded).length
               }
-              /{filterGroups.flatMap((g) => g.subGroups).length} subgrupos baixados
+              /
+              {
+                filterGroups.flatMap((c) =>
+                  c.subGroups.flatMap((sk) =>
+                    sk.subGroups.flatMap((q) => q.subGroups),
+                  ),
+                ).length
+              }{" "}
+              subgrupos baixados
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -880,31 +1084,35 @@ export default function ExpedicaoDiariaPage() {
             </div>
 
             <div className="space-y-2">
-              {filterGroups.map((g) => {
-                const expanded = expandedGroupIds.has(g.id);
-                const parentState = parentSelectionState(g);
-                const anyPrinted = g.subGroups.some((s) =>
-                  printedSubgroupIds.has(s.id),
+              {filterGroups.map((c) => {
+                const carrierExpanded = expandedGroupIds.has(c.id);
+                const carrierState = parentSelectionState(c);
+                const carrierLeaves = c.subGroups.flatMap((sk) =>
+                  sk.subGroups.flatMap((q) => q.subGroups),
+                );
+                const carrierAnyPrinted = carrierLeaves.some((leaf) =>
+                  printedSubgroupIds.has(leaf.id),
                 );
                 return (
                   <div
-                    key={g.id}
+                    key={c.id}
                     className={cn(
                       "rounded-lg border",
-                      g.downloaded
+                      c.downloaded
                         ? "border-green-800 bg-green-950/20"
                         : "border-slate-700 bg-slate-900",
                     )}
                   >
+                    {/* Nível 1: Transportadora */}
                     <div className="flex items-center justify-between p-3">
                       <div className="flex items-center gap-3 flex-1">
                         <button
                           type="button"
-                          onClick={() => toggleExpand(g.id)}
+                          onClick={() => toggleExpand(c.id)}
                           className="text-muted-foreground hover:text-foreground"
-                          aria-label={expanded ? "Recolher" : "Expandir"}
+                          aria-label={carrierExpanded ? "Recolher" : "Expandir"}
                         >
-                          {expanded ? (
+                          {carrierExpanded ? (
                             <ChevronDown className="h-4 w-4" />
                           ) : (
                             <ChevronRight className="h-4 w-4" />
@@ -912,96 +1120,291 @@ export default function ExpedicaoDiariaPage() {
                         </button>
                         <input
                           type="checkbox"
-                          checked={parentState === "all"}
+                          checked={carrierState === "all"}
                           ref={(el) => {
-                            if (el) el.indeterminate = parentState === "some";
+                            if (el)
+                              el.indeterminate = carrierState === "some";
                           }}
-                          onChange={() => toggleParent(g)}
+                          onChange={() => toggleParent(c)}
                           className="accent-blue-500"
                         />
                         <div>
                           <p className="font-semibold text-sm flex items-center gap-2">
-                            {g.label}
-                            {anyPrinted && (
+                            <Truck className="h-4 w-4" />
+                            {c.label}
+                            {carrierAnyPrinted && (
                               <span className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1">
                                 Impresso
                               </span>
                             )}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            {g.pageIndexes.length} página(s) ·{" "}
-                            {g.subGroups.length} tamanho(s)
-                            {g.products.length > 0 && ` · ${g.products.join("/")}`}
+                            {c.pageIndexes.length} página(s) ·{" "}
+                            {c.subGroups.length} SKU(s) · {carrierLeaves.length}{" "}
+                            tamanho(s)
                           </p>
                         </div>
                       </div>
                       <div className="flex gap-2 items-center">
-                        {g.downloaded && (
+                        {c.downloaded && (
                           <span className="text-xs text-green-400 font-medium">
                             Baixado
                           </span>
                         )}
                         <Button
                           size="sm"
-                          variant={g.downloaded ? "outline" : "default"}
+                          variant={c.downloaded ? "outline" : "default"}
                           className={cn(
-                            !g.downloaded &&
+                            !c.downloaded &&
                               "bg-blue-600 hover:bg-blue-700 text-white",
                           )}
-                          onClick={() => downloadParentGroup(g)}
+                          onClick={() => downloadParentGroup(c)}
                         >
-                          <Download className="h-4 w-4 mr-1" /> Grupo
+                          <Download className="h-4 w-4 mr-1" /> Transportadora
                         </Button>
                       </div>
                     </div>
 
-                    {expanded && g.subGroups.length > 0 && (
+                    {/* Nível 2: SKU */}
+                    {carrierExpanded && c.subGroups.length > 0 && (
                       <div className="border-t border-slate-800 divide-y divide-slate-800">
-                        {g.subGroups.map((s) => {
-                          const wasPrinted = printedSubgroupIds.has(s.id);
+                        {c.subGroups.map((sk) => {
+                          const skuExpanded = expandedSkuIds.has(sk.id);
+                          const skuState = skuSelectionState(sk);
+                          const skuLeaves = sk.subGroups.flatMap(
+                            (q) => q.subGroups,
+                          );
+                          const skuAnyPrinted = skuLeaves.some((leaf) =>
+                            printedSubgroupIds.has(leaf.id),
+                          );
                           return (
                             <div
-                              key={s.id}
+                              key={sk.id}
                               className={cn(
-                                "flex items-center justify-between px-3 py-2 pl-10",
-                                s.downloaded && "bg-green-950/10",
+                                sk.isUnregistered && "bg-amber-950/10",
+                                sk.downloaded && "bg-green-950/10",
                               )}
                             >
-                              <div className="flex items-center gap-3">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedSubIds.has(s.id)}
-                                  onChange={() => toggleSub(s.id)}
-                                  className="accent-blue-500"
-                                />
-                                <div>
-                                  <p className="text-sm flex items-center gap-2">
-                                    {s.size}
-                                    {wasPrinted && (
-                                      <span className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1">
-                                        Impresso
-                                      </span>
+                              <div className="flex items-center justify-between px-3 py-2 pl-10">
+                                <div className="flex items-center gap-3 flex-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleSkuExpand(sk.id)}
+                                    className="text-muted-foreground hover:text-foreground"
+                                    aria-label={
+                                      skuExpanded ? "Recolher" : "Expandir"
+                                    }
+                                  >
+                                    {skuExpanded ? (
+                                      <ChevronDown className="h-4 w-4" />
+                                    ) : (
+                                      <ChevronRight className="h-4 w-4" />
                                     )}
-                                  </p>
-                                  <p className="text-xs text-muted-foreground">
-                                    {s.pageIndexes.length} página(s)
-                                  </p>
+                                  </button>
+                                  <input
+                                    type="checkbox"
+                                    checked={skuState === "all"}
+                                    ref={(el) => {
+                                      if (el)
+                                        el.indeterminate =
+                                          skuState === "some";
+                                    }}
+                                    onChange={() => toggleSku(sk)}
+                                    className="accent-blue-500"
+                                  />
+                                  <div>
+                                    <p
+                                      className={cn(
+                                        "text-sm font-semibold flex items-center gap-2",
+                                        sk.isUnregistered && "text-amber-300",
+                                      )}
+                                    >
+                                      {sk.label}
+                                      {skuAnyPrinted && (
+                                        <span className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1">
+                                          Impresso
+                                        </span>
+                                      )}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {sk.pageIndexes.length} página(s) ·{" "}
+                                      {sk.subGroups.length} QTD ·{" "}
+                                      {skuLeaves.length} tamanho(s)
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="flex gap-2 items-center">
+                                  {sk.downloaded && (
+                                    <span className="text-xs text-green-400">
+                                      Baixado
+                                    </span>
+                                  )}
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => downloadSkuGroup(c, sk)}
+                                  >
+                                    <Download className="h-4 w-4 mr-1" /> SKU
+                                  </Button>
                                 </div>
                               </div>
-                              <div className="flex gap-2 items-center">
-                                {s.downloaded && (
-                                  <span className="text-xs text-green-400">
-                                    Baixado
-                                  </span>
-                                )}
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => downloadSubgroup(g, s.id)}
-                                >
-                                  <Download className="h-4 w-4 mr-1" /> PDF
-                                </Button>
-                              </div>
+
+                              {/* Nível 3: QTD */}
+                              {skuExpanded && sk.subGroups.length > 0 && (
+                                <div className="divide-y divide-slate-800/60 border-t border-slate-800/60">
+                                  {sk.subGroups.map((q) => {
+                                    const qtdExpanded = expandedQtdIds.has(
+                                      q.id,
+                                    );
+                                    const qtdState = qtdSelectionState(q);
+                                    return (
+                                      <div
+                                        key={q.id}
+                                        className={cn(
+                                          q.downloaded && "bg-green-950/10",
+                                        )}
+                                      >
+                                        <div className="flex items-center justify-between px-3 py-2 pl-16">
+                                          <div className="flex items-center gap-3 flex-1">
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                toggleQtdExpand(q.id)
+                                              }
+                                              className="text-muted-foreground hover:text-foreground"
+                                              aria-label={
+                                                qtdExpanded
+                                                  ? "Recolher"
+                                                  : "Expandir"
+                                              }
+                                            >
+                                              {qtdExpanded ? (
+                                                <ChevronDown className="h-4 w-4" />
+                                              ) : (
+                                                <ChevronRight className="h-4 w-4" />
+                                              )}
+                                            </button>
+                                            <input
+                                              type="checkbox"
+                                              checked={qtdState === "all"}
+                                              ref={(el) => {
+                                                if (el)
+                                                  el.indeterminate =
+                                                    qtdState === "some";
+                                              }}
+                                              onChange={() => toggleQtd(q)}
+                                              className="accent-blue-500"
+                                            />
+                                            <div>
+                                              <p className="text-sm font-medium">
+                                                {q.label}
+                                              </p>
+                                              <p className="text-xs text-muted-foreground">
+                                                {q.pageIndexes.length}{" "}
+                                                página(s) ·{" "}
+                                                {q.subGroups.length}{" "}
+                                                tamanho(s)
+                                              </p>
+                                            </div>
+                                          </div>
+                                          <div className="flex gap-2 items-center">
+                                            {q.downloaded && (
+                                              <span className="text-xs text-green-400">
+                                                Baixado
+                                              </span>
+                                            )}
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              onClick={() =>
+                                                downloadQtdGroup(c, sk, q)
+                                              }
+                                            >
+                                              <Download className="h-4 w-4 mr-1" />{" "}
+                                              Subgrupo
+                                            </Button>
+                                          </div>
+                                        </div>
+
+                                        {/* Nível 4: tamanho */}
+                                        {qtdExpanded &&
+                                          q.subGroups.length > 0 && (
+                                            <div className="divide-y divide-slate-800/40 border-t border-slate-800/40">
+                                              {q.subGroups.map((leaf) => {
+                                                const wasPrinted =
+                                                  printedSubgroupIds.has(
+                                                    leaf.id,
+                                                  );
+                                                return (
+                                                  <div
+                                                    key={leaf.id}
+                                                    className={cn(
+                                                      "flex items-center justify-between px-3 py-2 pl-20",
+                                                      leaf.downloaded &&
+                                                        "bg-green-950/10",
+                                                    )}
+                                                  >
+                                                    <div className="flex items-center gap-3">
+                                                      <input
+                                                        type="checkbox"
+                                                        checked={selectedSubIds.has(
+                                                          leaf.id,
+                                                        )}
+                                                        onChange={() =>
+                                                          toggleSub(leaf.id)
+                                                        }
+                                                        className="accent-blue-500"
+                                                      />
+                                                      <div>
+                                                        <p className="text-sm flex items-center gap-2">
+                                                          {leaf.size}
+                                                          {wasPrinted && (
+                                                            <span className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1">
+                                                              Impresso
+                                                            </span>
+                                                          )}
+                                                        </p>
+                                                        <p className="text-xs text-muted-foreground">
+                                                          {
+                                                            leaf.pageIndexes
+                                                              .length
+                                                          }{" "}
+                                                          página(s)
+                                                        </p>
+                                                      </div>
+                                                    </div>
+                                                    <div className="flex gap-2 items-center">
+                                                      {leaf.downloaded && (
+                                                        <span className="text-xs text-green-400">
+                                                          Baixado
+                                                        </span>
+                                                      )}
+                                                      <Button
+                                                        size="sm"
+                                                        variant="outline"
+                                                        onClick={() =>
+                                                          downloadSubgroup(
+                                                            c,
+                                                            sk,
+                                                            q,
+                                                            leaf.id,
+                                                          )
+                                                        }
+                                                      >
+                                                        <Download className="h-4 w-4 mr-1" />{" "}
+                                                        PDF
+                                                      </Button>
+                                                    </div>
+                                                  </div>
+                                                );
+                                              })}
+                                            </div>
+                                          )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -1019,7 +1422,13 @@ export default function ExpedicaoDiariaPage() {
                 onClick={() =>
                   setSelectedSubIds(
                     new Set(
-                      filterGroups.flatMap((g) => g.subGroups.map((s) => s.id)),
+                      filterGroups.flatMap((c) =>
+                        c.subGroups.flatMap((sk) =>
+                          sk.subGroups.flatMap((q) =>
+                            q.subGroups.map((leaf) => leaf.id),
+                          ),
+                        ),
+                      ),
                     ),
                   )
                 }
