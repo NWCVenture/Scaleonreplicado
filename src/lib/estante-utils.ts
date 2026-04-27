@@ -2,20 +2,52 @@ export interface ParsedQR {
   sku: string;
   lote: string;
   qtd: number;
+  // Campos extras presentes no payload v2/v3 emitido pelo cadastro:
+  //   v1: SKU}LOTE}QTD                                   — 3 campos
+  //   v2: SKU}LOTE}QTD}CODIGO_FARDO                      — 4 campos
+  //   v3: SKU}LOTE}QTD}CODIGO_FARDO}ISO}USUARIO}UUID     — 7 campos
+  codigoFardo?: string;
+  criadoEm?: string;
+  criadoPor?: string;
+  uuid?: string;
 }
 
+// Aceita os 3 formatos (v1/v2/v3) e normaliza separadores: `}`, `{` e `|`
+// são equivalentes. `{` aparece quando o scanner HID emite em layout US e
+// o Windows traduz pra ABNT2 (as teclas `}`/`{` ficam trocadas).
 export function parseQRCode(raw: string): ParsedQR | null {
-  const normalized = raw.trim().replace(/^\d+/, "").replace(/}/g, "|");
-  const parts = normalized.split("|").map((p) => p.trim());
-  if (parts.length >= 3) {
-    const [a, b, c] = parts;
-    // Formato QR: SKU|LOTE|QTD (terceiro é número)
-    const qtdFromC = parseInt(c, 10);
-    if (a && b && !isNaN(qtdFromC)) return { sku: a, lote: b, qtd: qtdFromC };
-    // Formato importação: SKU|QTD|LOTE (segundo é número)
-    const qtdFromB = parseInt(b, 10);
-    if (a && !isNaN(qtdFromB) && c) return { sku: a, lote: c, qtd: qtdFromB };
+  if (!raw) return null;
+  const clean = raw.trim().replace(/^[|{}]+/, "").trim();
+  if (!clean) return null;
+
+  const parts = clean.split(/[}{|]/).map((p) => p.trim());
+  if (parts.length < 3) return null;
+
+  // Remove prefixo numérico herdado de formato antigo (ex.: "1LUA AZ GG")
+  const a = parts[0].replace(/^\d+\s*/, "").trim();
+  const b = parts[1];
+  const c = parts[2];
+
+  // Formato QR (v1/v2/v3): SKU|LOTE|QTD (terceiro é número)
+  const qtdFromC = parseInt(c, 10);
+  if (a && b && !isNaN(qtdFromC) && qtdFromC > 0) {
+    return {
+      sku: a,
+      lote: b,
+      qtd: qtdFromC,
+      codigoFardo: parts[3]?.trim() || undefined,
+      criadoEm: parts[4]?.trim() || undefined,
+      criadoPor: parts[5]?.trim() || undefined,
+      uuid: parts[6]?.trim() || undefined,
+    };
   }
+
+  // Formato importação: SKU|QTD|LOTE (segundo é número)
+  const qtdFromB = parseInt(b, 10);
+  if (a && !isNaN(qtdFromB) && qtdFromB > 0 && c) {
+    return { sku: a, lote: c, qtd: qtdFromB };
+  }
+
   return null;
 }
 
@@ -43,8 +75,9 @@ export function parseImportText(
     )
       continue;
 
-    // Format 1: QR bipagem  "LUA AZ GG}ESTOQUE PADRO}60" or pipe-separated
-    const qrParts = t.replace(/\}/g, "|").split("|").map((p) => p.trim());
+    // Format 1: QR bipagem  "LUA AZ GG}ESTOQUE PADRO}60" or pipe-separated.
+    // Aceita `{` também (scanner HID em layout ABNT2 troca `}` por `{`).
+    const qrParts = t.split(/[}{|]/).map((p) => p.trim());
     if (qrParts.length >= 3) {
       // Detailed report: HH:MM:SS | SKU | QTD | LOTE
       if (/^\d{2}:\d{2}:\d{2}$/.test(qrParts[0])) {

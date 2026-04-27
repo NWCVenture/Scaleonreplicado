@@ -197,13 +197,27 @@ export default function EstanteVirtualPage() {
   const handleConfirmRetirada = useCallback(async () => {
     if (!pendingQR || !selectedId) return;
     const norm = (s: string) => s.toUpperCase().replace(/\s+/g, " ").trim();
-    const match = fardos.find(
-      (f) =>
-        norm(f.sku) === norm(pendingQR.parsed.sku) &&
-        norm(f.lote) === norm(pendingQR.parsed.lote),
-    );
+    // Match por prioridade: UUID (v3) → codigoFardo (v2/v3) → SKU+LOTE (v1).
+    // Garante que o fardo correto seja retirado quando há duplicatas
+    // (mesmo SKU+LOTE) — cada QR v3 tem UUID único.
+    const { uuid, codigoFardo, sku: parsedSku, lote: parsedLote } =
+      pendingQR.parsed;
+    let match: EstanteFardoItem | undefined;
+    if (uuid) {
+      match = fardos.find((f) => parseQRCode(f.qrCode)?.uuid === uuid);
+    } else if (codigoFardo) {
+      match = fardos.find(
+        (f) => parseQRCode(f.qrCode)?.codigoFardo === codigoFardo,
+      );
+    } else {
+      match = fardos.find(
+        (f) =>
+          norm(f.sku) === norm(parsedSku) &&
+          norm(f.lote) === norm(parsedLote),
+      );
+    }
     if (!match) {
-      toast.error(`Fardo nao encontrado: ${pendingQR.parsed.sku}`);
+      toast.error(`Fardo nao encontrado: ${parsedSku}`);
       return;
     }
     let ok = false;
