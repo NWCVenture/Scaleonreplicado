@@ -1191,7 +1191,6 @@ export default function ColetasPage() {
         <AlertDialogContent
           className="bg-zinc-950 border-zinc-800"
           onEscapeKeyDown={(e) => e.preventDefault()}
-          onPointerDownOutside={(e) => e.preventDefault()}
         >
           <AlertDialogHeader>
             <AlertDialogTitle className="text-zinc-100">
