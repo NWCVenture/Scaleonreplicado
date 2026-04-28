@@ -1,15 +1,24 @@
+"use client";
+
 // ─── Shared PDF utilities for Pedidos Urgentes + Expedição Diária ──────────
 // Processes label PDFs (Upseller/TikTok/ML) extracted manually by the user.
 // Detects per-page: tracking ID, carrier (iMile/JadLog/J&T), kit type,
 // products (LUA/NBA/etc), CPF; groups pages by SKU principal × kitType ×
 // size for selective printing on a Zebra ZD220 thermal printer.
+//
+// Importa pdfjs/pdf-lib do `pdf-worker.ts` (bundled). Antes usávamos CDN
+// pra pdf.js, mas isso colidia com `pdfjs-dist` que o kit-organizer e o
+// verificador-etiquetas importam: o pacote v5 faz `globalThis.pdfjsLib =
+// {...}` na inicialização e clobberava a v3 do CDN, gerando o erro
+// "API version X does not match Worker version Y".
 
-declare global {
-  interface Window {
-    pdfjsLib?: unknown;
-    PDFLib?: unknown;
-  }
-}
+import {
+  pdfjs,
+  PDFDocument,
+  StandardFonts,
+  rgb,
+  degrees,
+} from "./pdf-worker";
 
 export const PRODUCTS = ["LUA", "NBA", "BOB", "PUFFER", "CJ", "SOL"] as const;
 export const TAMANHO_ORDER = ["PP", "P", "M", "G", "GG", "EGG", "XG", "XXG"] as const;
@@ -89,66 +98,17 @@ export type AnalyzeOptions = {
   models?: readonly string[];
 };
 
+// Mantido por back-compat — pdfjs-dist e pdf-lib são importados
+// estaticamente em pdf-worker.ts, então não há nada pra aguardar.
 export async function loadPDFLibraries(): Promise<void> {
-  const inject = (src: string) =>
-    new Promise<void>((res, rej) => {
-      if (document.querySelector(`script[src="${src}"]`)) {
-        res();
-        return;
-      }
-      const s = document.createElement("script");
-      s.src = src;
-      s.onload = () => res();
-      s.onerror = () => rej(new Error(`Failed to load ${src}`));
-      document.head.appendChild(s);
-    });
-
-  await inject(
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
-  );
-  await inject(
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js",
-  );
-
-  await new Promise<void>((res) => {
-    const poll = setInterval(() => {
-      if (window.pdfjsLib && window.PDFLib) {
-        clearInterval(poll);
-        res();
-      }
-    }, 100);
-  });
-
-  const pdfjs = window.pdfjsLib as {
-    GlobalWorkerOptions: { workerSrc: string };
-  };
-  if (pdfjs) {
-    pdfjs.GlobalWorkerOptions.workerSrc =
-      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  }
+  // no-op
 }
 
 export async function mergePDFs(files: File[]): Promise<Uint8Array> {
-  const { PDFDocument } = window.PDFLib as {
-    PDFDocument: { create: () => Promise<unknown> };
-  };
-  const merged = (await PDFDocument.create()) as {
-    copyPages: (doc: unknown, idx: number[]) => Promise<unknown[]>;
-    addPage: (p: unknown) => void;
-    save: () => Promise<Uint8Array>;
-  };
+  const merged = await PDFDocument.create();
   for (const file of files) {
     const buf = await file.arrayBuffer();
-    const lib = window.PDFLib as {
-      PDFDocument: {
-        load: (b: ArrayBuffer, o: object) => Promise<unknown>;
-      };
-    };
-    const doc = (await lib.PDFDocument.load(buf, {
-      ignoreEncryption: true,
-    })) as {
-      getPageIndices: () => number[];
-    };
+    const doc = await PDFDocument.load(buf, { ignoreEncryption: true });
     const pages = await merged.copyPages(doc, doc.getPageIndices());
     pages.forEach((p) => merged.addPage(p));
   }
@@ -171,17 +131,6 @@ export async function analyzePDFPages(
     }
     return Array.from(set);
   })();
-  const pdfjsLib = window.pdfjsLib as {
-    getDocument: (o: { data: ArrayBuffer }) => {
-      promise: Promise<{
-        numPages: number;
-        getPage: (n: number) => Promise<{
-          getTextContent: () => Promise<{ items: Array<{ str: string }> }>;
-        }>;
-      }>;
-    };
-  };
-
   let data: ArrayBuffer;
   if (file instanceof File) {
     data = await file.arrayBuffer();
@@ -189,7 +138,7 @@ export async function analyzePDFPages(
     // pdf.js detacha o ArrayBuffer — passamos uma cópia para preservar o original
     data = new Uint8Array(file).buffer;
   }
-  const pdf = await pdfjsLib.getDocument({ data }).promise;
+  const pdf = await pdfjs.getDocument({ data }).promise;
   const total = pdf.numPages;
   const pages: PageInfo[] = [];
 
@@ -199,7 +148,11 @@ export async function analyzePDFPages(
 
     const page = await pdf.getPage(i + 1);
     const content = await page.getTextContent();
-    const text = content.items.map((it) => it.str).join(" ");
+    // TextContent.items pode conter TextItem (com `str`) e TextMarkedContent
+    // (sem `str`); filtra antes de concatenar.
+    const text = content.items
+      .map((it) => ("str" in it ? it.str : ""))
+      .join(" ");
 
     const trackMatch = text.match(
       /C[oó]digo\s+de\s+Rastreamento[:\s]+(\d{12,14})/i,
@@ -511,38 +464,22 @@ export async function generateFilteredPDF(
   addBasketball: boolean,
   modelImages: ModelImageMap = {},
 ): Promise<GeneratedPDF> {
-  const lib = window.PDFLib as {
-    PDFDocument: {
-      load: (b: Uint8Array, o: object) => Promise<unknown>;
-      create: () => Promise<unknown>;
-    };
-    rgb: (r: number, g: number, b: number) => unknown;
-    degrees: (d: number) => unknown;
-    StandardFonts: { HelveticaBold: unknown };
-  };
-  const { PDFDocument, rgb, degrees, StandardFonts } = lib;
-
   // Ordenar páginas por (tamanho, SKU) antes de copiar — requisito:
   // "etiquetas devem ficar sempre ordenadas por tamanho e SKU, mesmo em grupos misturados"
   const sortedPages = sortPagesForPrint(pagesToInclude);
   const pageIndexes = sortedPages.map((p) => p.index);
 
   // Cópia defensiva — evita detach do buffer entre múltiplas chamadas
-  const srcDoc = (await PDFDocument.load(new Uint8Array(sourceBytes), {
+  const srcDoc = await PDFDocument.load(new Uint8Array(sourceBytes), {
     ignoreEncryption: true,
-  })) as unknown;
-  const newDoc = (await PDFDocument.create()) as {
-    copyPages: (doc: unknown, idx: number[]) => Promise<unknown[]>;
-    addPage: (p: unknown) => void;
-    embedFont: (f: unknown) => Promise<unknown>;
-    embedPng: (b: Uint8Array) => Promise<unknown>;
-    embedJpg: (b: Uint8Array) => Promise<unknown>;
-    save: () => Promise<Uint8Array>;
-  };
+  });
+  const newDoc = await PDFDocument.create();
   const copied = await newDoc.copyPages(srcDoc, pageIndexes);
 
-  // Carrega e embute as imagens de cada modelo uma única vez
-  const embeddedModelImages = new Map<string, unknown>();
+  // Carrega e embute as imagens de cada modelo uma única vez. Tipo é a
+  // união de PDFImage retornada por embedPng/embedJpg.
+  type EmbeddedImage = Awaited<ReturnType<typeof newDoc.embedPng>>;
+  const embeddedModelImages = new Map<string, EmbeddedImage>();
   const neededModels = new Set<string>();
   for (const p of pagesToInclude) p.products.forEach((m) => neededModels.add(m));
   for (const model of neededModels) {
@@ -563,39 +500,10 @@ export async function generateFilteredPDF(
   }
 
   for (let i = 0; i < copied.length; i++) {
-    const rawPage = copied[i];
+    const page = copied[i];
     const pageInfo = sortedPages[i];
-    newDoc.addPage(rawPage);
-    const page = rawPage as {
-      getSize: () => { width: number; height: number };
-      drawRectangle: (o: {
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-        color: unknown;
-      }) => void;
-      drawText: (t: string, o: object) => void;
-      drawCircle: (o: {
-        x: number;
-        y: number;
-        size: number;
-        color?: unknown;
-        borderColor?: unknown;
-        borderWidth?: number;
-      }) => void;
-      drawLine: (o: {
-        start: { x: number; y: number };
-        end: { x: number; y: number };
-        thickness: number;
-        color: unknown;
-      }) => void;
-      drawImage: (
-        img: unknown,
-        o: { x: number; y: number; width: number; height: number },
-      ) => void;
-    };
-    const { width, height } = page.getSize();
+    newDoc.addPage(page);
+    const { width } = page.getSize();
 
     // Quadrado preto — canto superior DIREITO (na visualização impressa).
     // O conteúdo do Upseller é desenhado com rotação 90° CCW (textos usam
@@ -643,7 +551,7 @@ export async function generateFilteredPDF(
     const iconX = iconMargin + iconRadius;
 
     const toDraw: Array<
-      | { kind: "image"; model: string; embed: unknown }
+      | { kind: "image"; model: string; embed: EmbeddedImage }
       | { kind: "moon" }
       | { kind: "ball" }
     > = [];
