@@ -12,7 +12,10 @@ import type { db as dbType } from "@/lib/db";
 
 type Tx = Parameters<Parameters<typeof dbType.transaction>[0]>[0];
 
-const RETENCAO_MS = 48 * 60 * 60 * 1000;
+// Retenção do registro completo (blob + tracking IDs) — 10 dias.
+// Tracking IDs são consultados pra impedir reimpressão de etiquetas
+// duplicadas dentro desse intervalo.
+const RETENCAO_MS = 10 * 24 * 60 * 60 * 1000;
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -66,6 +69,7 @@ export async function GET(request: NextRequest) {
           fileName: historicoImpressaoEtiquetas.fileName,
           groupLabel: historicoImpressaoEtiquetas.groupLabel,
           subgroupIds: historicoImpressaoEtiquetas.subgroupIds,
+          trackingIds: historicoImpressaoEtiquetas.trackingIds,
           pageCount: historicoImpressaoEtiquetas.pageCount,
           expiresAt: historicoImpressaoEtiquetas.expiresAt,
           createdAt: historicoImpressaoEtiquetas.createdAt,
@@ -112,6 +116,7 @@ export async function POST(request: NextRequest) {
       groupLabel?: unknown;
       pageCount?: unknown;
       subgroupIds?: unknown;
+      trackingIds?: unknown;
       skusCount?: unknown;
       sessaoId?: unknown;
     } | null;
@@ -141,6 +146,17 @@ export async function POST(request: NextRequest) {
 
     const subgroupIds: string[] = Array.isArray(body.subgroupIds)
       ? body.subgroupIds.map((v) => String(v))
+      : [];
+
+    // Tracking IDs deduplicados e filtrados (descarta vazios).
+    const trackingIds: string[] = Array.isArray(body.trackingIds)
+      ? Array.from(
+          new Set(
+            body.trackingIds
+              .map((v) => String(v).trim())
+              .filter((v) => v.length > 0),
+          ),
+        )
       : [];
 
     const skusCount: Record<string, number> = {};
@@ -190,6 +206,7 @@ export async function POST(request: NextRequest) {
           fileName,
           groupLabel,
           subgroupIds,
+          trackingIds,
           pageCount,
           expiresAt,
         })

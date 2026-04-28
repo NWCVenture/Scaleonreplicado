@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   Download,
@@ -78,6 +79,7 @@ type HistoricoItem = {
   fileName: string;
   groupLabel: string;
   subgroupIds: string[];
+  trackingIds: string[];
   pageCount: number;
   expiresAt: string;
   createdAt: string;
@@ -91,6 +93,14 @@ type PendingDownload = {
   subgroupIds: string[];
   groupLabel: string;
   conflicting: HistoricoItem[];
+};
+
+type DuplicatePage = {
+  page: PageInfo;
+  reason: "historico" | "queue"; // duplicada vs histórico OU repetida no PDF atual
+  printedAt: string; // ISO; vazio quando reason="queue"
+  printedBy: string | null;
+  printedGroupLabel: string;
 };
 
 export default function ExpedicaoDiariaPage() {
@@ -124,6 +134,10 @@ export default function ExpedicaoDiariaPage() {
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const filterGroupsRef = useRef<FilterGroup[]>([]);
   const restoredFromStorageRef = useRef(false);
+  // Identidade do último pdfPages reconciliado pelo useEffect de derivação.
+  // Distingue: (a) novo PDF carregado → resetar seleção/expand;
+  //           (b) historic atualizou → preservar seleção/expand.
+  const reconciledPdfPagesRef = useRef<PageInfo[] | null>(null);
 
   const pagesByIndex = useMemo(() => {
     const m = new Map<number, PageInfo>();
@@ -131,12 +145,150 @@ export default function ExpedicaoDiariaPage() {
     return m;
   }, [pdfPages]);
 
-  // Conjunto de subgroupIds que já foram impressos nas últimas 48h
+  // Conjunto de subgroupIds já impressos (preserva o badge "Impresso"
+  // legado em folhas onde nenhuma página tem tracking ID).
   const printedSubgroupIds = useMemo(() => {
     const s = new Set<string>();
     historico.forEach((h) => h.subgroupIds.forEach((id) => s.add(id)));
     return s;
   }, [historico]);
+
+  // Mapa de tracking ID → entrada do histórico que o imprimiu pela 1ª vez
+  // (mais recente). Usado pra detectar duplicatas e mostrar quem/quando
+  // imprimiu antes.
+  const printedTrackingMap = useMemo(() => {
+    const m = new Map<string, HistoricoItem>();
+    // Histórico vem desc por createdAt — ao percorrer, mantém a mais recente
+    // como referência mostrada (sobrescrita silenciosa de mais antigas).
+    for (const h of historico) {
+      for (const tid of h.trackingIds) {
+        if (!m.has(tid)) m.set(tid, h);
+      }
+    }
+    return m;
+  }, [historico]);
+
+  // Páginas duplicadas e válidas. Duplicadas saem da árvore e nunca
+  // entram em PDF baixado. Considera 2 origens de duplicação:
+  //  1. trackingId já impresso no histórico (10 dias)
+  //  2. trackingId repetido dentro do próprio PDF atual (1ª ocorrência
+  //     fica em valid; demais saem em duplicatas)
+  // Páginas sem trackingId (regex não pegou) entram em valid e mostram
+  // indicador "tracking não verificado" no leaf.
+  const { duplicatePages, validPages } = useMemo(() => {
+    const dups: DuplicatePage[] = [];
+    const valid: PageInfo[] = [];
+    const seenInQueue = new Set<string>();
+    for (const p of pdfPages ?? []) {
+      const tid = p.trackingId?.trim() ?? "";
+      const fromHistorico =
+        tid && printedTrackingMap.has(tid)
+          ? printedTrackingMap.get(tid)!
+          : null;
+      if (fromHistorico) {
+        dups.push({
+          page: p,
+          reason: "historico",
+          printedAt: fromHistorico.createdAt,
+          printedBy: fromHistorico.usuarioNome,
+          printedGroupLabel: fromHistorico.groupLabel,
+        });
+      } else if (tid && seenInQueue.has(tid)) {
+        dups.push({
+          page: p,
+          reason: "queue",
+          printedAt: "",
+          printedBy: null,
+          printedGroupLabel: "Repetido no PDF atual",
+        });
+      } else {
+        if (tid) seenInQueue.add(tid);
+        valid.push(p);
+      }
+    }
+    return { duplicatePages: dups, validPages: valid };
+  }, [pdfPages, printedTrackingMap]);
+
+  // Deriva filterGroups a partir de validPages. Reconstrói quando:
+  //  • novo PDF é carregado (pdfPages muda) → reseta seleção/expand
+  //  • histórico atualiza e validPages muda → preserva seleção/expand,
+  //    só recalcula a árvore (alguma página pode ter virado duplicata).
+  useEffect(() => {
+    if (!pdfPages) {
+      setFilterGroups([]);
+      filterGroupsRef.current = [];
+      reconciledPdfPagesRef.current = null;
+      return;
+    }
+
+    const isNewPdf = reconciledPdfPagesRef.current !== pdfPages;
+    reconciledPdfPagesRef.current = pdfPages;
+
+    const previousDownloaded = new Set(
+      filterGroupsRef.current
+        .flatMap((c) =>
+          c.subGroups.flatMap((s) => s.subGroups.flatMap((q) => q.subGroups)),
+        )
+        .filter((leaf) => leaf.downloaded)
+        .map((leaf) => leaf.id),
+    );
+
+    const groups = buildFilterGroups(validPages, registeredModels);
+
+    const restored = groups.map((c) => {
+      const skus = c.subGroups.map((sk) => {
+        const qtds = sk.subGroups.map((q) => {
+          const leaves = q.subGroups.map((leaf) => ({
+            ...leaf,
+            downloaded: previousDownloaded.has(leaf.id),
+          }));
+          return {
+            ...q,
+            subGroups: leaves,
+            downloaded:
+              leaves.length > 0 && leaves.every((l) => l.downloaded),
+          };
+        });
+        return {
+          ...sk,
+          subGroups: qtds,
+          downloaded: qtds.length > 0 && qtds.every((q) => q.downloaded),
+        };
+      });
+      return {
+        ...c,
+        subGroups: skus,
+        downloaded: skus.length > 0 && skus.every((sk) => sk.downloaded),
+      };
+    });
+
+    setFilterGroups(restored);
+    filterGroupsRef.current = restored;
+
+    if (isNewPdf) {
+      const allLeaves = restored.flatMap((c) =>
+        c.subGroups.flatMap((sk) =>
+          sk.subGroups.flatMap((q) => q.subGroups),
+        ),
+      );
+      setSelectedSubIds(
+        new Set(
+          allLeaves.filter((leaf) => !leaf.downloaded).map((leaf) => leaf.id),
+        ),
+      );
+      setExpandedGroupIds(new Set(restored.map((c) => c.id)));
+      setExpandedSkuIds(
+        new Set(restored.flatMap((c) => c.subGroups.map((sk) => sk.id))),
+      );
+      setExpandedQtdIds(
+        new Set(
+          restored.flatMap((c) =>
+            c.subGroups.flatMap((sk) => sk.subGroups.map((q) => q.id)),
+          ),
+        ),
+      );
+    }
+  }, [pdfPages, validPages, registeredModels]);
 
   const loadHistorico = useCallback(async () => {
     try {
@@ -279,129 +431,95 @@ export default function ExpedicaoDiariaPage() {
     })();
   }, []);
 
-  const handlePDFFiles = useCallback(async (files: FileList | File[]) => {
-    const arr = Array.from(files).filter((f) => f.name.endsWith(".pdf"));
-    if (!arr.length) {
-      toast.error("Nenhum PDF encontrado");
-      return;
-    }
-
-    const previousDownloaded = new Set(
-      filterGroupsRef.current
-        .flatMap((c) =>
-          c.subGroups.flatMap((s) => s.subGroups.flatMap((q) => q.subGroups)),
-        )
-        .filter((s) => s.downloaded)
-        .map((s) => s.id),
-    );
-
-    setPdfPages(null);
-    setFilterGroups([]);
-    setSelectedSubIds(new Set());
-    setExpandedGroupIds(new Set());
-    setExpandedSkuIds(new Set());
-    setExpandedQtdIds(new Set());
-    setIsProcessing(true);
-    setProgress(5);
-    setProgressText("Carregando bibliotecas…");
-
-    try {
-      await loadPDFLibraries();
-      setProgress(10);
-      setProgressText("Mesclando PDFs…");
-
-      let bytes: Uint8Array;
-      if (arr.length > 1) {
-        bytes = await mergePDFs(arr);
-      } else {
-        bytes = new Uint8Array(await arr[0].arrayBuffer());
+  // Replace mode: substitui o conteúdo da fila pelos arquivos passados.
+  // Usado por removePDFAt e pela restauração de sessão (que já carrega
+  // o conjunto completo do IndexedDB).
+  const handlePDFFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const arr = Array.from(files).filter((f) => f.name.endsWith(".pdf"));
+      if (!arr.length) {
+        toast.error("Nenhum PDF encontrado");
+        return;
       }
-      setPdfBytes(bytes);
-      setPdfFiles(arr);
 
-      // Persiste no IndexedDB se houver sessão ativa
-      if (sessaoAtiva?.id) {
-        saveSessionFiles(sessaoAtiva.id, arr).catch((err) =>
-          console.error("[expedicao] falha ao salvar PDFs na sessão:", err),
+      // Reset de estado da fila — o useEffect de derivação reconstrói os
+      // grupos a partir de pdfPages quando ele é setado mais abaixo.
+      setPdfPages(null);
+      setFilterGroups([]);
+      filterGroupsRef.current = [];
+      setSelectedSubIds(new Set());
+      setExpandedGroupIds(new Set());
+      setExpandedSkuIds(new Set());
+      setExpandedQtdIds(new Set());
+      setIsProcessing(true);
+      setProgress(5);
+      setProgressText("Carregando bibliotecas…");
+
+      try {
+        await loadPDFLibraries();
+        setProgress(10);
+        setProgressText("Mesclando PDFs…");
+
+        let bytes: Uint8Array;
+        if (arr.length > 1) {
+          bytes = await mergePDFs(arr);
+        } else {
+          bytes = new Uint8Array(await arr[0].arrayBuffer());
+        }
+        setPdfBytes(bytes);
+        setPdfFiles(arr);
+
+        // Persiste no IndexedDB se houver sessão ativa
+        if (sessaoAtiva?.id) {
+          saveSessionFiles(sessaoAtiva.id, arr).catch((err) =>
+            console.error("[expedicao] falha ao salvar PDFs na sessão:", err),
+          );
+        }
+
+        const pages = await analyzePDFPages(
+          bytes,
+          (val, text) => {
+            setProgress(val);
+            setProgressText(text);
+          },
+          { models: registeredModels },
         );
+        setProgress(95);
+        setProgressText("Construindo grupos…");
+        // setPdfPages dispara o useEffect que monta filterGroups +
+        // selecionadas + expandidas a partir de validPages.
+        setPdfPages(pages);
+        setProgress(100);
+        setProgressText("Concluído");
+        toast.success(`PDF analisado: ${pages.length} página(s)`);
+      } catch (e) {
+        toast.error(`Erro ao processar PDF: ${(e as Error).message}`);
+      } finally {
+        setIsProcessing(false);
       }
+    },
+    [sessaoAtiva, registeredModels],
+  );
 
-      const pages = await analyzePDFPages(
-        bytes,
-        (val, text) => {
-          setProgress(val);
-          setProgressText(text);
-        },
-        { models: registeredModels },
+  // Append mode: anexa os novos PDFs aos que já estão na sessão. Re-merge
+  // e re-analyze do conjunto completo. Usado por drag/drop e pelo input.
+  const handlePDFAppend = useCallback(
+    (files: FileList | File[]) => {
+      const newFiles = Array.from(files).filter((f) =>
+        f.name.endsWith(".pdf"),
       );
-      setProgress(90);
-      setProgressText("Construindo grupos…");
-      const groups = buildFilterGroups(pages, registeredModels);
-
-      const restored = groups.map((c) => {
-        const skus = c.subGroups.map((sk) => {
-          const qtds = sk.subGroups.map((q) => {
-            const leaves = q.subGroups.map((leaf) => ({
-              ...leaf,
-              downloaded: previousDownloaded.has(leaf.id),
-            }));
-            return {
-              ...q,
-              subGroups: leaves,
-              downloaded:
-                leaves.length > 0 && leaves.every((l) => l.downloaded),
-            };
-          });
-          return {
-            ...sk,
-            subGroups: qtds,
-            downloaded: qtds.length > 0 && qtds.every((q) => q.downloaded),
-          };
-        });
-        return {
-          ...c,
-          subGroups: skus,
-          downloaded: skus.length > 0 && skus.every((sk) => sk.downloaded),
-        };
-      });
-
-      const freshSubIds = new Set(
-        restored
-          .flatMap((c) =>
-            c.subGroups.flatMap((sk) =>
-              sk.subGroups.flatMap((q) => q.subGroups),
-            ),
-          )
-          .filter((leaf) => !leaf.downloaded)
-          .map((leaf) => leaf.id),
+      if (!newFiles.length) {
+        toast.error("Nenhum PDF encontrado");
+        return;
+      }
+      // Não duplica arquivo com mesmo nome (replace silencioso).
+      const existing = pdfFiles.filter(
+        (f) => !newFiles.some((nf) => nf.name === f.name),
       );
-
-      setPdfPages(pages);
-      setFilterGroups(restored);
-      filterGroupsRef.current = restored;
-      setSelectedSubIds(freshSubIds);
-      setExpandedGroupIds(new Set(restored.map((c) => c.id)));
-      setExpandedSkuIds(
-        new Set(restored.flatMap((c) => c.subGroups.map((sk) => sk.id))),
-      );
-      setExpandedQtdIds(
-        new Set(
-          restored.flatMap((c) =>
-            c.subGroups.flatMap((sk) => sk.subGroups.map((q) => q.id)),
-          ),
-        ),
-      );
-      setProgress(100);
-      setProgressText("Concluído");
-      toast.success(
-        `PDF analisado: ${pages.length} página(s) em ${groups.length} grupo(s)`,
-      );
-    } catch (e) {
-      toast.error(`Erro ao processar PDF: ${(e as Error).message}`);
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [sessaoAtiva, registeredModels]);
+      void handlePDFFiles([...existing, ...newFiles]);
+    },
+    [pdfFiles, handlePDFFiles],
+  );
 
   // Restauração: quando descobrimos a sessão ativa, carregar PDFs do IDB
   useEffect(() => {
@@ -430,9 +548,9 @@ export default function ExpedicaoDiariaPage() {
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragging(false);
-      handlePDFFiles(e.dataTransfer.files);
+      handlePDFAppend(e.dataTransfer.files);
     },
-    [handlePDFFiles],
+    [handlePDFAppend],
   );
 
   const markSubgroupsDownloaded = useCallback((subIds: string[]) => {
@@ -488,6 +606,16 @@ export default function ExpedicaoDiariaPage() {
         }
       }
 
+      // Tracking IDs únicos exportados — usados pra dedup nos próximos
+      // 10 dias. Páginas sem trackingId são ignoradas (impossível dedup).
+      const trackingIds = Array.from(
+        new Set(
+          pages
+            .map((p) => p.trackingId?.trim() ?? "")
+            .filter((t) => t.length > 0),
+        ),
+      );
+
       const blobFile = new Blob([generated.bytes as BlobPart], {
         type: "application/pdf",
       });
@@ -513,6 +641,7 @@ export default function ExpedicaoDiariaPage() {
           groupLabel,
           pageCount: generated.pageCount,
           subgroupIds,
+          trackingIds,
           skusCount,
           sessaoId: sessaoAtiva?.id ?? null,
         }),
@@ -988,9 +1117,11 @@ export default function ExpedicaoDiariaPage() {
             accept=".pdf"
             multiple
             className="hidden"
-            onChange={(e) =>
-              e.target.files && handlePDFFiles(e.target.files)
-            }
+            onChange={(e) => {
+              if (e.target.files) handlePDFAppend(e.target.files);
+              // Reseta o value pra permitir reupload do mesmo arquivo
+              if (pdfInputRef.current) pdfInputRef.current.value = "";
+            }}
           />
           {pdfFiles.length > 0 && (
             <ul className="space-y-1">
@@ -1033,6 +1164,62 @@ export default function ExpedicaoDiariaPage() {
           )}
         </CardContent>
       </Card>
+
+      {pdfBytes && !isProcessing && duplicatePages.length > 0 && (
+        <Card className="border-amber-700/60 bg-amber-950/10">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-amber-300">
+              <AlertTriangle className="h-5 w-5" /> Etiquetas duplicadas — não
+              serão impressas ({duplicatePages.length})
+            </CardTitle>
+            <CardDescription>
+              Etiquetas com tracking ID já impresso nos últimos 10 dias ou
+              repetido no PDF atual. Foram removidas da fila pra evitar
+              reimpressão.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="max-h-64 overflow-auto space-y-1.5 pr-1">
+              {duplicatePages.map((d) => (
+                <div
+                  key={`${d.page.index}-${d.page.trackingId}`}
+                  className="flex items-start justify-between gap-3 rounded-md border border-amber-800/40 bg-slate-900/60 px-3 py-2 text-xs"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="font-mono font-semibold">
+                      Pág. {d.page.pageNum}
+                      {d.page.skus[0] ? ` · ${d.page.skus[0]}` : ""}
+                    </p>
+                    <p className="text-muted-foreground truncate">
+                      Tracking:{" "}
+                      <span className="font-mono">
+                        {d.page.trackingId || "—"}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="text-right text-[11px] text-muted-foreground shrink-0">
+                    {d.reason === "historico" ? (
+                      <>
+                        <p>{formatDate(d.printedAt)}</p>
+                        <p>
+                          {d.printedBy ? `por ${d.printedBy}` : ""}
+                          {d.printedGroupLabel && (
+                            <span className="block truncate max-w-[160px]">
+                              {d.printedGroupLabel}
+                            </span>
+                          )}
+                        </p>
+                      </>
+                    ) : (
+                      <p>Repetida no PDF atual</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {pdfBytes && !isProcessing && filterGroups.length > 0 && (
         <Card>
@@ -1363,6 +1550,31 @@ export default function ExpedicaoDiariaPage() {
                                                               Impresso
                                                             </span>
                                                           )}
+                                                          {(() => {
+                                                            const semTracking =
+                                                              leaf.pageIndexes.filter(
+                                                                (i) => {
+                                                                  const pg =
+                                                                    pagesByIndex.get(
+                                                                      i,
+                                                                    );
+                                                                  return (
+                                                                    !pg?.trackingId?.trim()
+                                                                  );
+                                                                },
+                                                              ).length;
+                                                            return semTracking >
+                                                              0 ? (
+                                                              <span
+                                                                title="Não foi possível verificar o tracking ID dessa(s) etiqueta(s) — serão impressas sem dedup."
+                                                                className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1 inline-flex items-center gap-0.5"
+                                                              >
+                                                                <AlertTriangle className="h-2.5 w-2.5" />
+                                                                {semTracking}{" "}
+                                                                sem tracking
+                                                              </span>
+                                                            ) : null;
+                                                          })()}
                                                         </p>
                                                         <p className="text-xs text-muted-foreground">
                                                           {

@@ -1421,6 +1421,10 @@ export const historicoImpressaoEtiquetas = pgTable(
     fileName: text("file_name").notNull(),
     groupLabel: text("group_label").notNull(),
     subgroupIds: text("subgroup_ids").array().notNull().default([]),
+    // Tracking IDs (Código de Rastreamento) das etiquetas exportadas neste
+    // PDF. Usado pra detectar duplicatas: a etiqueta nunca pode ser
+    // reimpressa enquanto este registro estiver ativo (10 dias).
+    trackingIds: text("tracking_ids").array().notNull().default([]),
     pageCount: integer("page_count").notNull().default(0),
     cleanedUp: boolean("cleaned_up").notNull().default(false),
     expiresAt: timestamp("expires_at").notNull(),

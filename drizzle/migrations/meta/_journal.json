@@ -134,6 +134,13 @@
       "when": 1777068246329,
       "tag": "0018_silly_brood",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1777335071140,
+      "tag": "0019_tan_roulette",
+      "breakpoints": true
     }
   ]
 }
