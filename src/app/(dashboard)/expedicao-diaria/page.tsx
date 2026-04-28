@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useSession } from "@/lib/auth-client";
 import {
   AlertTriangle,
   ChevronDown,
@@ -10,9 +11,8 @@ import {
   FileText,
   Filter,
   History,
-  Play,
-  Square,
-  Timer,
+  Loader2,
+  Mail,
   Trash2,
   Truck,
   Upload,
@@ -42,6 +42,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -60,18 +61,21 @@ import {
   type SkuSubGroup,
 } from "@/lib/pdf-expedicao-utils";
 import {
-  deleteSessionFiles,
-  loadSessionFiles,
-  purgeOtherSessions,
-  saveSessionFiles,
+  deleteUserFiles,
+  loadUserFiles,
+  purgeOtherUsers,
+  saveUserFiles,
 } from "@/lib/pdf-session-storage";
 
-type SessaoAtiva = {
+type DestinatarioUsuario = {
   id: string;
-  iniciouEm: string;
-  totalEtiquetas: number;
-  skusContagem: Record<string, number>;
+  nome: string | null;
+  email: string;
+  isAdmin: boolean;
+  isCurrent: boolean;
 };
+
+type RelatorioPeriodo = "hoje" | "24h" | "7d";
 
 type HistoricoItem = {
   id: string;
@@ -127,10 +131,19 @@ export default function ExpedicaoDiariaPage() {
     null,
   );
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [sessaoAtiva, setSessaoAtiva] = useState<SessaoAtiva | null>(null);
-  const [sessaoLoading, setSessaoLoading] = useState(false);
-  const [elapsedMs, setElapsedMs] = useState(0);
-  const [encerrarDialogOpen, setEncerrarDialogOpen] = useState(false);
+  const { data: session } = useSession();
+  const userId = session?.user?.id ?? null;
+  // Relatório por email (substitui o fluxo antigo de início/encerramento de sessão)
+  const [relatorioOpen, setRelatorioOpen] = useState(false);
+  const [relatorioLoading, setRelatorioLoading] = useState(false);
+  const [relatorioPeriodo, setRelatorioPeriodo] =
+    useState<RelatorioPeriodo>("hoje");
+  const [destinatariosUsuarios, setDestinatariosUsuarios] = useState<
+    DestinatarioUsuario[]
+  >([]);
+  const [destinatariosSelecionados, setDestinatariosSelecionados] = useState<
+    Set<string>
+  >(new Set());
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const filterGroupsRef = useRef<FilterGroup[]>([]);
   const restoredFromStorageRef = useRef(false);
@@ -305,46 +318,47 @@ export default function ExpedicaoDiariaPage() {
     loadHistorico();
   }, [loadHistorico]);
 
-  // Carrega sessão ativa do usuário no backend
-  const loadSessaoAtiva = useCallback(async () => {
+  // Carrega lista de destinatários da conta (admins + demais ativos) e
+  // pré-seleciona admins + usuário corrente. Re-fetch a cada abertura
+  // do dialog pra refletir mudanças de admin sem reload.
+  const loadDestinatarios = useCallback(async () => {
     try {
-      const res = await fetch("/api/expedicao-diaria/sessao");
+      const res = await fetch(
+        "/api/expedicao-diaria/relatorio/destinatarios",
+      );
       if (!res.ok) return;
-      const data = (await res.json()) as { sessao: SessaoAtiva | null };
-      setSessaoAtiva(data.sessao);
+      const data = (await res.json()) as {
+        usuarios: DestinatarioUsuario[];
+      };
+      const usuarios = data.usuarios ?? [];
+      setDestinatariosUsuarios(usuarios);
+      setDestinatariosSelecionados(
+        new Set(
+          usuarios
+            .filter((u) => u.isAdmin || u.isCurrent)
+            .map((u) => u.email),
+        ),
+      );
     } catch {
-      // silencioso
+      // silencioso — abrir dialog sem lista é OK; user pode digitar emails extras
     }
   }, []);
 
-  useEffect(() => {
-    loadSessaoAtiva();
-  }, [loadSessaoAtiva]);
-
-  // Tick do cronômetro — só conta quando há sessão ativa
-  useEffect(() => {
-    if (!sessaoAtiva) {
-      setElapsedMs(0);
+  const enviarRelatorio = useCallback(async () => {
+    const emails = Array.from(destinatariosSelecionados);
+    if (emails.length === 0) {
+      toast.error("Selecione pelo menos um destinatário");
       return;
     }
-    const start = new Date(sessaoAtiva.iniciouEm).getTime();
-    const update = () => setElapsedMs(Date.now() - start);
-    update();
-    const id = setInterval(update, 1000);
-    return () => clearInterval(id);
-  }, [sessaoAtiva]);
-
-  // Limpa sinal de restauração quando a sessão é encerrada, pra permitir
-  // restaurar novamente se uma nova sessão for aberta na mesma página.
-  useEffect(() => {
-    if (!sessaoAtiva) restoredFromStorageRef.current = false;
-  }, [sessaoAtiva]);
-
-  const iniciarSessao = useCallback(async () => {
-    setSessaoLoading(true);
+    setRelatorioLoading(true);
     try {
-      const res = await fetch("/api/expedicao-diaria/sessao", {
+      const res = await fetch("/api/expedicao-diaria/relatorio", {
         method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          destinatarios: emails,
+          periodo: relatorioPeriodo,
+        }),
       });
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as {
@@ -352,60 +366,27 @@ export default function ExpedicaoDiariaPage() {
         };
         throw new Error(err.error ?? `HTTP ${res.status}`);
       }
-      const sessao = (await res.json()) as SessaoAtiva;
-      setSessaoAtiva(sessao);
-      toast.success("Sessão iniciada");
-    } catch (e) {
-      toast.error(`Não foi possível iniciar a sessão: ${(e as Error).message}`);
-    } finally {
-      setSessaoLoading(false);
-    }
-  }, []);
-
-  const encerrarSessao = useCallback(async () => {
-    if (!sessaoAtiva?.id) return;
-    setSessaoLoading(true);
-    try {
-      const res = await fetch(
-        `/api/expedicao-diaria/sessao/${sessaoAtiva.id}/encerrar`,
-        { method: "POST" },
-      );
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        throw new Error(err.error ?? `HTTP ${res.status}`);
-      }
       const data = (await res.json()) as {
-        email: { sent: number; failed: number };
+        sent: number;
+        failed: number;
+        totalEtiquetas: number;
       };
-      const sessaoIdEncerrada = sessaoAtiva.id;
-      setSessaoAtiva(null);
-      setEncerrarDialogOpen(false);
-      // Limpa PDFs da sessão encerrada (impressos ficam no histórico)
-      await deleteSessionFiles(sessaoIdEncerrada).catch(() => {});
-      setPdfBytes(null);
-      setPdfPages(null);
-      setPdfFiles([]);
-      setFilterGroups([]);
-      setSelectedSubIds(new Set());
-      setExpandedGroupIds(new Set());
-      filterGroupsRef.current = [];
-      if (pdfInputRef.current) pdfInputRef.current.value = "";
-
-      const emailMsg =
-        data.email.sent > 0
-          ? `Relatório enviado para ${data.email.sent} destinatário(s).`
-          : "Sessão encerrada, mas não foi possível enviar o relatório por email.";
-      toast.success(`Sessão encerrada. ${emailMsg}`);
+      if (data.sent > 0) {
+        toast.success(
+          `Relatório enviado para ${data.sent} destinatário(s) · ${data.totalEtiquetas} etiqueta(s)`,
+        );
+      } else {
+        toast.error("Falha ao enviar relatório — nenhum email entregue");
+      }
+      setRelatorioOpen(false);
     } catch (e) {
       toast.error(
-        `Não foi possível encerrar a sessão: ${(e as Error).message}`,
+        `Não foi possível enviar o relatório: ${(e as Error).message}`,
       );
     } finally {
-      setSessaoLoading(false);
+      setRelatorioLoading(false);
     }
-  }, [sessaoAtiva]);
+  }, [destinatariosSelecionados, relatorioPeriodo]);
 
   // Carrega mapa de modelos ativos com imagem cadastrada
   useEffect(() => {
@@ -469,10 +450,11 @@ export default function ExpedicaoDiariaPage() {
         setPdfBytes(bytes);
         setPdfFiles(arr);
 
-        // Persiste no IndexedDB se houver sessão ativa
-        if (sessaoAtiva?.id) {
-          saveSessionFiles(sessaoAtiva.id, arr).catch((err) =>
-            console.error("[expedicao] falha ao salvar PDFs na sessão:", err),
+        // Persiste no IndexedDB sob a chave do usuário — sobrevive a
+        // reload e troca de aba sem precisar de sessão explícita.
+        if (userId) {
+          saveUserFiles(userId, arr).catch((err) =>
+            console.error("[expedicao] falha ao salvar PDFs do usuário:", err),
           );
         }
 
@@ -498,7 +480,7 @@ export default function ExpedicaoDiariaPage() {
         setIsProcessing(false);
       }
     },
-    [sessaoAtiva, registeredModels],
+    [userId, registeredModels],
   );
 
   // Append mode: anexa os novos PDFs aos que já estão na sessão. Re-merge
@@ -521,28 +503,28 @@ export default function ExpedicaoDiariaPage() {
     [pdfFiles, handlePDFFiles],
   );
 
-  // Restauração: quando descobrimos a sessão ativa, carregar PDFs do IDB
+  // Restauração: quando o usuário logado é descoberto, carregar PDFs
+  // que ele havia subido em sessões anteriores. Roda só na 1ª vez por
+  // userId, e dropa buckets de outros usuários como housekeeping.
   useEffect(() => {
-    if (!sessaoAtiva?.id || restoredFromStorageRef.current) return;
+    if (!userId || restoredFromStorageRef.current) return;
     restoredFromStorageRef.current = true;
 
     (async () => {
       try {
-        await purgeOtherSessions([sessaoAtiva.id]);
-        const files = await loadSessionFiles(sessaoAtiva.id);
+        await purgeOtherUsers(userId);
+        const files = await loadUserFiles(userId);
         if (files.length > 0 && pdfFiles.length === 0) {
           await handlePDFFiles(files);
-          toast.info(
-            `${files.length} PDF(s) restaurado(s) da sessão em andamento`,
-          );
+          toast.info(`${files.length} PDF(s) restaurado(s)`);
         }
       } catch (err) {
-        console.error("[expedicao] falha ao restaurar PDFs da sessão:", err);
+        console.error("[expedicao] falha ao restaurar PDFs:", err);
       }
     })();
     // pdfFiles intencionalmente fora das deps — só queremos restaurar na primeira vez
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessaoAtiva, handlePDFFiles]);
+  }, [userId, handlePDFFiles]);
 
   const handlePDFDrop = useCallback(
     (e: React.DragEvent) => {
@@ -643,7 +625,7 @@ export default function ExpedicaoDiariaPage() {
           subgroupIds,
           trackingIds,
           skusCount,
-          sessaoId: sessaoAtiva?.id ?? null,
+          sessaoId: null,
         }),
       });
       if (!res.ok) {
@@ -653,7 +635,7 @@ export default function ExpedicaoDiariaPage() {
         );
       }
     },
-    [sessaoAtiva],
+    [],
   );
 
   const executeDownload = useCallback(
@@ -693,7 +675,6 @@ export default function ExpedicaoDiariaPage() {
       triggerDownloadPDF(generated.bytes, generated.fileName);
       markSubgroupsDownloaded(pending.subgroupIds);
       loadHistorico();
-      if (sessaoAtiva?.id) loadSessaoAtiva();
     },
     [
       pdfBytes,
@@ -703,8 +684,6 @@ export default function ExpedicaoDiariaPage() {
       markSubgroupsDownloaded,
       uploadToHistorico,
       loadHistorico,
-      sessaoAtiva,
-      loadSessaoAtiva,
     ],
   );
 
@@ -916,13 +895,13 @@ export default function ExpedicaoDiariaPage() {
     setProgressText("");
     filterGroupsRef.current = [];
     if (pdfInputRef.current) pdfInputRef.current.value = "";
-    if (sessaoAtiva?.id) {
-      deleteSessionFiles(sessaoAtiva.id).catch((err) =>
-        console.error("[expedicao] falha ao limpar PDFs da sessão:", err),
+    if (userId) {
+      deleteUserFiles(userId).catch((err) =>
+        console.error("[expedicao] falha ao limpar PDFs do usuário:", err),
       );
     }
     toast.success("Fila limpa");
-  }, [sessaoAtiva]);
+  }, [userId]);
 
   const removePDFAt = useCallback(
     (index: number) => {
@@ -974,19 +953,6 @@ export default function ExpedicaoDiariaPage() {
     return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   };
 
-  const formatElapsed = (ms: number): string => {
-    const totalSec = Math.max(0, Math.floor(ms / 1000));
-    const h = Math.floor(totalSec / 3600);
-    const m = Math.floor((totalSec % 3600) / 60);
-    const s = totalSec % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  };
-
-  const formatTime = (iso: string): string => {
-    const d = new Date(iso);
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  };
-
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
       <div className="flex items-start justify-between gap-4">
@@ -995,87 +961,30 @@ export default function ExpedicaoDiariaPage() {
           description="Upload de PDF de etiquetas (Upseller) · Separação por kit e tamanho pra impressão Zebra ZD220"
           icon={<Truck className="h-8 w-8 text-primary" />}
         />
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            loadHistorico();
-            setHistoryOpen(true);
-          }}
-        >
-          <History className="h-4 w-4 mr-1" /> Histórico ({historico.length})
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              loadDestinatarios();
+              setRelatorioPeriodo("hoje");
+              setRelatorioOpen(true);
+            }}
+          >
+            <Mail className="h-4 w-4 mr-1" /> Enviar Relatório
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              loadHistorico();
+              setHistoryOpen(true);
+            }}
+          >
+            <History className="h-4 w-4 mr-1" /> Histórico ({historico.length})
+          </Button>
+        </div>
       </div>
-
-      {/* Barra de sessão */}
-      <Card
-        className={cn(
-          sessaoAtiva
-            ? "border-green-800 bg-green-950/20"
-            : "border-slate-700",
-        )}
-      >
-        <CardContent className="py-3 px-4 flex items-center justify-between gap-4 flex-wrap">
-          {sessaoAtiva ? (
-            <>
-              <div className="flex items-center gap-6 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <Timer className="h-5 w-5 text-green-400" />
-                  <div>
-                    <p className="text-xs text-muted-foreground leading-tight">
-                      Sessão em andamento
-                    </p>
-                    <p className="font-mono text-xl font-bold text-green-400 leading-tight tabular-nums">
-                      {formatElapsed(elapsedMs)}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  <p>
-                    Início:{" "}
-                    <span className="font-medium text-foreground">
-                      {formatTime(sessaoAtiva.iniciouEm)}
-                    </span>
-                  </p>
-                  <p>
-                    Etiquetas geradas:{" "}
-                    <span className="font-medium text-foreground">
-                      {sessaoAtiva.totalEtiquetas}
-                    </span>
-                  </p>
-                </div>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                onClick={() => setEncerrarDialogOpen(true)}
-                disabled={sessaoLoading}
-              >
-                <Square className="h-4 w-4 mr-1" /> Encerrar sessão
-              </Button>
-            </>
-          ) : (
-            <>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Timer className="h-5 w-5" />
-                <span>
-                  Nenhuma sessão ativa. Inicie uma sessão para persistir PDFs
-                  entre trocas de página e gerar relatório ao final.
-                </span>
-              </div>
-              <Button
-                size="sm"
-                onClick={iniciarSessao}
-                disabled={sessaoLoading}
-                className="bg-green-600 hover:bg-green-700 text-white"
-              >
-                <Play className="h-4 w-4 mr-1" /> Iniciar sessão
-              </Button>
-            </>
-          )}
-        </CardContent>
-      </Card>
 
       <Card>
         <CardHeader>
@@ -1717,46 +1626,132 @@ export default function ExpedicaoDiariaPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog
-        open={encerrarDialogOpen}
-        onOpenChange={setEncerrarDialogOpen}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Encerrar sessão de expedição?</AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className="space-y-2">
-                <p>
-                  Um relatório com o resumo da sessão será gerado e enviado por
-                  email para você e para os administradores da conta.
-                </p>
-                {sessaoAtiva && (
-                  <div className="text-xs text-muted-foreground space-y-0.5">
-                    <p>Tempo decorrido: {formatElapsed(elapsedMs)}</p>
-                    <p>Etiquetas geradas: {sessaoAtiva.totalEtiquetas}</p>
-                  </div>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  Os PDFs impressos continuam disponíveis no histórico por 48h.
-                  Os PDFs não impressos serão descartados.
-                </p>
+      <Dialog open={relatorioOpen} onOpenChange={setRelatorioOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="h-5 w-5" /> Enviar Relatório por Email
+            </DialogTitle>
+            <DialogDescription>
+              Resumo agregado das etiquetas que você baixou no período. Os
+              administradores da conta vêm pré-selecionados.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                Período
+              </p>
+              <div className="flex gap-2">
+                {(
+                  [
+                    { v: "hoje" as const, label: "Hoje" },
+                    { v: "24h" as const, label: "Últimas 24h" },
+                    { v: "7d" as const, label: "Últimos 7 dias" },
+                  ]
+                ).map((opt) => (
+                  <button
+                    key={opt.v}
+                    type="button"
+                    onClick={() => setRelatorioPeriodo(opt.v)}
+                    className={cn(
+                      "flex-1 px-3 py-1.5 rounded-md text-sm border transition-colors",
+                      relatorioPeriodo === opt.v
+                        ? "border-blue-500 bg-blue-500/10 text-blue-300"
+                        : "border-slate-700 hover:border-slate-500",
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
               </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={sessaoLoading}>
-              Cancelar
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={encerrarSessao}
-              disabled={sessaoLoading}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            </div>
+
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                Destinatários ({destinatariosSelecionados.size})
+              </p>
+              <div className="max-h-56 overflow-auto space-y-1 rounded-md border border-slate-800 p-1">
+                {destinatariosUsuarios.length === 0 ? (
+                  <p className="px-2 py-3 text-xs text-muted-foreground text-center">
+                    Carregando lista de usuários...
+                  </p>
+                ) : (
+                  destinatariosUsuarios.map((u) => {
+                    const checked = destinatariosSelecionados.has(u.email);
+                    return (
+                      <label
+                        key={u.id}
+                        className={cn(
+                          "flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer hover:bg-slate-800/50",
+                          checked && "bg-slate-800/30",
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            setDestinatariosSelecionados((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(u.email);
+                              else next.delete(u.email);
+                              return next;
+                            });
+                          }}
+                          className="accent-blue-500"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium truncate">
+                            {u.nome ?? u.email}
+                            {u.isCurrent && (
+                              <span className="ml-1 text-[10px] text-muted-foreground">
+                                (você)
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {u.email}
+                          </p>
+                        </div>
+                        {u.isAdmin && (
+                          <span className="text-[10px] text-blue-400 border border-blue-700/50 rounded px-1">
+                            admin
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRelatorioOpen(false)}
+              disabled={relatorioLoading}
             >
-              <Square className="h-4 w-4 mr-1" /> Encerrar
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              Cancelar
+            </Button>
+            <Button
+              onClick={enviarRelatorio}
+              disabled={
+                relatorioLoading || destinatariosSelecionados.size === 0
+              }
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              {relatorioLoading ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : (
+                <Mail className="h-4 w-4 mr-1" />
+              )}
+              Enviar ({destinatariosSelecionados.size})
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
         <DialogContent className="max-w-2xl">

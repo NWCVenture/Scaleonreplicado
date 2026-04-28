@@ -1425,6 +1425,12 @@ export const historicoImpressaoEtiquetas = pgTable(
     // PDF. Usado pra detectar duplicatas: a etiqueta nunca pode ser
     // reimpressa enquanto este registro estiver ativo (10 dias).
     trackingIds: text("tracking_ids").array().notNull().default([]),
+    // Contagem por SKU exportada neste PDF. Permite agregar relatórios
+    // por período sem depender da sessao_expedicao.
+    skusCount: jsonb("skus_count")
+      .$type<Record<string, number>>()
+      .notNull()
+      .default({}),
     pageCount: integer("page_count").notNull().default(0),
     cleanedUp: boolean("cleaned_up").notNull().default(false),
     expiresAt: timestamp("expires_at").notNull(),

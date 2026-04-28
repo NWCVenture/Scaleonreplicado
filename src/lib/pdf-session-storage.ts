@@ -1,16 +1,15 @@
-// Persistência local de PDFs uploaded durante uma sessão de expedição.
-// Os PDFs ficam no IndexedDB, associados ao sessaoId. Ao encerrar sessão ou
-// trocar de sessão, os arquivos são descartados.
-//
-// Fora de sessão, não é usado — PDFs são mantidos só em memória.
+// Persistência local de PDFs uploaded na expedição diária. Os arquivos
+// ficam no IndexedDB associados ao userId do operador — sobrevivem a
+// reload, troca de aba e até a logout/login do mesmo usuário. O usuário
+// pode limpar manualmente via "Limpar Fila".
 
 const DB_NAME = "expedicao_session";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = "pdfs";
 
 type StoredPdf = {
-  key: string; // `${sessaoId}::${order}::${name}`
-  sessaoId: string;
+  key: string; // `${userId}::${order}::${name}`
+  bucketId: string; // userId (chave lógica de agrupamento)
   order: number;
   name: string;
   blob: Blob;
@@ -24,11 +23,21 @@ function isBrowser(): boolean {
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (e) => {
       const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
+      const oldVersion = e.oldVersion ?? 0;
+      // Em versões antigas o store usava o nome de índice "sessaoId" —
+      // recria pra alinhar com o novo nome `bucketId`.
+      if (oldVersion < 1) {
         const store = db.createObjectStore(STORE, { keyPath: "key" });
-        store.createIndex("sessaoId", "sessaoId", { unique: false });
+        store.createIndex("bucketId", "bucketId", { unique: false });
+      } else if (oldVersion < 2) {
+        // Drop e recria com índice novo. Os dados antigos (chaveados por
+        // sessaoId) ficam órfãos e são ignorados — usuário precisa
+        // re-upload, mas sem erro.
+        if (db.objectStoreNames.contains(STORE)) db.deleteObjectStore(STORE);
+        const store = db.createObjectStore(STORE, { keyPath: "key" });
+        store.createIndex("bucketId", "bucketId", { unique: false });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -51,22 +60,20 @@ async function withStore<T>(
   });
 }
 
-export async function saveSessionFiles(
-  sessaoId: string,
+export async function saveUserFiles(
+  userId: string,
   files: File[],
 ): Promise<void> {
-  if (!isBrowser()) return;
-  // Substitui completamente o set do sessaoId pelo novo
-  await deleteSessionFiles(sessaoId);
+  if (!isBrowser() || !userId) return;
+  await deleteUserFiles(userId);
   await withStore("readwrite", async (store) => {
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
       const record: StoredPdf = {
-        key: `${sessaoId}::${String(i).padStart(6, "0")}::${f.name}`,
-        sessaoId,
+        key: `${userId}::${String(i).padStart(6, "0")}::${f.name}`,
+        bucketId: userId,
         order: i,
         name: f.name,
-        // File herda de Blob — guardamos como Blob sem perda
         blob: f,
         storedAt: Date.now(),
       };
@@ -75,12 +82,12 @@ export async function saveSessionFiles(
   });
 }
 
-export async function loadSessionFiles(sessaoId: string): Promise<File[]> {
-  if (!isBrowser()) return [];
+export async function loadUserFiles(userId: string): Promise<File[]> {
+  if (!isBrowser() || !userId) return [];
   const records: StoredPdf[] = await withStore("readonly", (store) => {
     return new Promise<StoredPdf[]>((resolve, reject) => {
-      const idx = store.index("sessaoId");
-      const req = idx.getAll(IDBKeyRange.only(sessaoId));
+      const idx = store.index("bucketId");
+      const req = idx.getAll(IDBKeyRange.only(userId));
       req.onsuccess = () => resolve((req.result as StoredPdf[]) ?? []);
       req.onerror = () => reject(req.error);
     });
@@ -94,12 +101,12 @@ export async function loadSessionFiles(sessaoId: string): Promise<File[]> {
   );
 }
 
-export async function deleteSessionFiles(sessaoId: string): Promise<void> {
-  if (!isBrowser()) return;
+export async function deleteUserFiles(userId: string): Promise<void> {
+  if (!isBrowser() || !userId) return;
   await withStore("readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
-      const idx = store.index("sessaoId");
-      const req = idx.openKeyCursor(IDBKeyRange.only(sessaoId));
+      const idx = store.index("bucketId");
+      const req = idx.openKeyCursor(IDBKeyRange.only(userId));
       req.onsuccess = () => {
         const cursor = req.result;
         if (cursor) {
@@ -114,13 +121,11 @@ export async function deleteSessionFiles(sessaoId: string): Promise<void> {
   });
 }
 
-// Limpa tudo que não pertença a nenhuma das sessões ativas informadas
-// (usado como housekeeping ao montar a página).
-export async function purgeOtherSessions(
-  keepSessaoIds: string[],
-): Promise<void> {
-  if (!isBrowser()) return;
-  const keep = new Set(keepSessaoIds);
+// Limpa qualquer bucket que não pertença ao userId atual — usado como
+// housekeeping ao montar a página, evita misturar PDFs de operadores
+// diferentes que tenham logado no mesmo navegador.
+export async function purgeOtherUsers(currentUserId: string): Promise<void> {
+  if (!isBrowser() || !currentUserId) return;
   await withStore("readwrite", (store) => {
     return new Promise<void>((resolve, reject) => {
       const req = store.openCursor();
@@ -128,7 +133,7 @@ export async function purgeOtherSessions(
         const cursor = req.result;
         if (cursor) {
           const value = cursor.value as StoredPdf;
-          if (!keep.has(value.sessaoId)) cursor.delete();
+          if (value.bucketId !== currentUserId) cursor.delete();
           cursor.continue();
         } else {
           resolve();

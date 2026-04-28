@@ -1,0 +1,1 @@
+ALTER TABLE "historico_impressao_etiquetas" ADD COLUMN "skus_count" jsonb DEFAULT '{}'::jsonb NOT NULL;

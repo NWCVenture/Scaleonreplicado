@@ -207,6 +207,7 @@ export async function POST(request: NextRequest) {
           groupLabel,
           subgroupIds,
           trackingIds,
+          skusCount,
           pageCount,
           expiresAt,
         })
