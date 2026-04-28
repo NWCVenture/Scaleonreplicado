@@ -154,10 +154,16 @@ export async function analyzePDFPages(
       .map((it) => ("str" in it ? it.str : ""))
       .join(" ");
 
-    const trackMatch = text.match(
-      /C[oó]digo\s+de\s+Rastreamento[:\s]+(\d{12,14})/i,
+    // Extração de Tracking ID (Código de Rastreamento). Aplicada DEPOIS
+    // da detecção de transportadora pra usar o padrão correto. Tentativa
+    // em camadas: label explícito → barcode da transportadora → fallback
+    // genérico (só pra iMile, que não tem padrão fixo público).
+    // Falhar a extração NÃO é fatal: a etiqueta entra na fila normal, mas
+    // não participa da dedup por tracking ID.
+    const labeledTrack = text.match(
+      /(?:C[oó]digo\s+de\s+Rastreamento|Tracking(?:\s+Number|\s+ID)?|Rastreio|AWB)\s*[:#]?\s*([A-Z0-9]{8,30})/i,
     );
-    const trackingId = trackMatch ? trackMatch[1] : "";
+    let trackingId = labeledTrack ? labeledTrack[1] : "";
 
     const bensMatch = text.match(
       /IDENTIFICA[CÇ][AÃ]O\s+DOS\s+BENS([\s\S]*?)(?:\d{2}-\d{2}-\d{4}|Total\s+\d|$)/i,
@@ -226,6 +232,25 @@ export async function analyzePDFPages(
       text.match(/\b(\d{3}\.\d{3}\.\d{3}-\d{2})\b/) ||
       text.match(/\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})\b/);
     if (cpfMatch) cpfFromPDF = cpfMatch[1].replace(/\D/g, "");
+
+    // Fallback do trackingId — quando o label "Código de Rastreamento"
+    // não aparece, usa o barcode específico da transportadora (mais
+    // confiável que regex genérico, que pegaria CPF/CNPJ/telefone).
+    if (!trackingId && jtBarcode) trackingId = jtBarcode;
+    if (!trackingId && jadlogBarcode) trackingId = jadlogBarcode;
+    if (!trackingId && carrierFromPDF === "iMile") {
+      // iMile não tem prefixo único conhecido; pega a sequência numérica
+      // mais longa do PDF, descartando o CPF detectado pra não confundir.
+      const cpfDigits = cpfFromPDF;
+      const candidates = Array.from(text.matchAll(/\b(\d{12,18})\b/g))
+        .map((m) => m[1])
+        .filter((d) => d !== cpfDigits);
+      if (candidates.length > 0) {
+        // Pega a maior sequência (geralmente o AWB tem 13-14 dígitos).
+        candidates.sort((a, b) => b.length - a.length);
+        trackingId = candidates[0];
+      }
+    }
 
     // QTD total da DDC (campo "Total N" no fim da Declaração de Conteúdo).
     // É a fonte de verdade pra "quantas unidades nesta sacola" — regex de
@@ -460,8 +485,6 @@ export async function generateFilteredPDF(
   sourceBytes: Uint8Array,
   pagesToInclude: PageInfo[],
   label: string,
-  addMoon: boolean,
-  addBasketball: boolean,
   modelImages: ModelImageMap = {},
 ): Promise<GeneratedPDF> {
   // Ordenar páginas por (tamanho, SKU) antes de copiar — requisito:
@@ -542,70 +565,30 @@ export async function generateFilteredPDF(
     }
 
     // Figuras no canto inferior DIREITO (visualização impressa) —
-    // mediabox bottom-left na mesma lógica do quadrado. Progressão
-    // horizontal no display = progressão vertical (+y) na mediabox.
+    // mediabox bottom-left na mesma lógica do quadrado. Só desenha pra
+    // modelos com imagem cadastrada em modelo_principal — sem fallback
+    // vetorial (era confuso e burocrático).
     const iconRadius = 10;
-    const iconSize = iconRadius * 2; // 20pt de largura/altura para imagem
+    const iconSize = iconRadius * 2; // 20pt de largura/altura
     const iconMargin = 12;
     const iconSpacing = 28;
     const iconX = iconMargin + iconRadius;
 
-    const toDraw: Array<
-      | { kind: "image"; model: string; embed: EmbeddedImage }
-      | { kind: "moon" }
-      | { kind: "ball" }
-    > = [];
-
+    const toDraw: Array<{ model: string; embed: EmbeddedImage }> = [];
     for (const model of pageInfo.products) {
       const embed = embeddedModelImages.get(model);
-      if (embed) {
-        toDraw.push({ kind: "image", model, embed });
-      } else if (model === "LUA" && addMoon) {
-        toDraw.push({ kind: "moon" });
-      } else if (model === "NBA" && addBasketball) {
-        toDraw.push({ kind: "ball" });
-      }
+      if (embed) toDraw.push({ model, embed });
     }
 
     toDraw.forEach((item, idx) => {
       const cx = iconX;
       const cy = iconMargin + iconRadius + idx * iconSpacing;
-      if (item.kind === "image") {
-        page.drawImage(item.embed, {
-          x: cx - iconRadius,
-          y: cy - iconRadius,
-          width: iconSize,
-          height: iconSize,
-        });
-      } else if (item.kind === "moon") {
-        page.drawCircle({ x: cx, y: cy, size: iconRadius, color: rgb(0, 0, 0) });
-        page.drawCircle({
-          x: cx + 4,
-          y: cy + 3,
-          size: iconRadius - 2,
-          color: rgb(1, 1, 1),
-        });
-      } else {
-        page.drawCircle({
-          x: cx,
-          y: cy,
-          size: iconRadius,
-          borderColor: rgb(0, 0, 0),
-          borderWidth: 1,
-        });
-        page.drawLine({
-          start: { x: cx, y: cy - iconRadius },
-          end: { x: cx, y: cy + iconRadius },
-          thickness: 1,
-          color: rgb(0, 0, 0),
-        });
-        page.drawLine({
-          start: { x: cx - iconRadius, y: cy },
-          end: { x: cx + iconRadius, y: cy },
-          thickness: 1,
-          color: rgb(0, 0, 0),
-        });
-      }
+      page.drawImage(item.embed, {
+        x: cx - iconRadius,
+        y: cy - iconRadius,
+        width: iconSize,
+        height: iconSize,
+      });
     });
   }
 
@@ -634,16 +617,12 @@ export async function downloadFilteredPDF(
   sourceBytes: Uint8Array,
   pagesToInclude: PageInfo[],
   label: string,
-  addMoon: boolean,
-  addBasketball: boolean,
   modelImages: ModelImageMap = {},
 ): Promise<GeneratedPDF> {
   const generated = await generateFilteredPDF(
     sourceBytes,
     pagesToInclude,
     label,
-    addMoon,
-    addBasketball,
     modelImages,
   );
   triggerDownloadPDF(generated.bytes, generated.fileName);

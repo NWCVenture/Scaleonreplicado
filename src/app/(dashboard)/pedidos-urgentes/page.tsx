@@ -495,7 +495,7 @@ export default function PacotesUrgentes() {
   const downloadCarrierPDF = async (carrier: "iMile" | "JadLog" | "J&T", pages: PageInfo[]) => {
     if (!pdfBytes) return;
     try {
-      await downloadFilteredPDF(pdfBytes, pages, carrier, true, true);
+      await downloadFilteredPDF(pdfBytes, pages, carrier);
     } catch (e: any) {
       toast.error(`Erro ao gerar PDF ${carrier}: ${e.message}`);
     }
@@ -616,7 +616,7 @@ export default function PacotesUrgentes() {
     const pending = (pdfPages || []).filter((p) => !scannedIds.includes(p.trackingId) && p.trackingId);
     if (!pending.length) { toast.info("Nenhum pedido pendente"); return; }
     try {
-      await downloadFilteredPDF(pdfBytes, pending, "Pendentes", true, true);
+      await downloadFilteredPDF(pdfBytes, pending, "Pendentes");
     } catch (e: any) {
       toast.error(`Erro: ${e.message}`);
     }

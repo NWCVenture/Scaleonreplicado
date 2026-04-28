@@ -123,8 +123,6 @@ export default function ExpedicaoDiariaPage() {
   const [progress, setProgress] = useState(0);
   const [progressText, setProgressText] = useState("");
   const [isDragging, setIsDragging] = useState(false);
-  const [addMoon, setAddMoon] = useState(true);
-  const [addBasketball, setAddBasketball] = useState(true);
   const [historico, setHistorico] = useState<HistoricoItem[]>([]);
   const [modelImages, setModelImages] = useState<ModelImageMap>({});
   const [pendingDownload, setPendingDownload] = useState<PendingDownload | null>(
@@ -647,8 +645,6 @@ export default function ExpedicaoDiariaPage() {
           pdfBytes,
           pending.pages,
           pending.label,
-          addMoon,
-          addBasketball,
           modelImages,
         );
       } catch (e) {
@@ -678,8 +674,6 @@ export default function ExpedicaoDiariaPage() {
     },
     [
       pdfBytes,
-      addMoon,
-      addBasketball,
       modelImages,
       markSubgroupsDownloaded,
       uploadToHistorico,
@@ -1158,27 +1152,6 @@ export default function ExpedicaoDiariaPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex gap-4 text-sm">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={addMoon}
-                  onChange={(e) => setAddMoon(e.target.checked)}
-                  className="accent-blue-500"
-                />
-                Ícone lua (LUA)
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={addBasketball}
-                  onChange={(e) => setAddBasketball(e.target.checked)}
-                  className="accent-blue-500"
-                />
-                Ícone bola (NBA)
-              </label>
-            </div>
-
             <div className="space-y-2">
               {filterGroups.map((c) => {
                 const carrierExpanded = expandedGroupIds.has(c.id);
