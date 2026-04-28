@@ -77,28 +77,6 @@ export interface BipagemDetail extends BipagemRecord {
   pacotes: (BipagemPacoteRecord & { devolucao?: BipagemDevolucaoRecord })[];
 }
 
-export interface BipagemTemporariaRecord {
-  id: string;
-  tipo: TipoColeta;
-  conta: ContaOperacao;
-  total: number;
-  dados: {
-    pacotes: Array<{ codigo: string; transportadora?: string }>;
-    devolucoes: Record<
-      string,
-      {
-        skuLines: Array<{ sku: string; qtd: number }>;
-        operacao: string;
-        avaria: string;
-        obs: string;
-        tipo: string;
-      }
-    >;
-  };
-  usuarioId: string;
-  createdAt: string;
-}
-
 // Constants
 export const FUNCTION_TYPES: TipoColeta[] = [
   "FLEX",

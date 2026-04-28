@@ -1,0 +1,1 @@
+DROP TABLE "coleta_bipagem_temporaria" CASCADE;

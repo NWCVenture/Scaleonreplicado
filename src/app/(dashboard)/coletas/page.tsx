@@ -6,13 +6,22 @@ import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { cn, copyToClipboard } from "@/lib/utils";
 import {
   Loader2,
   Package,
   History,
-  Clock,
   Settings,
   Trash2,
   Copy,
@@ -22,6 +31,8 @@ import {
   Mail,
   StopCircle,
   FileText,
+  Check,
+  AlertCircle,
 } from "lucide-react";
 import { useColetasBipagem } from "@/hooks/use-coletas-bipagem";
 import {
@@ -35,10 +46,8 @@ import { ScanOverlay } from "@/components/coletas/scan-overlay";
 import { PacoteListItem } from "@/components/coletas/pacote-list-item";
 import { DevolucaoModal } from "@/components/coletas/devolucao-modal";
 import { ConfiguracoesView } from "@/components/coletas/configuracoes-view";
-import { ContinuarView } from "@/components/coletas/continuar-view";
 import { HistoricoView } from "@/components/coletas/historico-view";
 import type {
-  BipagemTemporariaRecord,
   CarrierPattern,
   SkuKitRule,
   DevolucaoFormData,
@@ -54,7 +63,8 @@ import {
   OPERATION_DISPLAY,
 } from "@/types/coletas";
 
-type ViewMode = "bipagem" | "historico" | "continuar" | "configuracoes";
+type ViewMode = "bipagem" | "historico" | "configuracoes";
+type SaveState = "idle" | "saving" | "saved" | "error";
 
 export default function ColetasPage() {
   const { data: session, isPending } = useSession();
@@ -62,9 +72,6 @@ export default function ColetasPage() {
 
   // Bipagem hook
   const bipagem = useColetasBipagem();
-
-  // Temporarias
-  const [temporarias, setTemporarias] = useState<BipagemTemporariaRecord[]>([]);
 
   // Overlay
   const [overlayVisible, setOverlayVisible] = useState(false);
@@ -92,6 +99,19 @@ export default function ColetasPage() {
   // Substitui o localStorage. Sessão com TTL de 8h, gerenciada no servidor.
   const [sessaoId, setSessaoId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+
+  // Sessão ativa achada no GET inicial — abre modal "Continuar / Finalizar agora".
+  // Não carregamos no estado client antes do usuário decidir.
+  const [pendingRestore, setPendingRestore] = useState<{
+    id: string;
+    tipo: TipoColeta;
+    conta: ContaOperacao;
+    pacotes: string[];
+    devolucoesData: Record<string, unknown>;
+    iniciouEm: string;
+  } | null>(null);
+  const [isFinalizingFromRestore, setIsFinalizingFromRestore] = useState(false);
 
   // Refs
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -101,6 +121,17 @@ export default function ColetasPage() {
   const sessaoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const sessaoIdRef = useRef<string | null>(null);
   sessaoIdRef.current = sessaoId;
+  // Idempotência: evita criar sessão 2× em React StrictMode (o effect roda 2×
+  // em dev). Sem isso, o 2º POST colide no índice único `status=ativa`.
+  const initLockRef = useRef(false);
+  // Snapshot do último body que tentamos salvar — usado pelo botão de retry
+  // manual quando saveState === 'error'.
+  const lastSaveBodyRef = useRef<string | null>(null);
+  // Re-entrância: o useEffect que dispara handleFinalize pelo modal de
+  // restauração roda múltiplas vezes durante a execução (cada setState dentro
+  // do handleFinalize causa re-render → handleFinalize muda de identidade →
+  // useEffect roda de novo). Esse ref garante que só uma execução acontece.
+  const finalizingFromRestoreRef = useRef(false);
 
   // Restore sessão ativa do servidor ao montar
   useEffect(() => {
@@ -121,29 +152,28 @@ export default function ColetasPage() {
           conta: ContaOperacao;
           pacotes: string[];
           devolucoesData: Record<string, unknown>;
+          iniciouEm: string;
         } | null;
 
         if (cancelado) return;
 
-        if (s) {
+        if (s && s.pacotes?.length > 0) {
+          // Sessão com dados — abre modal pra usuário escolher continuar ou
+          // finalizar agora. Não carregamos no estado antes da decisão pra
+          // evitar auto-save sobrescrever a sessão se o usuário simplesmente
+          // não fizer nada.
+          setPendingRestore({
+            id: s.id,
+            tipo: s.tipo,
+            conta: s.conta,
+            pacotes: s.pacotes,
+            devolucoesData: s.devolucoesData ?? {},
+            iniciouEm: s.iniciouEm,
+          });
+        } else if (s) {
+          // Sessão vazia — adota silenciosamente
           setSessaoId(s.id);
           sessaoIdRef.current = s.id;
-          if (s.pacotes?.length > 0) {
-            bipagem.loadFromTemp(
-              {
-                pacotes: s.pacotes.map((codigo) => ({ codigo })),
-                devolucoes: (s.devolucoesData ?? {}) as Record<
-                  string,
-                  Record<string, unknown>
-                >,
-              },
-              s.tipo,
-              s.conta,
-            );
-            toast.info(
-              `Sessão restaurada (${s.pacotes.length} pacote(s))`,
-            );
-          }
         }
       } catch {
         // Offline ou servidor instável — segue sem sessão restaurada
@@ -158,47 +188,116 @@ export default function ColetasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
-  // Auto-save sessão no servidor (debounce 800ms). Cria sessão se ainda
-  // não existir E houver dados pra salvar.
+  // PATCH com retry exponencial (1s, 2s, 4s). Atualiza saveState a cada
+  // tentativa pra UI refletir 'saving' / 'saved' / 'error'.
+  const patchSessaoWithRetry = useCallback(
+    async (id: string, body: string): Promise<boolean> => {
+      const delays = [0, 1000, 2000, 4000];
+      for (let i = 0; i < delays.length; i++) {
+        if (delays[i] > 0) {
+          await new Promise((r) => setTimeout(r, delays[i]));
+        }
+        setSaveState("saving");
+        try {
+          const res = await fetch(`/api/coletas/sessao/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body,
+          });
+          if (res.ok) {
+            setSaveState("saved");
+            return true;
+          }
+        } catch {
+          // tenta de novo
+        }
+      }
+      setSaveState("error");
+      return false;
+    },
+    [],
+  );
+
+  // 1ª gravação: cria sessão e faz o primeiro PATCH em sequência, sem
+  // debounce. Em falha do POST, libera o lock pra próxima bipagem tentar
+  // de novo (caso a rede volte).
+  const initSessaoAndFlush = useCallback(
+    async (body: string) => {
+      setSaveState("saving");
+      let id: string | null = null;
+      try {
+        const res = await fetch("/api/coletas/sessao", { method: "POST" });
+        if (!res.ok) throw new Error(`POST sessão falhou: ${res.status}`);
+        const created = await res.json();
+        id = created.id as string;
+      } catch {
+        setSaveState("error");
+        initLockRef.current = false;
+        toast.error("Falha ao iniciar sessão — bipe novamente para tentar");
+        return;
+      }
+      setSessaoId(id);
+      sessaoIdRef.current = id;
+      await patchSessaoWithRetry(id, body);
+    },
+    [patchSessaoWithRetry],
+  );
+
+  // Retry manual quando o badge mostrar 'error'
+  const handleRetrySave = useCallback(() => {
+    const id = sessaoIdRef.current;
+    const body = lastSaveBodyRef.current;
+    if (!id || !body) return;
+    void patchSessaoWithRetry(id, body);
+  }, [patchSessaoWithRetry]);
+
+  // Auto-save sessão no servidor.
+  //
+  // Estratégia em duas pontas:
+  //  1) **1ª gravação imediata** — quando ainda não há sessão e o usuário
+  //     acabou de bipar o primeiro pacote, criamos a sessão E fazemos o
+  //     primeiro PATCH SEM esperar 800ms. Isso fecha a janela em que o
+  //     usuário podia fechar a aba antes do flush e perder o pacote.
+  //  2) **Saves seguintes** — debounce 800ms, com retry exponencial em caso
+  //     de falha de rede.
+  //
+  // Cria sessão sob demanda (sem dados, sem sessão → nada acontece).
   useEffect(() => {
     if (!hydrated || !session) return;
+    // Suprime auto-save durante finalize/restore-finalize: evita PATCH contra
+    // sessão que está sendo encerrada e gera saveState='error' barulhento.
+    if (isFinalizing || isFinalizingFromRestore) return;
+    // Modal de restauração aberto: não salva — usuário ainda não decidiu.
+    if (pendingRestore) return;
 
-    // Sem dados e sem sessão — nada a fazer
     const hasData =
       bipagem.ids.length > 0 ||
       Object.keys(bipagem.devolucoesData).length > 0;
     if (!hasData && !sessaoIdRef.current) return;
 
+    const body = JSON.stringify({
+      tipo: bipagem.currentFunction,
+      conta: bipagem.currentAccount,
+      pacotes: bipagem.ids,
+      devolucoesData: bipagem.devolucoesData,
+    });
+    lastSaveBodyRef.current = body;
+
+    // 1ª gravação: cria sessão + PATCH imediatos (sem debounce)
+    if (!sessaoIdRef.current && hasData && !initLockRef.current) {
+      initLockRef.current = true;
+      void initSessaoAndFlush(body);
+      return;
+    }
+
+    // Saves subsequentes: debounce 800ms
     if (sessaoSaveTimeoutRef.current) {
       clearTimeout(sessaoSaveTimeoutRef.current);
     }
-    sessaoSaveTimeoutRef.current = setTimeout(async () => {
-      try {
-        let id = sessaoIdRef.current;
-        if (!id) {
-          // Cria sessão na primeira bipagem
-          if (!hasData) return;
-          const res = await fetch("/api/coletas/sessao", { method: "POST" });
-          if (!res.ok) return;
-          const created = await res.json();
-          id = created.id as string;
-          setSessaoId(id);
-          sessaoIdRef.current = id;
-        }
-
-        await fetch(`/api/coletas/sessao/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            tipo: bipagem.currentFunction,
-            conta: bipagem.currentAccount,
-            pacotes: bipagem.ids,
-            devolucoesData: bipagem.devolucoesData,
-          }),
-        });
-      } catch {
-        // best-effort — próximo save cobre
-      }
+    sessaoSaveTimeoutRef.current = setTimeout(() => {
+      const id = sessaoIdRef.current;
+      if (!id) return;
+      void patchSessaoWithRetry(id, body);
     }, 800);
 
     return () => {
@@ -206,6 +305,7 @@ export default function ColetasPage() {
         clearTimeout(sessaoSaveTimeoutRef.current);
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     hydrated,
     session,
@@ -213,7 +313,17 @@ export default function ColetasPage() {
     bipagem.devolucoesData,
     bipagem.currentFunction,
     bipagem.currentAccount,
+    isFinalizing,
+    isFinalizingFromRestore,
+    pendingRestore,
   ]);
+
+  // Auto-reset 'saved' → 'idle' depois de 3s (badge volta a sumir)
+  useEffect(() => {
+    if (saveState !== "saved") return;
+    const t = setTimeout(() => setSaveState("idle"), 3000);
+    return () => clearTimeout(t);
+  }, [saveState]);
 
   // ── Fetch configs on mount ────────────────────────────────────────────────
   useEffect(() => {
@@ -222,11 +332,10 @@ export default function ColetasPage() {
     const fetchAll = async () => {
       setIsLoading(true);
       try {
-        const [transpRes, kitRes, skuRes, tempRes] = await Promise.all([
+        const [transpRes, kitRes, skuRes] = await Promise.all([
           fetch("/api/coletas/configuracoes/transportadoras"),
           fetch("/api/coletas/configuracoes/kit-rules"),
           fetch("/api/sku-catalogo"),
-          fetch("/api/coletas/temporarias"),
         ]);
 
         if (transpRes.ok) {
@@ -268,11 +377,6 @@ export default function ColetasPage() {
             skus.map((s: { codigo: string }) => s.codigo),
           );
         }
-
-        if (tempRes.ok) {
-          const { temporarias: temps } = await tempRes.json();
-          setTemporarias(temps);
-        }
       } catch {
         toast.error("Erro ao carregar configuracoes");
       } finally {
@@ -290,13 +394,14 @@ export default function ColetasPage() {
     const interval = setInterval(() => {
       if (
         !devolucaoModalOpen &&
+        !pendingRestore &&
         document.activeElement !== inputRef.current
       ) {
         inputRef.current?.focus();
       }
     }, 500);
     return () => clearInterval(interval);
-  }, [viewMode, devolucaoModalOpen]);
+  }, [viewMode, devolucaoModalOpen, pendingRestore]);
 
   // ── Auto-scroll list ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -448,6 +553,9 @@ export default function ColetasPage() {
       bipagem.clear();
       setSessaoId(null);
       sessaoIdRef.current = null;
+      initLockRef.current = false;
+      lastSaveBodyRef.current = null;
+      setSaveState("idle");
       setIsForcingStop(false);
       toast.info("Sessão encerrada");
     }
@@ -558,39 +666,13 @@ export default function ColetasPage() {
     bipagem.currentAccount,
   ]);
 
-  // ── Resume Temp ───────────────────────────────────────────────────────────
-  const handleResumeTemp = useCallback(
-    (temp: BipagemTemporariaRecord) => {
-      bipagem.loadFromTemp(temp.dados, temp.tipo, temp.conta);
-      setTemporarias((prev) => prev.filter((t) => t.id !== temp.id));
-      setViewMode("bipagem");
-      toast.success(`Bipagem carregada! (${temp.total} itens)`);
-      setTimeout(() => inputRef.current?.focus(), 100);
-
-      // Delete from server
-      fetch(`/api/coletas/temporarias/${temp.id}`, { method: "DELETE" }).catch(
-        () => {},
-      );
-    },
-    [bipagem],
-  );
-
-  // ── Delete Temp ───────────────────────────────────────────────────────────
-  const handleDeleteTemp = useCallback(async (id: string) => {
-    try {
-      await fetch(`/api/coletas/temporarias/${id}`, { method: "DELETE" });
-      setTemporarias((prev) => prev.filter((t) => t.id !== id));
-      toast.success("Bipagem temporaria excluida");
-    } catch {
-      toast.error("Erro ao excluir bipagem temporaria");
-    }
-  }, []);
-
   // ── Finalize ──────────────────────────────────────────────────────────────
-  const handleFinalize = useCallback(async () => {
+  // Retorna `true` em sucesso, `false` em qualquer falha. O modal de
+  // restauração usa esse retorno pra decidir se fecha ou mantém aberto.
+  const handleFinalize = useCallback(async (): Promise<boolean> => {
     if (!bipagem.ids.length) {
       toast.error("Sem itens para finalizar");
-      return;
+      return false;
     }
 
     setIsFinalizing(true);
@@ -675,31 +757,10 @@ export default function ColetasPage() {
         URL.revokeObjectURL(url);
       }
 
-      // Send email
-      setIsSendingEmail(true);
-      try {
-        const emailRes = await fetch("/api/coletas/email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ids: bipagem.ids,
-            conta: accDisplay,
-            tipo: currentFn,
-          }),
-        });
-        if (emailRes.ok) {
-          const emailData = await emailRes.json();
-          if (emailData.simulated) {
-            toast.warning("Servidor de e-mail nao configurado");
-          } else {
-            toast.success("E-mail enviado!");
-          }
-        }
-      } catch {
-        toast.warning("E-mail nao enviado - servidor offline");
-      } finally {
-        setIsSendingEmail(false);
-      }
+      // TODO(coletas): envio automático de email no finalize foi removido
+      // em 2026-04-27 a pedido. Revisitar a regra (talvez condicional ao
+      // tipo da coleta, ou opt-in via toggle no UI). O botão "Enviar
+      // Resumo" continua disponível para envio manual.
 
       // Encerra a sessão com motivo=finalizada
       if (sessaoIdRef.current) {
@@ -716,13 +777,83 @@ export default function ColetasPage() {
       }
 
       bipagem.clear();
+      initLockRef.current = false;
+      lastSaveBodyRef.current = null;
+      setSaveState("idle");
       toast.success("Bipagem finalizada!");
+      return true;
     } catch {
       toast.error("Erro ao finalizar bipagem");
+      return false;
     } finally {
       setIsFinalizing(false);
     }
   }, [bipagem]);
+
+  // ── Modal de restauração de sessão ──────────────────────────────────────
+  const handleContinueRestore = useCallback(() => {
+    if (!pendingRestore) return;
+    bipagem.loadFromTemp(
+      {
+        pacotes: pendingRestore.pacotes.map((codigo) => ({ codigo })),
+        devolucoes: pendingRestore.devolucoesData as Record<
+          string,
+          Record<string, unknown>
+        >,
+      },
+      pendingRestore.tipo,
+      pendingRestore.conta,
+    );
+    setSessaoId(pendingRestore.id);
+    sessaoIdRef.current = pendingRestore.id;
+    // Evita o auto-save de criar uma nova sessão por cima desta
+    initLockRef.current = true;
+    setPendingRestore(null);
+    toast.success(`Bipagem retomada (${pendingRestore.pacotes.length})`);
+  }, [pendingRestore, bipagem]);
+
+  // "Finalizar agora": carrega no estado + dispara handleFinalize quando o
+  // estado tiver propagado. Em falha, mantém modal aberto pra nova tentativa.
+  const handleFinalizeFromRestore = useCallback(() => {
+    if (!pendingRestore) return;
+    bipagem.loadFromTemp(
+      {
+        pacotes: pendingRestore.pacotes.map((codigo) => ({ codigo })),
+        devolucoes: pendingRestore.devolucoesData as Record<
+          string,
+          Record<string, unknown>
+        >,
+      },
+      pendingRestore.tipo,
+      pendingRestore.conta,
+    );
+    setSessaoId(pendingRestore.id);
+    sessaoIdRef.current = pendingRestore.id;
+    initLockRef.current = true;
+    setIsFinalizingFromRestore(true);
+  }, [pendingRestore, bipagem]);
+
+  // Dispara handleFinalize após o estado ter propagado (esperar bipagem.ids
+  // refletir os pacotes da sessão restaurada). Sem este indireto, handleFinalize
+  // captura o array vazio anterior por closure.
+  //
+  // O useEffect dispara várias vezes durante a execução do handleFinalize
+  // (setState intermediários re-renderizam → handleFinalize muda de identidade
+  // por ser useCallback([bipagem]) → effect roda de novo). O ref abaixo
+  // garante que apenas a primeira execução faz fetch — re-entradas são
+  // ignoradas até a anterior terminar.
+  useEffect(() => {
+    if (!isFinalizingFromRestore || !pendingRestore) return;
+    if (bipagem.ids.length !== pendingRestore.pacotes.length) return;
+    if (finalizingFromRestoreRef.current) return;
+    finalizingFromRestoreRef.current = true;
+    (async () => {
+      const ok = await handleFinalize();
+      setIsFinalizingFromRestore(false);
+      if (ok) setPendingRestore(null);
+      finalizingFromRestoreRef.current = false;
+    })();
+  }, [isFinalizingFromRestore, pendingRestore, bipagem.ids, handleFinalize]);
 
   // ── Devolucao Modal ───────────────────────────────────────────────────────
   const handleOpenDevolucao = useCallback((pacoteId: string) => {
@@ -1055,6 +1186,74 @@ export default function ColetasPage() {
         onSave={handleSaveDevolucao}
       />
 
+      {/* Modal: sessão em andamento na restauração */}
+      <AlertDialog open={pendingRestore !== null}>
+        <AlertDialogContent
+          className="bg-zinc-950 border-zinc-800"
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-zinc-100">
+              Sessão de bipagem em andamento
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-zinc-400">
+              {pendingRestore && (
+                <>
+                  Você tem{" "}
+                  <strong className="text-zinc-100">
+                    {pendingRestore.pacotes.length} pacote(s)
+                  </strong>{" "}
+                  de uma sessão anterior (
+                  <strong className="text-zinc-200">
+                    {FUNCTION_DISPLAY[pendingRestore.tipo]}
+                  </strong>{" "}
+                  ·{" "}
+                  <strong className="text-zinc-200">
+                    {OPERATION_DISPLAY[pendingRestore.conta]}
+                  </strong>
+                  ) iniciada em{" "}
+                  <strong className="text-zinc-200">
+                    {new Date(pendingRestore.iniciouEm).toLocaleString(
+                      "pt-BR",
+                    )}
+                  </strong>
+                  . Deseja continuar ou finalizá-la agora?
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={handleContinueRestore}
+              disabled={isFinalizingFromRestore}
+              className="border-zinc-700 text-zinc-200 hover:bg-zinc-800"
+            >
+              Continuar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                // Impede o AlertDialog de fechar automaticamente — o modal só
+                // fecha quando o handleFinalize confirma sucesso (via useEffect).
+                e.preventDefault();
+                handleFinalizeFromRestore();
+              }}
+              disabled={isFinalizingFromRestore || isFinalizing}
+              className="bg-green-700 hover:bg-green-800 text-white"
+            >
+              {isFinalizingFromRestore || isFinalizing ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Finalizando...
+                </>
+              ) : (
+                "Finalizar agora"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Header */}
       <PageHeader
         title="Coletas"
@@ -1067,7 +1266,6 @@ export default function ColetasPage() {
         {[
           { key: "bipagem" as const, label: "Bipagem", icon: Package },
           { key: "historico" as const, label: "Historico", icon: History },
-          { key: "continuar" as const, label: "Continuar", icon: Clock },
           { key: "configuracoes" as const, label: "Configuracoes", icon: Settings },
         ].map(({ key, label, icon: Icon }) => (
           <Button
@@ -1082,11 +1280,6 @@ export default function ColetasPage() {
           >
             <Icon className="mr-2 h-4 w-4" />
             {label}
-            {key === "continuar" && temporarias.length > 0 && (
-              <span className="ml-1 bg-zinc-700 text-zinc-200 text-xs px-1.5 py-0.5 rounded-full">
-                {temporarias.length}
-              </span>
-            )}
           </Button>
         ))}
       </div>
@@ -1357,6 +1550,46 @@ export default function ColetasPage() {
               )}
               Finalizar
             </Button>
+            {saveState !== "idle" && (
+              <button
+                type="button"
+                onClick={saveState === "error" ? handleRetrySave : undefined}
+                disabled={saveState !== "error"}
+                className={cn(
+                  "ml-auto self-center inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium",
+                  saveState === "saving" &&
+                    "bg-zinc-800 text-zinc-300 cursor-default",
+                  saveState === "saved" &&
+                    "bg-green-900/30 text-green-400 cursor-default",
+                  saveState === "error" &&
+                    "bg-red-900/40 text-red-300 hover:bg-red-900/60 cursor-pointer",
+                )}
+                title={
+                  saveState === "error"
+                    ? "Falha ao salvar — clique para tentar novamente"
+                    : undefined
+                }
+              >
+                {saveState === "saving" && (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    salvando...
+                  </>
+                )}
+                {saveState === "saved" && (
+                  <>
+                    <Check className="h-3 w-3" />
+                    salvo
+                  </>
+                )}
+                {saveState === "error" && (
+                  <>
+                    <AlertCircle className="h-3 w-3" />
+                    falha — clique para tentar
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1369,15 +1602,6 @@ export default function ColetasPage() {
           onExportResumido={handleExportResumido}
           onCopyCodes={handleCopyCodes}
           onResumeBipagem={handleResumeBipagem}
-        />
-      )}
-
-      {/* ── CONTINUAR VIEW ───────────────────────────────────────────── */}
-      {viewMode === "continuar" && (
-        <ContinuarView
-          temporarias={temporarias}
-          onResume={handleResumeTemp}
-          onDelete={handleDeleteTemp}
         />
       )}
 

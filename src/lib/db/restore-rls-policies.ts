@@ -38,7 +38,6 @@ const TABELAS_PADRAO = [
   "coleta_bipagem_pacote",
   "coleta_devolucao",
   "coleta_devolucao_sku",
-  "coleta_bipagem_temporaria",
   "alteracao_estoque",
   "produto_avariado",
   "estante",

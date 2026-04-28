@@ -435,40 +435,6 @@ export const coletaDevolucaoSku = pgTable(
   (table) => [index("idx_coleta_devolucao_sku_conta").on(table.contaId)]
 );
 
-export const coletaBipagemTemporaria = pgTable(
-  "coleta_bipagem_temporaria",
-  {
-    id: text("id").primaryKey(),
-    tipo: tipoColetaEnum("tipo").notNull(),
-    conta: contaOperacaoEnum("conta").notNull(),
-    total: integer("total").notNull(),
-    dados: json("dados")
-      .$type<{
-        pacotes: Array<{ codigo: string; transportadora?: string }>;
-        devolucoes: Record<
-          string,
-          {
-            skuLines: Array<{ sku: string; qtd: number }>;
-            operacao: string;
-            avaria: string;
-            obs: string;
-            tipo: string;
-          }
-        >;
-      }>()
-      .notNull(),
-    usuarioId: text("usuario_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
-    contaId: text("conta_id")
-      .notNull()
-      .default("nwc-root")
-      .references(() => conta.id, { onDelete: "cascade" }),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
-  },
-  (table) => [index("idx_coleta_temp_conta").on(table.contaId)]
-);
-
 // ============================================================
 // 7. DOMAIN TABLES — Alteração de Estoque (Stock Transfers)
 // ============================================================
@@ -1007,8 +973,6 @@ export type ColetaBipagem = typeof coletaBipagem.$inferSelect;
 export type ColetaBipagemPacote = typeof coletaBipagemPacote.$inferSelect;
 export type ColetaDevolucao = typeof coletaDevolucao.$inferSelect;
 export type ColetaDevolucaoSku = typeof coletaDevolucaoSku.$inferSelect;
-export type ColetaBipagemTemporaria =
-  typeof coletaBipagemTemporaria.$inferSelect;
 export type TransportadoraPadrao = typeof transportadoraPadrao.$inferSelect;
 export type AlteracaoEstoque = typeof alteracaoEstoque.$inferSelect;
 export type ProdutoAvariado = typeof produtoAvariado.$inferSelect;

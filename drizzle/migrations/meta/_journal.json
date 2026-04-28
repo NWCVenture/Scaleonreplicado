@@ -148,6 +148,13 @@
       "when": 1777336810240,
       "tag": "0020_unknown_harrier",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1777337679217,
+      "tag": "0021_light_squirrel_girl",
+      "breakpoints": true
     }
   ]
 }
