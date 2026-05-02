@@ -1364,9 +1364,10 @@ export type SessaoColetas = InferSelectModel<typeof sessaoColetas>;
 // ============================================================
 // HISTÓRICO DE IMPRESSÃO DE ETIQUETAS (Expedição Diária)
 // ============================================================
-// Retenção: 48h. Usado para detectar reimpressão e permitir
-// rebaixar o PDF caso necessário. sessao_id é nullable — impressões
-// fora de sessão ainda são permitidas (comportamento legado).
+// Retenção: 10 dias (blob PDF) — janela de dedup real é 30 dias via tabela
+// `tracking_id_impresso`. Esta tabela mantém o PDF baixável e o snapshot de
+// metadados. sessao_id é nullable — impressões fora de sessão ainda são
+// permitidas (comportamento legado).
 
 export const historicoImpressaoEtiquetas = pgTable(
   "historico_impressao_etiquetas",
@@ -1386,8 +1387,9 @@ export const historicoImpressaoEtiquetas = pgTable(
     groupLabel: text("group_label").notNull(),
     subgroupIds: text("subgroup_ids").array().notNull().default([]),
     // Tracking IDs (Código de Rastreamento) das etiquetas exportadas neste
-    // PDF. Usado pra detectar duplicatas: a etiqueta nunca pode ser
-    // reimpressa enquanto este registro estiver ativo (10 dias).
+    // PDF. Snapshot legado — a dedup real vive na tabela normalizada
+    // `tracking_id_impresso` (janela de 30 dias). Mantido pra debug e pra
+    // facilitar remoção numa segunda PR sem mexer em código de leitura.
     trackingIds: text("tracking_ids").array().notNull().default([]),
     // Contagem por SKU exportada neste PDF. Permite agregar relatórios
     // por período sem depender da sessao_expedicao.
@@ -1410,6 +1412,43 @@ export const historicoImpressaoEtiquetas = pgTable(
 export type HistoricoImpressaoEtiquetas = InferSelectModel<
   typeof historicoImpressaoEtiquetas
 >;
+
+// Tabela normalizada de tracking IDs impressos. Uma linha por (tracking ×
+// evento de impressão) — múltiplas linhas pro mesmo tracking quando houver
+// reimpressão autorizada. Lookup batch via B-tree composto em (conta, tracking)
+// O(k log n). Janela de 30 dias controlada por `expira_em`, independente do
+// blob retention de 10 dias do histórico (FK cascade serve só pra integridade
+// caso DBA delete histórico — cleanup natural é por expira_em < now()).
+export const trackingIdImpresso = pgTable(
+  "tracking_id_impresso",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    trackingId: text("tracking_id").notNull(),
+    historicoId: text("historico_id")
+      .notNull()
+      .references(() => historicoImpressaoEtiquetas.id, { onDelete: "cascade" }),
+    usuarioId: text("usuario_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    groupLabel: text("group_label").notNull().default(""),
+    reimpressao: boolean("reimpressao").notNull().default(false),
+    impressoEm: timestamp("impresso_em").notNull().defaultNow(),
+    expiraEm: timestamp("expira_em").notNull(),
+  },
+  (table) => [
+    // Lookup batch: WHERE conta_id = ? AND tracking_id = ANY($2) AND expira_em > now()
+    index("idx_tracking_lookup").on(table.contaId, table.trackingId),
+    // Cleanup oportunístico
+    index("idx_tracking_expira").on(table.expiraEm),
+    // Audit por usuário (relatórios futuros)
+    index("idx_tracking_usuario").on(table.usuarioId, table.impressoEm),
+  ],
+);
+
+export type TrackingIdImpresso = InferSelectModel<typeof trackingIdImpresso>;
 
 // Inferred types
 export type CanalVenda = InferSelectModel<typeof canaisVenda>;

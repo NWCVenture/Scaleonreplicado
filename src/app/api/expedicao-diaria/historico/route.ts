@@ -3,19 +3,23 @@ import { auth } from "@/lib/auth";
 import {
   historicoImpressaoEtiquetas,
   sessaoExpedicao,
+  trackingIdImpresso,
   user,
 } from "@/lib/db/schema";
-import { and, desc, eq, gt, lt } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lt } from "drizzle-orm";
 import { generateId } from "@/lib/utils";
 import { withContaAtiva } from "@/lib/tenancy";
+import { verifyReprintToken } from "@/lib/expedicao-reprint-token";
 import type { db as dbType } from "@/lib/db";
 
 type Tx = Parameters<Parameters<typeof dbType.transaction>[0]>[0];
 
-// Retenção do registro completo (blob + tracking IDs) — 10 dias.
-// Tracking IDs são consultados pra impedir reimpressão de etiquetas
-// duplicadas dentro desse intervalo.
+// Retenção do blob (PDF baixado) — 10 dias. Independente da janela de dedup.
 const RETENCAO_MS = 10 * 24 * 60 * 60 * 1000;
+
+// Janela de dedup por trackingId — 30 dias. Linhas em `tracking_id_impresso`
+// vivem por esse intervalo e bloqueiam reimpressão sem token.
+const DEDUP_RETENCAO_MS = 30 * 24 * 60 * 60 * 1000;
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -38,19 +42,32 @@ async function cleanupExpired(tx: Tx, contaId: string): Promise<void> {
         lt(historicoImpressaoEtiquetas.expiresAt, new Date()),
       ),
     );
-  if (expirados.length === 0) return;
-  const { del } = await import("@vercel/blob");
-  for (const row of expirados) {
-    try {
-      await del(row.blobUrl);
-    } catch {
-      // Blob pode já ter sido removido manualmente — ignora e marca cleaned_up
+  if (expirados.length > 0) {
+    const { del } = await import("@vercel/blob");
+    for (const row of expirados) {
+      try {
+        await del(row.blobUrl);
+      } catch {
+        // Blob pode já ter sido removido manualmente — ignora e marca cleaned_up
+      }
+      await tx
+        .update(historicoImpressaoEtiquetas)
+        .set({ cleanedUp: true })
+        .where(eq(historicoImpressaoEtiquetas.id, row.id));
     }
-    await tx
-      .update(historicoImpressaoEtiquetas)
-      .set({ cleanedUp: true })
-      .where(eq(historicoImpressaoEtiquetas.id, row.id));
   }
+
+  // Cleanup da janela de dedup (30d) — independente do blob (10d).
+  // Linhas em tracking_id_impresso podem viver depois do blob ter sido
+  // removido (cleaned_up=true no histórico).
+  await tx
+    .delete(trackingIdImpresso)
+    .where(
+      and(
+        eq(trackingIdImpresso.contaId, contaId),
+        lt(trackingIdImpresso.expiraEm, new Date()),
+      ),
+    );
 }
 
 export async function GET(request: NextRequest) {
@@ -119,6 +136,7 @@ export async function POST(request: NextRequest) {
       trackingIds?: unknown;
       skusCount?: unknown;
       sessaoId?: unknown;
+      reprintToken?: unknown;
     } | null;
 
     if (!body || typeof body.blobUrl !== "string" || !body.blobUrl) {
@@ -173,11 +191,61 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const reprintToken =
+      typeof body.reprintToken === "string" && body.reprintToken
+        ? body.reprintToken
+        : null;
+
     const id = generateId();
     const expiresAt = new Date(Date.now() + RETENCAO_MS);
+    const dedupExpiraEm = new Date(Date.now() + DEDUP_RETENCAO_MS);
 
-    const created = await withContaAtiva(async (tx, contaId) => {
-      // Valida que a sessão, se informada, pertence ao usuário e está ativa
+    const result = await withContaAtiva(async (tx, contaId) => {
+      // 1. Valida duplicatas server-side. Se algum tracking já estiver na
+      // janela de 30d e não houver reprintToken válido, aborta com 409.
+      let conflictingTrackings: string[] = [];
+      if (trackingIds.length > 0) {
+        const conflicts = await tx
+          .select({
+            trackingId: trackingIdImpresso.trackingId,
+          })
+          .from(trackingIdImpresso)
+          .where(
+            and(
+              eq(trackingIdImpresso.contaId, contaId),
+              inArray(trackingIdImpresso.trackingId, trackingIds),
+              gt(trackingIdImpresso.expiraEm, new Date()),
+            ),
+          );
+        conflictingTrackings = Array.from(
+          new Set(conflicts.map((c) => c.trackingId)),
+        );
+      }
+
+      let isReprint = false;
+      if (conflictingTrackings.length > 0) {
+        if (!reprintToken) {
+          return {
+            kind: "conflict" as const,
+            conflicts: conflictingTrackings,
+          };
+        }
+        const verified = verifyReprintToken(reprintToken, {
+          contaId,
+          usuarioId: session.user.id,
+          trackingIds: conflictingTrackings,
+        });
+        if (!verified.ok) {
+          return {
+            kind: "conflict" as const,
+            conflicts: conflictingTrackings,
+            reason: verified.reason,
+          };
+        }
+        isReprint = true;
+      }
+
+      // 2. Valida que a sessão, se informada, pertence ao usuário e está ativa
       let sessaoIdValida: string | null = null;
       if (sessaoId) {
         const [sessao] = await tx
@@ -213,7 +281,24 @@ export async function POST(request: NextRequest) {
         })
         .returning();
 
-      // Atualiza contadores da sessão (atomic: SELECT ... FOR UPDATE + UPDATE)
+      // 3. INSERT batch em tracking_id_impresso — uma linha por tracking,
+      // com reimpressao=true se este POST passou pelo gate de senha.
+      if (trackingIds.length > 0) {
+        await tx.insert(trackingIdImpresso).values(
+          trackingIds.map((tid) => ({
+            id: generateId(),
+            contaId,
+            trackingId: tid,
+            historicoId: id,
+            usuarioId: session.user.id,
+            groupLabel,
+            reimpressao: isReprint,
+            expiraEm: dedupExpiraEm,
+          })),
+        );
+      }
+
+      // 4. Atualiza contadores da sessão (atomic: SELECT ... FOR UPDATE + UPDATE)
       if (sessaoIdValida && pageCount > 0) {
         const [sessaoRow] = await tx
           .select({
@@ -238,10 +323,21 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      return row;
+      return { kind: "ok" as const, row };
     });
 
-    return NextResponse.json(created, { status: 201 });
+    if (result.kind === "conflict") {
+      return NextResponse.json(
+        {
+          error: "Etiquetas já impressas nos últimos 30 dias",
+          conflicts: result.conflicts,
+          reason: "reason" in result ? result.reason : undefined,
+        },
+        { status: 409 },
+      );
+    }
+
+    return NextResponse.json(result.row, { status: 201 });
   } catch (error) {
     if (isTenancyAuthError(error)) {
       return NextResponse.json({ error: "Não autorizado" }, { status: 401 });

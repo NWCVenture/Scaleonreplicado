@@ -66,6 +66,7 @@ import {
   purgeOtherUsers,
   saveUserFiles,
 } from "@/lib/pdf-session-storage";
+import type { TrackingIdDuplicate } from "@/app/api/expedicao-diaria/tracking-ids/check/route";
 
 type DestinatarioUsuario = {
   id: string;
@@ -96,7 +97,11 @@ type PendingDownload = {
   label: string;
   subgroupIds: string[];
   groupLabel: string;
-  conflicting: HistoricoItem[];
+  // Tracking IDs em conflito (impressos nos últimos 30d) — usado pra pedir
+  // senha de reimpressão e pro hash do reprintToken.
+  conflictingTrackings: string[];
+  // Detalhes (quem/quando) de cada tracking em conflito, pra exibir no dialog.
+  conflictDetails: TrackingIdDuplicate[];
 };
 
 type DuplicatePage = {
@@ -128,6 +133,8 @@ export default function ExpedicaoDiariaPage() {
   const [pendingDownload, setPendingDownload] = useState<PendingDownload | null>(
     null,
   );
+  const [reprintPassword, setReprintPassword] = useState("");
+  const [reprintLoading, setReprintLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const { data: session } = useSession();
   const userId = session?.user?.id ?? null;
@@ -164,26 +171,20 @@ export default function ExpedicaoDiariaPage() {
     return s;
   }, [historico]);
 
-  // Mapa de tracking ID → entrada do histórico que o imprimiu pela 1ª vez
-  // (mais recente). Usado pra detectar duplicatas e mostrar quem/quando
-  // imprimiu antes.
-  const printedTrackingMap = useMemo(() => {
-    const m = new Map<string, HistoricoItem>();
-    // Histórico vem desc por createdAt — ao percorrer, mantém a mais recente
-    // como referência mostrada (sobrescrita silenciosa de mais antigas).
-    for (const h of historico) {
-      for (const tid of h.trackingIds) {
-        if (!m.has(tid)) m.set(tid, h);
-      }
-    }
-    return m;
-  }, [historico]);
+  // Mapa preenchido pelo POST /tracking-ids/check após upload do PDF.
+  // tracking ID → metadata da impressão anterior dentro da janela de 30d.
+  // Em vez de puxar todo o histórico via GET (payload pesado), perguntamos
+  // só pelos trackings deste PDF — lookup indexado no servidor.
+  const [trackingDupsByTid, setTrackingDupsByTid] = useState<
+    Map<string, TrackingIdDuplicate>
+  >(new Map());
 
-  // Páginas duplicadas e válidas. Duplicadas saem da árvore e nunca
-  // entram em PDF baixado. Considera 2 origens de duplicação:
-  //  1. trackingId já impresso no histórico (10 dias)
-  //  2. trackingId repetido dentro do próprio PDF atual (1ª ocorrência
-  //     fica em valid; demais saem em duplicatas)
+  // Páginas válidas e duplicadas internas. Tracking IDs já impressos no
+  // histórico (30d) NÃO saem da fila — ficam em validPages com badge
+  // "Impresso" nos níveis correspondentes; reimpressão exige senha no
+  // momento do download (vide requestDownload + AlertDialog).
+  // Só removemos o que é defeito puro do PDF atual: tracking ID repetido
+  // dentro dele mesmo (a 1ª ocorrência fica, as demais saem).
   // Páginas sem trackingId (regex não pegou) entram em valid e mostram
   // indicador "tracking não verificado" no leaf.
   const { duplicatePages, validPages } = useMemo(() => {
@@ -192,19 +193,7 @@ export default function ExpedicaoDiariaPage() {
     const seenInQueue = new Set<string>();
     for (const p of pdfPages ?? []) {
       const tid = p.trackingId?.trim() ?? "";
-      const fromHistorico =
-        tid && printedTrackingMap.has(tid)
-          ? printedTrackingMap.get(tid)!
-          : null;
-      if (fromHistorico) {
-        dups.push({
-          page: p,
-          reason: "historico",
-          printedAt: fromHistorico.createdAt,
-          printedBy: fromHistorico.usuarioNome,
-          printedGroupLabel: fromHistorico.groupLabel,
-        });
-      } else if (tid && seenInQueue.has(tid)) {
+      if (tid && seenInQueue.has(tid)) {
         dups.push({
           page: p,
           reason: "queue",
@@ -218,7 +207,20 @@ export default function ExpedicaoDiariaPage() {
       }
     }
     return { duplicatePages: dups, validPages: valid };
-  }, [pdfPages, printedTrackingMap]);
+  }, [pdfPages]);
+
+  // Set de pageIndexes cujas etiquetas já foram impressas na janela de 30d.
+  // Usado pra colorir badge "Impresso" nos leaves/níveis superiores e pra
+  // detectar conflito no momento do download (já acontece via tracking IDs
+  // em requestDownload, este set é só pra UI).
+  const printedPageIndexes = useMemo(() => {
+    const s = new Set<number>();
+    for (const p of pdfPages ?? []) {
+      const tid = p.trackingId?.trim() ?? "";
+      if (tid && trackingDupsByTid.has(tid)) s.add(p.index);
+    }
+    return s;
+  }, [pdfPages, trackingDupsByTid]);
 
   // Deriva filterGroups a partir de validPages. Reconstrói quando:
   //  • novo PDF é carregado (pdfPages muda) → reseta seleção/expand
@@ -464,6 +466,52 @@ export default function ExpedicaoDiariaPage() {
           },
           { models: registeredModels },
         );
+
+        // Pergunta ao servidor quais tracking IDs deste PDF já estão
+        // impressos na janela de 30d. Substitui o GET /historico inteiro.
+        setProgress(92);
+        setProgressText("Verificando duplicatas…");
+        const trackingsToCheck = Array.from(
+          new Set(
+            pages
+              .map((p) => p.trackingId?.trim() ?? "")
+              .filter((t) => t.length > 0),
+          ),
+        );
+        try {
+          if (trackingsToCheck.length > 0) {
+            const res = await fetch(
+              "/api/expedicao-diaria/tracking-ids/check",
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ trackingIds: trackingsToCheck }),
+              },
+            );
+            if (res.ok) {
+              const data = (await res.json()) as {
+                duplicados: TrackingIdDuplicate[];
+              };
+              const map = new Map<string, TrackingIdDuplicate>();
+              for (const d of data.duplicados ?? []) map.set(d.trackingId, d);
+              setTrackingDupsByTid(map);
+            } else {
+              setTrackingDupsByTid(new Map());
+              console.error(
+                "[expedicao] /tracking-ids/check retornou",
+                res.status,
+              );
+            }
+          } else {
+            setTrackingDupsByTid(new Map());
+          }
+        } catch (err) {
+          // Falha no check não impede o fluxo — o servidor barra duplicatas
+          // no POST /historico de qualquer jeito.
+          setTrackingDupsByTid(new Map());
+          console.error("[expedicao] falha ao verificar duplicatas:", err);
+        }
+
         setProgress(95);
         setProgressText("Construindo grupos…");
         // setPdfPages dispara o useEffect que monta filterGroups +
@@ -570,12 +618,15 @@ export default function ExpedicaoDiariaPage() {
   // download do browser pra garantir que toda exportação esteja registrada.
   // Fluxo: client faz upload direto pro Vercel Blob (contorna o limite de
   // ~4,5MB de body das Functions) e depois manda JSON com o blobUrl.
+  // `reprintToken` (opcional) autoriza reimpressão quando há tracking IDs
+  // já em conflito na janela de 30d — vide POST /tracking-ids/grant-reprint.
   const uploadToHistorico = useCallback(
     async (
       generated: { bytes: Uint8Array; fileName: string; pageCount: number },
       groupLabel: string,
       subgroupIds: string[],
       pages: PageInfo[],
+      reprintToken: string | null,
     ) => {
       // Conta SKUs no lote. Cada página contribui com 1 unidade pra cada
       // SKU detectado nela (em kits com 2+ SKUs distintos, todos somam).
@@ -587,7 +638,7 @@ export default function ExpedicaoDiariaPage() {
       }
 
       // Tracking IDs únicos exportados — usados pra dedup nos próximos
-      // 10 dias. Páginas sem trackingId são ignoradas (impossível dedup).
+      // 30 dias. Páginas sem trackingId são ignoradas (impossível dedup).
       const trackingIds = Array.from(
         new Set(
           pages
@@ -624,20 +675,27 @@ export default function ExpedicaoDiariaPage() {
           trackingIds,
           skusCount,
           sessaoId: null,
+          reprintToken,
         }),
       });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(
-          (data as { error?: string })?.error ?? `HTTP ${res.status}`,
-        );
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          conflicts?: string[];
+        };
+        const err = new Error(
+          data?.error ?? `HTTP ${res.status}`,
+        ) as Error & { status?: number; conflicts?: string[] };
+        err.status = res.status;
+        err.conflicts = Array.isArray(data?.conflicts) ? data.conflicts : [];
+        throw err;
       }
     },
     [],
   );
 
   const executeDownload = useCallback(
-    async (pending: PendingDownload) => {
+    async (pending: PendingDownload, reprintToken: string | null = null) => {
       if (!pdfBytes) return;
       let generated;
       try {
@@ -660,16 +718,86 @@ export default function ExpedicaoDiariaPage() {
           pending.groupLabel,
           pending.subgroupIds,
           pending.pages,
+          reprintToken,
         );
       } catch (e) {
+        const err = e as Error & { status?: number; conflicts?: string[] };
+        // 409: o servidor detectou conflito que o cliente não tinha mapeado
+        // (race com outro operador, OU download anterior nesta mesma sessão
+        // que ainda não estava em trackingDupsByTid). Refresca o map com os
+        // detalhes vindos do /check e reabre o dialog de senha.
+        if (err.status === 409 && !reprintToken) {
+          const conflictTids = err.conflicts ?? [];
+          let details: TrackingIdDuplicate[] = [];
+          if (conflictTids.length > 0) {
+            try {
+              const res = await fetch(
+                "/api/expedicao-diaria/tracking-ids/check",
+                {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ trackingIds: conflictTids }),
+                },
+              );
+              if (res.ok) {
+                const data = (await res.json()) as {
+                  duplicados: TrackingIdDuplicate[];
+                };
+                details = data.duplicados ?? [];
+              }
+            } catch {
+              // Fall through — sem detalhes, mas ainda mostra o dialog
+            }
+          }
+          setTrackingDupsByTid((prev) => {
+            const next = new Map(prev);
+            for (const d of details) next.set(d.trackingId, d);
+            return next;
+          });
+          setPendingDownload({
+            ...pending,
+            conflictingTrackings: conflictTids,
+            conflictDetails: details,
+          });
+          toast.info(
+            "Etiquetas já impressas — informe a senha pra reimprimir",
+          );
+          return;
+        }
         toast.error(
-          `Não foi possível registrar no histórico — download cancelado: ${(e as Error).message}`,
+          `Não foi possível registrar no histórico — download cancelado: ${err.message}`,
         );
         return;
       }
 
       triggerDownloadPDF(generated.bytes, generated.fileName);
       markSubgroupsDownloaded(pending.subgroupIds);
+
+      // Marca localmente os trackings recém-impressos pra que próximas
+      // seleções na mesma sessão acionem o dialog de senha sem depender
+      // do estado server-side ter sido recarregado.
+      setTrackingDupsByTid((prev) => {
+        const next = new Map(prev);
+        const nowIso = new Date().toISOString();
+        const userName = session?.user?.name ?? null;
+        const userEmail = session?.user?.email ?? "";
+        for (const p of pending.pages) {
+          const tid = p.trackingId?.trim() ?? "";
+          if (!tid) continue;
+          next.set(tid, {
+            trackingId: tid,
+            impressoEm: nowIso,
+            groupLabel: pending.groupLabel,
+            historicoId: "local",
+            reimpressao: !!reprintToken,
+            impressoPor: userEmail
+              ? { nome: userName, email: userEmail }
+              : null,
+          });
+        }
+        return next;
+      });
+
       loadHistorico();
     },
     [
@@ -678,6 +806,7 @@ export default function ExpedicaoDiariaPage() {
       markSubgroupsDownloaded,
       uploadToHistorico,
       loadHistorico,
+      session,
     ],
   );
 
@@ -688,24 +817,79 @@ export default function ExpedicaoDiariaPage() {
       groupLabel: string,
       label: string,
     ) => {
-      const conflicting = historico.filter((h) =>
-        h.subgroupIds.some((id) => subgroupIds.includes(id)),
-      );
+      // Conflito = páginas deste recorte cujo trackingId já está na janela
+      // de 30d (resposta do /check). Substitui o filtro antigo por subgroupId
+      // — alinha com a janela real de dedup do servidor.
+      const conflictDetails: TrackingIdDuplicate[] = [];
+      const seen = new Set<string>();
+      for (const p of pages) {
+        const tid = p.trackingId?.trim() ?? "";
+        if (!tid || seen.has(tid)) continue;
+        const dup = trackingDupsByTid.get(tid);
+        if (dup) {
+          seen.add(tid);
+          conflictDetails.push(dup);
+        }
+      }
+      const conflictingTrackings = conflictDetails.map((d) => d.trackingId);
+
       const pending: PendingDownload = {
         pages,
         label,
         subgroupIds,
         groupLabel,
-        conflicting,
+        conflictingTrackings,
+        conflictDetails,
       };
-      if (conflicting.length > 0) {
+      if (conflictingTrackings.length > 0) {
         setPendingDownload(pending);
       } else {
         void executeDownload(pending);
       }
     },
-    [historico, executeDownload],
+    [trackingDupsByTid, executeDownload],
   );
+
+  // Confirma reimpressão: valida senha no servidor, recebe token HMAC,
+  // dispara executeDownload com o token. POST /historico verifica o token
+  // antes de inserir — falha sem token quebra com 409.
+  const confirmReprint = useCallback(async () => {
+    if (!pendingDownload) return;
+    if (!reprintPassword) {
+      toast.error("Digite a senha de reimpressão");
+      return;
+    }
+    setReprintLoading(true);
+    try {
+      const res = await fetch(
+        "/api/expedicao-diaria/tracking-ids/grant-reprint",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            password: reprintPassword,
+            trackingIds: pendingDownload.conflictingTrackings,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        toast.error(data.error ?? `Falha ao validar senha (HTTP ${res.status})`);
+        return;
+      }
+      const data = (await res.json()) as { token: string };
+      const pending = pendingDownload;
+      setPendingDownload(null);
+      setReprintPassword("");
+      void executeDownload(pending, data.token);
+    } catch (e) {
+      toast.error(`Erro ao validar senha: ${(e as Error).message}`);
+    } finally {
+      setReprintLoading(false);
+    }
+  }, [pendingDownload, reprintPassword, executeDownload]);
 
   // Sanitiza label pra uso em filename (remove parêntese, acento, espaços).
   const slugify = (s: string): string =>
@@ -885,6 +1069,7 @@ export default function ExpedicaoDiariaPage() {
     setExpandedGroupIds(new Set());
     setExpandedSkuIds(new Set());
     setExpandedQtdIds(new Set());
+    setTrackingDupsByTid(new Map());
     setProgress(0);
     setProgressText("");
     filterGroupsRef.current = [];
@@ -1072,13 +1257,13 @@ export default function ExpedicaoDiariaPage() {
         <Card className="border-amber-700/60 bg-amber-950/10">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-amber-300">
-              <AlertTriangle className="h-5 w-5" /> Etiquetas duplicadas — não
-              serão impressas ({duplicatePages.length})
+              <AlertTriangle className="h-5 w-5" /> Etiquetas repetidas no PDF
+              atual — não serão impressas ({duplicatePages.length})
             </CardTitle>
             <CardDescription>
-              Etiquetas com tracking ID já impresso nos últimos 10 dias ou
-              repetido no PDF atual. Foram removidas da fila pra evitar
-              reimpressão.
+              Tracking ID aparece mais de uma vez no PDF carregado. A primeira
+              ocorrência fica na fila; as demais foram removidas pra evitar
+              impressão dobrada.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -1101,21 +1286,7 @@ export default function ExpedicaoDiariaPage() {
                     </p>
                   </div>
                   <div className="text-right text-[11px] text-muted-foreground shrink-0">
-                    {d.reason === "historico" ? (
-                      <>
-                        <p>{formatDate(d.printedAt)}</p>
-                        <p>
-                          {d.printedBy ? `por ${d.printedBy}` : ""}
-                          {d.printedGroupLabel && (
-                            <span className="block truncate max-w-[160px]">
-                              {d.printedGroupLabel}
-                            </span>
-                          )}
-                        </p>
-                      </>
-                    ) : (
-                      <p>Repetida no PDF atual</p>
-                    )}
+                    <p>Repetida no PDF atual</p>
                   </div>
                 </div>
               ))}
@@ -1159,9 +1330,14 @@ export default function ExpedicaoDiariaPage() {
                 const carrierLeaves = c.subGroups.flatMap((sk) =>
                   sk.subGroups.flatMap((q) => q.subGroups),
                 );
-                const carrierAnyPrinted = carrierLeaves.some((leaf) =>
-                  printedSubgroupIds.has(leaf.id),
-                );
+                const carrierPrintedCount = c.pageIndexes.filter((i) =>
+                  printedPageIndexes.has(i),
+                ).length;
+                const carrierAnyPrinted =
+                  carrierPrintedCount > 0 ||
+                  carrierLeaves.some((leaf) =>
+                    printedSubgroupIds.has(leaf.id),
+                  );
                 return (
                   <div
                     key={c.id}
@@ -1203,7 +1379,9 @@ export default function ExpedicaoDiariaPage() {
                             {c.label}
                             {carrierAnyPrinted && (
                               <span className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1">
-                                Impresso
+                                {carrierPrintedCount > 0
+                                  ? `${carrierPrintedCount} impressa(s)`
+                                  : "Impresso"}
                               </span>
                             )}
                           </p>
@@ -1243,9 +1421,14 @@ export default function ExpedicaoDiariaPage() {
                           const skuLeaves = sk.subGroups.flatMap(
                             (q) => q.subGroups,
                           );
-                          const skuAnyPrinted = skuLeaves.some((leaf) =>
-                            printedSubgroupIds.has(leaf.id),
-                          );
+                          const skuPrintedCount = sk.pageIndexes.filter((i) =>
+                            printedPageIndexes.has(i),
+                          ).length;
+                          const skuAnyPrinted =
+                            skuPrintedCount > 0 ||
+                            skuLeaves.some((leaf) =>
+                              printedSubgroupIds.has(leaf.id),
+                            );
                           return (
                             <div
                               key={sk.id}
@@ -1291,7 +1474,9 @@ export default function ExpedicaoDiariaPage() {
                                       {sk.label}
                                       {skuAnyPrinted && (
                                         <span className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1">
-                                          Impresso
+                                          {skuPrintedCount > 0
+                                            ? `${skuPrintedCount} impressa(s)`
+                                            : "Impresso"}
                                         </span>
                                       )}
                                     </p>
@@ -1400,7 +1585,13 @@ export default function ExpedicaoDiariaPage() {
                                           q.subGroups.length > 0 && (
                                             <div className="divide-y divide-slate-800/40 border-t border-slate-800/40">
                                               {q.subGroups.map((leaf) => {
+                                                const leafPrintedCount =
+                                                  leaf.pageIndexes.filter(
+                                                    (i) =>
+                                                      printedPageIndexes.has(i),
+                                                  ).length;
                                                 const wasPrinted =
+                                                  leafPrintedCount > 0 ||
                                                   printedSubgroupIds.has(
                                                     leaf.id,
                                                   );
@@ -1429,7 +1620,10 @@ export default function ExpedicaoDiariaPage() {
                                                           {leaf.size}
                                                           {wasPrinted && (
                                                             <span className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1">
-                                                              Impresso
+                                                              {leafPrintedCount >
+                                                              0
+                                                                ? `${leafPrintedCount} impressa(s)`
+                                                                : "Impresso"}
                                                             </span>
                                                           )}
                                                           {(() => {
@@ -1560,7 +1754,12 @@ export default function ExpedicaoDiariaPage() {
 
       <AlertDialog
         open={pendingDownload !== null}
-        onOpenChange={(open) => !open && setPendingDownload(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingDownload(null);
+            setReprintPassword("");
+          }
+        }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1568,31 +1767,69 @@ export default function ExpedicaoDiariaPage() {
             <AlertDialogDescription asChild>
               <div className="space-y-2">
                 <p>
-                  {pendingDownload?.conflicting.length} impressão(ões) recente(s)
-                  nas últimas 48h incluem etiquetas destes grupos. Tem certeza
-                  que quer reimprimir?
+                  {pendingDownload?.conflictingTrackings.length} etiqueta(s)
+                  deste recorte foram impressas nos últimos 30 dias. Reimprimir
+                  exige a senha de autorização.
                 </p>
-                {pendingDownload?.conflicting.slice(0, 5).map((h) => (
-                  <p key={h.id} className="text-xs text-muted-foreground">
-                    · {h.groupLabel} — {formatDate(h.createdAt)}
-                    {h.usuarioNome && ` por ${h.usuarioNome}`}
+                {pendingDownload?.conflictDetails.slice(0, 5).map((d) => (
+                  <p
+                    key={d.trackingId}
+                    className="text-xs text-muted-foreground font-mono"
+                  >
+                    · {d.trackingId} — {formatDate(d.impressoEm)}
+                    {d.impressoPor?.nome && ` por ${d.impressoPor.nome}`}
                   </p>
                 ))}
+                {pendingDownload &&
+                  pendingDownload.conflictDetails.length > 5 && (
+                    <p className="text-xs text-muted-foreground">
+                      … e mais{" "}
+                      {pendingDownload.conflictDetails.length - 5} etiqueta(s)
+                    </p>
+                  )}
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="space-y-2 px-6 pb-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Senha de autorização
+            </p>
+            <input
+              type="password"
+              autoFocus
+              value={reprintPassword}
+              onChange={(e) => setReprintPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void confirmReprint();
+                }
+              }}
+              placeholder="Digite a senha"
+              className="w-full border rounded-md px-3 py-2 text-sm bg-background"
+              disabled={reprintLoading}
+            />
+          </div>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setPendingDownload(null)}>
+            <AlertDialogCancel
+              onClick={() => {
+                setPendingDownload(null);
+                setReprintPassword("");
+              }}
+              disabled={reprintLoading}
+            >
               Cancelar
             </AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => {
-                if (pendingDownload) {
-                  void executeDownload(pendingDownload);
-                  setPendingDownload(null);
-                }
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmReprint();
               }}
+              disabled={reprintLoading || reprintPassword.length === 0}
             >
+              {reprintLoading ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : null}
               Reimprimir
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -1731,7 +1968,7 @@ export default function ExpedicaoDiariaPage() {
           <DialogHeader>
             <DialogTitle>Histórico de Impressão</DialogTitle>
             <DialogDescription>
-              Arquivos ficam disponíveis por 48h após a geração
+              Arquivos ficam disponíveis por 10 dias após a geração
             </DialogDescription>
           </DialogHeader>
           <div className="max-h-[60vh] overflow-auto space-y-2">
