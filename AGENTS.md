@@ -138,6 +138,16 @@ INNGEST_SIGNING_KEY=
 
 ⚠️ OAuth e webhooks do TikTok **exigem HTTPS público**. Em dev local (Docker), Next.js roda em `localhost:3000` sem HTTPS, então é obrigatório um túnel (Cloudflare Tunnel recomendado). A URL do túnel vai em `NEXT_PUBLIC_APP_URL` e precisa ser cadastrada no Partner Center como Redirect URL + Webhook URL.
 
+# Variáveis de ambiente (módulo de expedição diária)
+
+```bash
+# Senha para autorizar reimpressão de etiquetas já impressas (janela 30d)
+# Gerar: openssl rand -base64 24
+EXPEDICAO_REPRINT_PASSWORD=
+```
+
+A senha é validada server-side em `POST /api/expedicao-diaria/tracking-ids/grant-reprint` com `crypto.timingSafeEqual`. Em troca, o endpoint emite um token HMAC-SHA256 (TTL 60s, assinado com `OAUTH_STATE_SECRET`) que o `POST /historico` aceita pra autorizar reimpressão. Sem essa env var configurada o endpoint retorna 503.
+
 # Gestão de segredos
 
 - **Em env vars:** ok pra MVP. Nunca commitar (`.env.local`, `.env.prod` no `.gitignore`).
