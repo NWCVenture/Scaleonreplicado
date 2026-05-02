@@ -56,6 +56,8 @@ const TABELAS_PADRAO = [
   "modelo_principal",
   "modelo_cor",
   "modelo_tamanho",
+  // Dedup robusta de tracking ID (0022)
+  "tracking_id_impresso",
 ] as const;
 
 // eventos_webhook_tiktok aceita conta_id NULL (receiver insere antes de
