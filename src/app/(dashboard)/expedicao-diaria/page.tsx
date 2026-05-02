@@ -11,6 +11,7 @@ import {
   FileText,
   Filter,
   History,
+  Layers,
   Loader2,
   Mail,
   Trash2,
@@ -57,9 +58,15 @@ import {
   type FilterGroup,
   type ModelImageMap,
   type PageInfo,
-  type QtdSubGroup,
-  type SkuSubGroup,
 } from "@/lib/pdf-expedicao-utils";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   deleteUserFiles,
   loadUserFiles,
@@ -112,17 +119,293 @@ type DuplicatePage = {
   printedGroupLabel: string;
 };
 
+// Níveis togglaveis na fila de impressão. Transportadora é fixa (sempre topo).
+// `model` = SKU principal (LUA / Misto / Não cadastrado).
+// `qtd`   = Unitário / KIT N / MIX N.
+// `color` = cor extraída do SKU "MODELO COR TAM".
+// `size`  = tamanho.
+type LevelKey = "model" | "qtd" | "color" | "size";
+const ALL_LEVELS: readonly LevelKey[] = ["model", "qtd", "color", "size"];
+const ACTIVE_LEVELS_STORAGE_KEY = "expedicao:activeLevels";
+
+// localStorage namespaced por usuário — preferência de níveis é pessoal,
+// e dois usuários compartilhando o mesmo navegador não devem herdar o
+// estado um do outro. Quando userId não está disponível (sessão ainda
+// carregando), cai pra chave global como fallback.
+function levelsStorageKey(userId: string | null): string {
+  return userId
+    ? `${ACTIVE_LEVELS_STORAGE_KEY}:${userId}`
+    : ACTIVE_LEVELS_STORAGE_KEY;
+}
+
+function readActiveLevels(userId: string | null): Set<LevelKey> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(levelsStorageKey(userId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const valid = parsed.filter((v): v is LevelKey =>
+      (ALL_LEVELS as readonly string[]).includes(v as string),
+    );
+    return new Set(valid);
+  } catch {
+    return null;
+  }
+}
+
+const LEVEL_LABELS: Record<LevelKey, string> = {
+  model: "Modelo",
+  qtd: "QTD",
+  color: "Cor",
+  size: "Tamanho",
+};
+
+// Label do botão de download por profundidade do nó na árvore visível.
+// Carrier é depth=0; demais níveis seguem a ordem dos LevelKey ativos.
+function downloadButtonLabel(node: ViewNode): string {
+  if (node.level === "carrier") return "Transportadora";
+  if (node.level === "model") return "SKU";
+  if (node.level === "qtd") return "Subgrupo";
+  if (node.level === "color") return "Cor";
+  if (node.level === "size") return "PDF";
+  return "PDF";
+}
+
+// Nó da árvore renderizada. IDs derivam dos ids estáveis em filterGroups
+// (carrier::sku::qtd::color::size); ground-truth pra dedup/download é
+// sempre o conjunto de SizeLeaf.id descendentes (`leafIds`).
+type ViewNode = {
+  id: string;
+  level: "carrier" | LevelKey;
+  label: string;
+  pageIndexes: number[];
+  leafIds: string[];
+  children: ViewNode[];
+  downloaded: boolean;
+  printedCount: number;
+  isUnregistered: boolean;
+  isMisto: boolean;
+};
+
+type TreeNodeProps = {
+  node: ViewNode;
+  depth: number;
+  expandedNodeIds: Set<string>;
+  selectedSubIds: Set<string>;
+  printedSubgroupIds: Set<string>;
+  pagesByIndex: Map<number, PageInfo>;
+  toggleExpand: (nodeId: string) => void;
+  toggleNode: (node: ViewNode) => void;
+  toggleSub: (subId: string) => void;
+  nodeSelectionState: (node: ViewNode) => "none" | "some" | "all";
+  downloadViewNode: (node: ViewNode) => void;
+};
+
+// Componente recursivo. Indentação por inline style (Tailwind JIT não
+// compila classes geradas em runtime). Cada profundidade recua 1.5rem.
+// Folhas (level=size) usam toggleSub direto pra evitar pop indireto.
+function TreeNode({
+  node,
+  depth,
+  expandedNodeIds,
+  selectedSubIds,
+  printedSubgroupIds,
+  pagesByIndex,
+  toggleExpand,
+  toggleNode,
+  toggleSub,
+  nodeSelectionState,
+  downloadViewNode,
+}: TreeNodeProps) {
+  const isLeaf = node.level === "size";
+  const isCarrier = node.level === "carrier";
+  const expanded = expandedNodeIds.has(node.id);
+  const hasChildren = node.children.length > 0;
+
+  // Para leaves, checked vem direto do selectedSubIds; demais usam estado
+  // derivado all/some/none (com indeterminate visual).
+  const checked = isLeaf
+    ? selectedSubIds.has(node.id)
+    : nodeSelectionState(node) === "all";
+  const isIndeterminate =
+    !isLeaf && nodeSelectionState(node) === "some";
+
+  const wasPrintedFallback = !isLeaf
+    ? false
+    : printedSubgroupIds.has(node.id);
+  const wasPrinted = node.printedCount > 0 || wasPrintedFallback;
+
+  const semTracking = isLeaf
+    ? node.pageIndexes.filter((i) => {
+        const pg = pagesByIndex.get(i);
+        return !pg?.trackingId?.trim();
+      }).length
+    : 0;
+
+  // Cor de borda/background da row. Carrier tem borda externa; níveis
+  // intermediários só pintam sutil quando baixados.
+  const rowBgClass = node.downloaded
+    ? "bg-green-950/10"
+    : node.isUnregistered
+      ? "bg-amber-950/10"
+      : "";
+
+  return (
+    <div
+      className={cn(
+        isCarrier && "rounded-lg border",
+        isCarrier &&
+          (node.downloaded
+            ? "border-green-800 bg-green-950/20"
+            : "border-slate-700 bg-slate-900"),
+        !isCarrier && rowBgClass,
+      )}
+    >
+      <div
+        className="flex items-center justify-between px-3 py-2"
+        style={{ paddingLeft: `${0.75 + depth * 1.5}rem` }}
+      >
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          {hasChildren ? (
+            <button
+              type="button"
+              onClick={() => toggleExpand(node.id)}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label={expanded ? "Recolher" : "Expandir"}
+            >
+              {expanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </button>
+          ) : (
+            <span className="w-4" />
+          )}
+          <input
+            type="checkbox"
+            checked={checked}
+            ref={(el) => {
+              if (el) el.indeterminate = isIndeterminate;
+            }}
+            onChange={() => (isLeaf ? toggleSub(node.id) : toggleNode(node))}
+            className="accent-blue-500"
+          />
+          <div className="min-w-0">
+            <p
+              className={cn(
+                "text-sm flex items-center gap-2",
+                isCarrier && "font-semibold",
+                node.level === "model" && "font-semibold",
+                node.level === "qtd" && "font-medium",
+                node.isUnregistered && "text-amber-300",
+              )}
+            >
+              {isCarrier && <Truck className="h-4 w-4" />}
+              {node.label}
+              {wasPrinted && (
+                <span className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1">
+                  {node.printedCount > 0
+                    ? `${node.printedCount} impressa(s)`
+                    : "Impresso"}
+                </span>
+              )}
+              {semTracking > 0 && (
+                <span
+                  title="Não foi possível verificar o tracking ID dessa(s) etiqueta(s) — serão impressas sem dedup."
+                  className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1 inline-flex items-center gap-0.5"
+                >
+                  <AlertTriangle className="h-2.5 w-2.5" />
+                  {semTracking} sem tracking
+                </span>
+              )}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {node.pageIndexes.length} página(s)
+              {hasChildren && ` · ${node.children.length} ${childLabel(node)}`}
+            </p>
+          </div>
+        </div>
+        <div className="flex gap-2 items-center shrink-0">
+          {node.downloaded && (
+            <span className="text-xs text-green-400 font-medium">Baixado</span>
+          )}
+          <Button
+            size="sm"
+            variant={isCarrier && !node.downloaded ? "default" : "outline"}
+            className={cn(
+              isCarrier &&
+                !node.downloaded &&
+                "bg-blue-600 hover:bg-blue-700 text-white",
+            )}
+            onClick={() => downloadViewNode(node)}
+          >
+            <Download className="h-4 w-4 mr-1" /> {downloadButtonLabel(node)}
+          </Button>
+        </div>
+      </div>
+      {expanded && hasChildren && (
+        <div
+          className={cn(
+            "border-t",
+            isCarrier ? "border-slate-800" : "border-slate-800/40",
+            "divide-y",
+            isCarrier ? "divide-slate-800" : "divide-slate-800/40",
+          )}
+        >
+          {node.children.map((child) => (
+            <TreeNode
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              expandedNodeIds={expandedNodeIds}
+              selectedSubIds={selectedSubIds}
+              printedSubgroupIds={printedSubgroupIds}
+              pagesByIndex={pagesByIndex}
+              toggleExpand={toggleExpand}
+              toggleNode={toggleNode}
+              toggleSub={toggleSub}
+              nodeSelectionState={nodeSelectionState}
+              downloadViewNode={downloadViewNode}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Sufixo do contador de filhos por nível (para o subtítulo na linha).
+function childLabel(node: ViewNode): string {
+  const childLevel = node.children[0]?.level;
+  if (childLevel === "model") return node.children.length === 1 ? "SKU" : "SKUs";
+  if (childLevel === "qtd") return "QTD";
+  if (childLevel === "color")
+    return node.children.length === 1 ? "cor" : "cores";
+  if (childLevel === "size")
+    return node.children.length === 1 ? "tamanho" : "tamanhos";
+  return "filhos";
+}
+
 export default function ExpedicaoDiariaPage() {
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
   const [pdfFiles, setPdfFiles] = useState<File[]>([]);
   const [pdfPages, setPdfPages] = useState<PageInfo[] | null>(null);
   const [filterGroups, setFilterGroups] = useState<FilterGroup[]>([]);
   const [selectedSubIds, setSelectedSubIds] = useState<Set<string>>(new Set());
-  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(
+  // Set unificado de IDs expandidos (transportadora, sku, qtd, cor) — ids
+  // são únicos entre níveis porque cada um carrega o path completo do pai.
+  const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(
     new Set(),
   );
-  const [expandedSkuIds, setExpandedSkuIds] = useState<Set<string>>(new Set());
-  const [expandedQtdIds, setExpandedQtdIds] = useState<Set<string>>(new Set());
+  // Quais níveis (Modelo/QTD/Cor/Tamanho) aparecem na árvore. Lazy-load
+  // inicial usa chave global (sessão ainda não pronta no mount); um
+  // useEffect mais abaixo recarrega da chave namespaced quando userId
+  // chegar. Persiste entre PDFs e reloads (preferência pessoal).
+  const [activeLevels, setActiveLevels] = useState<Set<LevelKey>>(
+    () => readActiveLevels(null) ?? new Set(ALL_LEVELS),
+  );
   const [registeredModels, setRegisteredModels] = useState<string[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -222,6 +505,162 @@ export default function ExpedicaoDiariaPage() {
     return s;
   }, [pdfPages, trackingDupsByTid]);
 
+  // Árvore visível na UI, derivada de filterGroups + activeLevels. Níveis
+  // desligados são "achatados" — `descend` pula direto pro próximo nível
+  // ativo, agregando contagens dos pulados. IDs continuam estáveis (mantêm
+  // o path completo do filterGroups), garantindo que expand/select não
+  // quebrem ao togglar níveis.
+  const viewTree = useMemo<ViewNode[]>(() => {
+    type SkuList = FilterGroup["subGroups"];
+    type QtdList = SkuList[number]["subGroups"];
+    type ColorList = QtdList[number]["subGroups"];
+    type LeafList = ColorList[number]["subGroups"];
+
+    const allLeavesUnder = (sks: SkuList): LeafList[number][] =>
+      sks.flatMap((sk) =>
+        sk.subGroups.flatMap((q) =>
+          q.subGroups.flatMap((co) => co.subGroups),
+        ),
+      );
+
+    const printedCountForPages = (idxs: number[]): number =>
+      idxs.reduce((n, i) => (printedPageIndexes.has(i) ? n + 1 : n), 0);
+
+    function descendFromSku(
+      skus: SkuList,
+      remaining: LevelKey[],
+    ): ViewNode[] {
+      if (remaining.length === 0 || remaining[0] !== "model") {
+        // "model" desligado — flatten skus → próximo nível ativo
+        const qtds = skus.flatMap((sk) => sk.subGroups);
+        return descendFromQtd(qtds, remaining);
+      }
+      // "model" ligado — 1 ViewNode por sku
+      const rest = remaining.slice(1);
+      return skus.map((sk) => {
+        const leaves = allLeavesUnder([sk]);
+        return {
+          id: sk.id,
+          level: "model" as const,
+          label: sk.label,
+          pageIndexes: [...sk.pageIndexes],
+          leafIds: leaves.map((l) => l.id),
+          children: descendFromQtd(sk.subGroups, rest),
+          downloaded: sk.downloaded,
+          printedCount: printedCountForPages(sk.pageIndexes),
+          isUnregistered: sk.isUnregistered,
+          isMisto: sk.isMisto,
+        };
+      });
+    }
+
+    function descendFromQtd(
+      qtds: QtdList,
+      remaining: LevelKey[],
+    ): ViewNode[] {
+      const idx = remaining.indexOf("qtd");
+      if (idx < 0) {
+        // "qtd" desligado — flatten qtds → próximo nível
+        const colors = qtds.flatMap((q) => q.subGroups);
+        return descendFromColor(colors, remaining);
+      }
+      const rest = remaining.slice(idx + 1);
+      return qtds.map((q) => {
+        const leaves = q.subGroups.flatMap((co) => co.subGroups);
+        return {
+          id: q.id,
+          level: "qtd" as const,
+          label: q.label,
+          pageIndexes: [...q.pageIndexes],
+          leafIds: leaves.map((l) => l.id),
+          children: descendFromColor(q.subGroups, rest),
+          downloaded: q.downloaded,
+          printedCount: printedCountForPages(q.pageIndexes),
+          isUnregistered: false,
+          isMisto: false,
+        };
+      });
+    }
+
+    function descendFromColor(
+      colors: ColorList,
+      remaining: LevelKey[],
+    ): ViewNode[] {
+      const idx = remaining.indexOf("color");
+      if (idx < 0) {
+        // "color" desligado — flatten colors → próximo nível
+        const leaves = colors.flatMap((co) => co.subGroups);
+        return descendFromSize(leaves, remaining);
+      }
+      const rest = remaining.slice(idx + 1);
+      return colors.map((co) => ({
+        id: co.id,
+        level: "color" as const,
+        label: co.color,
+        pageIndexes: [...co.pageIndexes],
+        leafIds: co.subGroups.map((l) => l.id),
+        children: descendFromSize(co.subGroups, rest),
+        downloaded: co.downloaded,
+        printedCount: printedCountForPages(co.pageIndexes),
+        isUnregistered: false,
+        isMisto: false,
+      }));
+    }
+
+    function descendFromSize(
+      leaves: LeafList,
+      remaining: LevelKey[],
+    ): ViewNode[] {
+      if (!remaining.includes("size")) {
+        // "size" desligado — leaves não viram nodes; pageIndexes/leafIds
+        // já agregados no nível pai. Retorna [] pra encerrar a recursão.
+        return [];
+      }
+      return leaves.map((leaf) => ({
+        id: leaf.id,
+        level: "size" as const,
+        label: leaf.size,
+        pageIndexes: [...leaf.pageIndexes],
+        leafIds: [leaf.id],
+        children: [],
+        downloaded: leaf.downloaded,
+        printedCount: printedCountForPages(leaf.pageIndexes),
+        isUnregistered: false,
+        isMisto: false,
+      }));
+    }
+
+    const remaining = ALL_LEVELS.filter((l) => activeLevels.has(l));
+
+    return filterGroups.map((c) => {
+      const leaves = allLeavesUnder(c.subGroups);
+      return {
+        id: c.id,
+        level: "carrier" as const,
+        label: c.label,
+        pageIndexes: [...c.pageIndexes],
+        leafIds: leaves.map((l) => l.id),
+        children: descendFromSku(c.subGroups, remaining),
+        downloaded: c.downloaded,
+        printedCount: printedCountForPages(c.pageIndexes),
+        isUnregistered: false,
+        isMisto: false,
+      };
+    });
+  }, [filterGroups, activeLevels, printedPageIndexes]);
+
+  // Folhas visíveis na viewTree — usadas pelo botão "Selecionar Todos"
+  // pra operar só sobre o que tá renderizado.
+  const visibleLeafIds = useMemo<string[]>(() => {
+    const out = new Set<string>();
+    const visit = (n: ViewNode) => {
+      for (const id of n.leafIds) out.add(id);
+      n.children.forEach(visit);
+    };
+    viewTree.forEach(visit);
+    return Array.from(out);
+  }, [viewTree]);
+
   // Deriva filterGroups a partir de validPages. Reconstrói quando:
   //  • novo PDF é carregado (pdfPages muda) → reseta seleção/expand
   //  • histórico atualiza e validPages muda → preserva seleção/expand,
@@ -240,7 +679,11 @@ export default function ExpedicaoDiariaPage() {
     const previousDownloaded = new Set(
       filterGroupsRef.current
         .flatMap((c) =>
-          c.subGroups.flatMap((s) => s.subGroups.flatMap((q) => q.subGroups)),
+          c.subGroups.flatMap((sk) =>
+            sk.subGroups.flatMap((q) =>
+              q.subGroups.flatMap((co) => co.subGroups),
+            ),
+          ),
         )
         .filter((leaf) => leaf.downloaded)
         .map((leaf) => leaf.id),
@@ -251,15 +694,23 @@ export default function ExpedicaoDiariaPage() {
     const restored = groups.map((c) => {
       const skus = c.subGroups.map((sk) => {
         const qtds = sk.subGroups.map((q) => {
-          const leaves = q.subGroups.map((leaf) => ({
-            ...leaf,
-            downloaded: previousDownloaded.has(leaf.id),
-          }));
+          const colors = q.subGroups.map((co) => {
+            const leaves = co.subGroups.map((leaf) => ({
+              ...leaf,
+              downloaded: previousDownloaded.has(leaf.id),
+            }));
+            return {
+              ...co,
+              subGroups: leaves,
+              downloaded:
+                leaves.length > 0 && leaves.every((l) => l.downloaded),
+            };
+          });
           return {
             ...q,
-            subGroups: leaves,
+            subGroups: colors,
             downloaded:
-              leaves.length > 0 && leaves.every((l) => l.downloaded),
+              colors.length > 0 && colors.every((co) => co.downloaded),
           };
         });
         return {
@@ -279,27 +730,26 @@ export default function ExpedicaoDiariaPage() {
     filterGroupsRef.current = restored;
 
     if (isNewPdf) {
-      const allLeaves = restored.flatMap((c) =>
-        c.subGroups.flatMap((sk) =>
-          sk.subGroups.flatMap((q) => q.subGroups),
-        ),
-      );
-      setSelectedSubIds(
-        new Set(
-          allLeaves.filter((leaf) => !leaf.downloaded).map((leaf) => leaf.id),
-        ),
-      );
-      setExpandedGroupIds(new Set(restored.map((c) => c.id)));
-      setExpandedSkuIds(
-        new Set(restored.flatMap((c) => c.subGroups.map((sk) => sk.id))),
-      );
-      setExpandedQtdIds(
-        new Set(
-          restored.flatMap((c) =>
-            c.subGroups.flatMap((sk) => sk.subGroups.map((q) => q.id)),
-          ),
-        ),
-      );
+      // Default desmarcado — operador escolhe ativamente o que vai imprimir.
+      setSelectedSubIds(new Set());
+      // Expande transportadoras, SKUs, QTDs e cores de cara — assim qualquer
+      // combinação de níveis ativos no dropdown já abre tudo. O componente
+      // recursivo só renderiza os níveis ligados, então excesso de IDs no
+      // set é benigno.
+      const expandedIds = new Set<string>();
+      for (const carrier of restored) {
+        expandedIds.add(carrier.id);
+        for (const sk of carrier.subGroups) {
+          expandedIds.add(sk.id);
+          for (const q of sk.subGroups) {
+            expandedIds.add(q.id);
+            for (const co of q.subGroups) {
+              expandedIds.add(co.id);
+            }
+          }
+        }
+      }
+      setExpandedNodeIds(expandedIds);
     }
   }, [pdfPages, validPages, registeredModels]);
 
@@ -429,9 +879,7 @@ export default function ExpedicaoDiariaPage() {
       setFilterGroups([]);
       filterGroupsRef.current = [];
       setSelectedSubIds(new Set());
-      setExpandedGroupIds(new Set());
-      setExpandedSkuIds(new Set());
-      setExpandedQtdIds(new Set());
+      setExpandedNodeIds(new Set());
       setIsProcessing(true);
       setProgress(5);
       setProgressText("Carregando bibliotecas…");
@@ -587,14 +1035,22 @@ export default function ExpedicaoDiariaPage() {
       const updated = prev.map((c) => {
         const skus = c.subGroups.map((sk) => {
           const qtds = sk.subGroups.map((q) => {
-            const leaves = q.subGroups.map((leaf) =>
-              set.has(leaf.id) ? { ...leaf, downloaded: true } : leaf,
-            );
+            const colors = q.subGroups.map((co) => {
+              const leaves = co.subGroups.map((leaf) =>
+                set.has(leaf.id) ? { ...leaf, downloaded: true } : leaf,
+              );
+              return {
+                ...co,
+                subGroups: leaves,
+                downloaded:
+                  leaves.length > 0 && leaves.every((l) => l.downloaded),
+              };
+            });
             return {
               ...q,
-              subGroups: leaves,
+              subGroups: colors,
               downloaded:
-                leaves.length > 0 && leaves.every((l) => l.downloaded),
+                colors.length > 0 && colors.every((co) => co.downloaded),
             };
           });
           return {
@@ -898,65 +1354,14 @@ export default function ExpedicaoDiariaPage() {
       .replace(/^_+|_+$/g, "")
       .slice(0, 60) || "grupo";
 
-  const downloadSubgroup = useCallback(
-    (
-      carrier: FilterGroup,
-      sku: SkuSubGroup,
-      qtd: QtdSubGroup,
-      leafId: string,
-    ) => {
-      const leaf = qtd.subGroups.find((s) => s.id === leafId);
-      if (!leaf) return;
-      const pages = leaf.pageIndexes
+  const downloadViewNode = useCallback(
+    (node: ViewNode) => {
+      const pages = node.pageIndexes
         .map((i) => pagesByIndex.get(i))
         .filter((p): p is PageInfo => !!p);
-      const label = slugify(
-        `${carrier.label}_${sku.label}_${qtd.label}_${leaf.size}`,
-      );
-      const groupLabel = `${carrier.label} · ${sku.label} · ${qtd.label} · ${leaf.size}`;
-      requestDownload(pages, [leaf.id], groupLabel, label);
-    },
-    [pagesByIndex, requestDownload],
-  );
-
-  const downloadQtdGroup = useCallback(
-    (carrier: FilterGroup, sku: SkuSubGroup, qtd: QtdSubGroup) => {
-      const pages = qtd.pageIndexes
-        .map((i) => pagesByIndex.get(i))
-        .filter((p): p is PageInfo => !!p);
-      const label = slugify(`${carrier.label}_${sku.label}_${qtd.label}`);
-      const groupLabel = `${carrier.label} · ${sku.label} · ${qtd.label}`;
-      const leafIds = qtd.subGroups.map((s) => s.id);
-      requestDownload(pages, leafIds, groupLabel, label);
-    },
-    [pagesByIndex, requestDownload],
-  );
-
-  const downloadSkuGroup = useCallback(
-    (carrier: FilterGroup, sku: SkuSubGroup) => {
-      const pages = sku.pageIndexes
-        .map((i) => pagesByIndex.get(i))
-        .filter((p): p is PageInfo => !!p);
-      const label = slugify(`${carrier.label}_${sku.label}`);
-      const groupLabel = `${carrier.label} · ${sku.label}`;
-      const leafIds = sku.subGroups.flatMap((q) =>
-        q.subGroups.map((leaf) => leaf.id),
-      );
-      requestDownload(pages, leafIds, groupLabel, label);
-    },
-    [pagesByIndex, requestDownload],
-  );
-
-  const downloadParentGroup = useCallback(
-    (carrier: FilterGroup) => {
-      const pages = carrier.pageIndexes
-        .map((i) => pagesByIndex.get(i))
-        .filter((p): p is PageInfo => !!p);
-      const label = slugify(carrier.label);
-      const leafIds = carrier.subGroups.flatMap((sk) =>
-        sk.subGroups.flatMap((q) => q.subGroups.map((leaf) => leaf.id)),
-      );
-      requestDownload(pages, leafIds, carrier.label, label);
+      if (pages.length === 0) return;
+      const label = slugify(node.label);
+      requestDownload(pages, node.leafIds, node.label, label);
     },
     [pagesByIndex, requestDownload],
   );
@@ -967,12 +1372,14 @@ export default function ExpedicaoDiariaPage() {
     for (const carrier of filterGroups) {
       for (const sku of carrier.subGroups) {
         for (const qtd of sku.subGroups) {
-          for (const leaf of qtd.subGroups) {
-            if (!selectedSubIds.has(leaf.id)) continue;
-            touchedSubIds.push(leaf.id);
-            for (const idx of leaf.pageIndexes) {
-              const p = pagesByIndex.get(idx);
-              if (p) selectedPages.push(p);
+          for (const co of qtd.subGroups) {
+            for (const leaf of co.subGroups) {
+              if (!selectedSubIds.has(leaf.id)) continue;
+              touchedSubIds.push(leaf.id);
+              for (const idx of leaf.pageIndexes) {
+                const p = pagesByIndex.get(idx);
+                if (p) selectedPages.push(p);
+              }
             }
           }
         }
@@ -996,69 +1403,58 @@ export default function ExpedicaoDiariaPage() {
     });
   }, []);
 
-  const toggleParent = useCallback((carrier: FilterGroup) => {
-    const subIds = carrier.subGroups.flatMap((sk) =>
-      sk.subGroups.flatMap((q) => q.subGroups.map((leaf) => leaf.id)),
-    );
+  // Toggle de seleção em um nó qualquer da viewTree. Se TODAS as folhas
+  // descendentes estão marcadas, desmarca todas; caso contrário, marca
+  // todas. Operação batch sobre `node.leafIds`.
+  const toggleNode = useCallback((node: ViewNode) => {
+    const leafIds = node.leafIds;
+    if (leafIds.length === 0) return;
     setSelectedSubIds((prev) => {
       const next = new Set(prev);
-      const allSelected = subIds.every((id) => next.has(id));
-      if (allSelected) subIds.forEach((id) => next.delete(id));
-      else subIds.forEach((id) => next.add(id));
+      const allSelected = leafIds.every((id) => next.has(id));
+      if (allSelected) leafIds.forEach((id) => next.delete(id));
+      else leafIds.forEach((id) => next.add(id));
       return next;
     });
   }, []);
 
-  const toggleSku = useCallback((sku: SkuSubGroup) => {
-    const subIds = sku.subGroups.flatMap((q) =>
-      q.subGroups.map((leaf) => leaf.id),
-    );
-    setSelectedSubIds((prev) => {
+  const toggleExpand = useCallback((nodeId: string) => {
+    setExpandedNodeIds((prev) => {
       const next = new Set(prev);
-      const allSelected = subIds.every((id) => next.has(id));
-      if (allSelected) subIds.forEach((id) => next.delete(id));
-      else subIds.forEach((id) => next.add(id));
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
       return next;
     });
   }, []);
 
-  const toggleQtd = useCallback((qtd: QtdSubGroup) => {
-    const subIds = qtd.subGroups.map((s) => s.id);
-    setSelectedSubIds((prev) => {
-      const next = new Set(prev);
-      const allSelected = subIds.every((id) => next.has(id));
-      if (allSelected) subIds.forEach((id) => next.delete(id));
-      else subIds.forEach((id) => next.add(id));
-      return next;
-    });
-  }, []);
+  const toggleLevel = useCallback(
+    (level: LevelKey) => {
+      setActiveLevels((prev) => {
+        const next = new Set(prev);
+        if (next.has(level)) next.delete(level);
+        else next.add(level);
+        try {
+          window.localStorage.setItem(
+            levelsStorageKey(userId),
+            JSON.stringify(Array.from(next)),
+          );
+        } catch {
+          // ignora — preferência fica só na sessão se localStorage falhar
+        }
+        return next;
+      });
+    },
+    [userId],
+  );
 
-  const toggleExpand = useCallback((groupId: string) => {
-    setExpandedGroupIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
-  }, []);
-
-  const toggleSkuExpand = useCallback((skuId: string) => {
-    setExpandedSkuIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(skuId)) next.delete(skuId);
-      else next.add(skuId);
-      return next;
-    });
-  }, []);
-
-  const toggleQtdExpand = useCallback((qtdId: string) => {
-    setExpandedQtdIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(qtdId)) next.delete(qtdId);
-      else next.add(qtdId);
-      return next;
-    });
-  }, []);
+  // Recarrega activeLevels quando userId chega (sessão carrega async).
+  // Procura primeiro a chave namespaced; se não houver, mantém o que já
+  // foi lido no init lazy (chave global, fallback p/ usuários antigos).
+  useEffect(() => {
+    if (!userId) return;
+    const stored = readActiveLevels(userId);
+    if (stored) setActiveLevels(stored);
+  }, [userId]);
 
   const clearQueue = useCallback(() => {
     setPdfBytes(null);
@@ -1066,9 +1462,7 @@ export default function ExpedicaoDiariaPage() {
     setPdfFiles([]);
     setFilterGroups([]);
     setSelectedSubIds(new Set());
-    setExpandedGroupIds(new Set());
-    setExpandedSkuIds(new Set());
-    setExpandedQtdIds(new Set());
+    setExpandedNodeIds(new Set());
     setTrackingDupsByTid(new Map());
     setProgress(0);
     setProgressText("");
@@ -1094,38 +1488,20 @@ export default function ExpedicaoDiariaPage() {
     [pdfFiles, handlePDFFiles, clearQueue],
   );
 
-  const parentSelectionState = (
-    carrier: FilterGroup,
-  ): "none" | "some" | "all" => {
-    const leaves = carrier.subGroups.flatMap((sk) =>
-      sk.subGroups.flatMap((q) => q.subGroups),
-    );
-    const total = leaves.length;
-    if (total === 0) return "none";
-    const sel = leaves.filter((s) => selectedSubIds.has(s.id)).length;
-    if (sel === 0) return "none";
-    if (sel === total) return "all";
-    return "some";
-  };
-
-  const skuSelectionState = (sku: SkuSubGroup): "none" | "some" | "all" => {
-    const leaves = sku.subGroups.flatMap((q) => q.subGroups);
-    const total = leaves.length;
-    if (total === 0) return "none";
-    const sel = leaves.filter((s) => selectedSubIds.has(s.id)).length;
-    if (sel === 0) return "none";
-    if (sel === total) return "all";
-    return "some";
-  };
-
-  const qtdSelectionState = (qtd: QtdSubGroup): "none" | "some" | "all" => {
-    const total = qtd.subGroups.length;
-    if (total === 0) return "none";
-    const sel = qtd.subGroups.filter((s) => selectedSubIds.has(s.id)).length;
-    if (sel === 0) return "none";
-    if (sel === total) return "all";
-    return "some";
-  };
+  // Estado da checkbox de qualquer nó da viewTree, derivado das folhas
+  // descendentes (leafIds). all = todas marcadas; some = marcadas + não
+  // marcadas; none = nenhuma.
+  const nodeSelectionState = useCallback(
+    (node: ViewNode): "none" | "some" | "all" => {
+      const total = node.leafIds.length;
+      if (total === 0) return "none";
+      const sel = node.leafIds.filter((id) => selectedSubIds.has(id)).length;
+      if (sel === 0) return "none";
+      if (sel === total) return "all";
+      return "some";
+    },
+    [selectedSubIds],
+  );
 
   const formatDate = (iso: string): string => {
     const d = new Date(iso);
@@ -1298,428 +1674,71 @@ export default function ExpedicaoDiariaPage() {
       {pdfBytes && !isProcessing && filterGroups.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Filter className="h-5 w-5" /> Fila de Impressão
-            </CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2">
+                <Filter className="h-5 w-5" /> Fila de Impressão
+              </CardTitle>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Layers className="h-4 w-4 mr-1" /> Níveis
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>Mostrar níveis</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {ALL_LEVELS.map((level) => (
+                    <DropdownMenuCheckboxItem
+                      key={level}
+                      checked={activeLevels.has(level)}
+                      onCheckedChange={() => toggleLevel(level)}
+                      onSelect={(e) => e.preventDefault()}
+                    >
+                      {LEVEL_LABELS[level]}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
             <CardDescription>
-              {
-                filterGroups
-                  .flatMap((c) =>
-                    c.subGroups.flatMap((sk) =>
-                      sk.subGroups.flatMap((q) => q.subGroups),
-                    ),
-                  )
-                  .filter((leaf) => leaf.downloaded).length
-              }
-              /
-              {
-                filterGroups.flatMap((c) =>
+              {(() => {
+                const allLeaves = filterGroups.flatMap((c) =>
                   c.subGroups.flatMap((sk) =>
-                    sk.subGroups.flatMap((q) => q.subGroups),
+                    sk.subGroups.flatMap((q) =>
+                      q.subGroups.flatMap((co) => co.subGroups),
+                    ),
                   ),
-                ).length
-              }{" "}
-              subgrupos baixados
+                );
+                const downloaded = allLeaves.filter((l) => l.downloaded).length;
+                return `${downloaded}/${allLeaves.length} subgrupos baixados`;
+              })()}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              {filterGroups.map((c) => {
-                const carrierExpanded = expandedGroupIds.has(c.id);
-                const carrierState = parentSelectionState(c);
-                const carrierLeaves = c.subGroups.flatMap((sk) =>
-                  sk.subGroups.flatMap((q) => q.subGroups),
-                );
-                const carrierPrintedCount = c.pageIndexes.filter((i) =>
-                  printedPageIndexes.has(i),
-                ).length;
-                const carrierAnyPrinted =
-                  carrierPrintedCount > 0 ||
-                  carrierLeaves.some((leaf) =>
-                    printedSubgroupIds.has(leaf.id),
-                  );
-                return (
-                  <div
-                    key={c.id}
-                    className={cn(
-                      "rounded-lg border",
-                      c.downloaded
-                        ? "border-green-800 bg-green-950/20"
-                        : "border-slate-700 bg-slate-900",
-                    )}
-                  >
-                    {/* Nível 1: Transportadora */}
-                    <div className="flex items-center justify-between p-3">
-                      <div className="flex items-center gap-3 flex-1">
-                        <button
-                          type="button"
-                          onClick={() => toggleExpand(c.id)}
-                          className="text-muted-foreground hover:text-foreground"
-                          aria-label={carrierExpanded ? "Recolher" : "Expandir"}
-                        >
-                          {carrierExpanded ? (
-                            <ChevronDown className="h-4 w-4" />
-                          ) : (
-                            <ChevronRight className="h-4 w-4" />
-                          )}
-                        </button>
-                        <input
-                          type="checkbox"
-                          checked={carrierState === "all"}
-                          ref={(el) => {
-                            if (el)
-                              el.indeterminate = carrierState === "some";
-                          }}
-                          onChange={() => toggleParent(c)}
-                          className="accent-blue-500"
-                        />
-                        <div>
-                          <p className="font-semibold text-sm flex items-center gap-2">
-                            <Truck className="h-4 w-4" />
-                            {c.label}
-                            {carrierAnyPrinted && (
-                              <span className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1">
-                                {carrierPrintedCount > 0
-                                  ? `${carrierPrintedCount} impressa(s)`
-                                  : "Impresso"}
-                              </span>
-                            )}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {c.pageIndexes.length} página(s) ·{" "}
-                            {c.subGroups.length} SKU(s) · {carrierLeaves.length}{" "}
-                            tamanho(s)
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex gap-2 items-center">
-                        {c.downloaded && (
-                          <span className="text-xs text-green-400 font-medium">
-                            Baixado
-                          </span>
-                        )}
-                        <Button
-                          size="sm"
-                          variant={c.downloaded ? "outline" : "default"}
-                          className={cn(
-                            !c.downloaded &&
-                              "bg-blue-600 hover:bg-blue-700 text-white",
-                          )}
-                          onClick={() => downloadParentGroup(c)}
-                        >
-                          <Download className="h-4 w-4 mr-1" /> Transportadora
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Nível 2: SKU */}
-                    {carrierExpanded && c.subGroups.length > 0 && (
-                      <div className="border-t border-slate-800 divide-y divide-slate-800">
-                        {c.subGroups.map((sk) => {
-                          const skuExpanded = expandedSkuIds.has(sk.id);
-                          const skuState = skuSelectionState(sk);
-                          const skuLeaves = sk.subGroups.flatMap(
-                            (q) => q.subGroups,
-                          );
-                          const skuPrintedCount = sk.pageIndexes.filter((i) =>
-                            printedPageIndexes.has(i),
-                          ).length;
-                          const skuAnyPrinted =
-                            skuPrintedCount > 0 ||
-                            skuLeaves.some((leaf) =>
-                              printedSubgroupIds.has(leaf.id),
-                            );
-                          return (
-                            <div
-                              key={sk.id}
-                              className={cn(
-                                sk.isUnregistered && "bg-amber-950/10",
-                                sk.downloaded && "bg-green-950/10",
-                              )}
-                            >
-                              <div className="flex items-center justify-between px-3 py-2 pl-10">
-                                <div className="flex items-center gap-3 flex-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleSkuExpand(sk.id)}
-                                    className="text-muted-foreground hover:text-foreground"
-                                    aria-label={
-                                      skuExpanded ? "Recolher" : "Expandir"
-                                    }
-                                  >
-                                    {skuExpanded ? (
-                                      <ChevronDown className="h-4 w-4" />
-                                    ) : (
-                                      <ChevronRight className="h-4 w-4" />
-                                    )}
-                                  </button>
-                                  <input
-                                    type="checkbox"
-                                    checked={skuState === "all"}
-                                    ref={(el) => {
-                                      if (el)
-                                        el.indeterminate =
-                                          skuState === "some";
-                                    }}
-                                    onChange={() => toggleSku(sk)}
-                                    className="accent-blue-500"
-                                  />
-                                  <div>
-                                    <p
-                                      className={cn(
-                                        "text-sm font-semibold flex items-center gap-2",
-                                        sk.isUnregistered && "text-amber-300",
-                                      )}
-                                    >
-                                      {sk.label}
-                                      {skuAnyPrinted && (
-                                        <span className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1">
-                                          {skuPrintedCount > 0
-                                            ? `${skuPrintedCount} impressa(s)`
-                                            : "Impresso"}
-                                        </span>
-                                      )}
-                                    </p>
-                                    <p className="text-xs text-muted-foreground">
-                                      {sk.pageIndexes.length} página(s) ·{" "}
-                                      {sk.subGroups.length} QTD ·{" "}
-                                      {skuLeaves.length} tamanho(s)
-                                    </p>
-                                  </div>
-                                </div>
-                                <div className="flex gap-2 items-center">
-                                  {sk.downloaded && (
-                                    <span className="text-xs text-green-400">
-                                      Baixado
-                                    </span>
-                                  )}
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => downloadSkuGroup(c, sk)}
-                                  >
-                                    <Download className="h-4 w-4 mr-1" /> SKU
-                                  </Button>
-                                </div>
-                              </div>
-
-                              {/* Nível 3: QTD */}
-                              {skuExpanded && sk.subGroups.length > 0 && (
-                                <div className="divide-y divide-slate-800/60 border-t border-slate-800/60">
-                                  {sk.subGroups.map((q) => {
-                                    const qtdExpanded = expandedQtdIds.has(
-                                      q.id,
-                                    );
-                                    const qtdState = qtdSelectionState(q);
-                                    return (
-                                      <div
-                                        key={q.id}
-                                        className={cn(
-                                          q.downloaded && "bg-green-950/10",
-                                        )}
-                                      >
-                                        <div className="flex items-center justify-between px-3 py-2 pl-16">
-                                          <div className="flex items-center gap-3 flex-1">
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                toggleQtdExpand(q.id)
-                                              }
-                                              className="text-muted-foreground hover:text-foreground"
-                                              aria-label={
-                                                qtdExpanded
-                                                  ? "Recolher"
-                                                  : "Expandir"
-                                              }
-                                            >
-                                              {qtdExpanded ? (
-                                                <ChevronDown className="h-4 w-4" />
-                                              ) : (
-                                                <ChevronRight className="h-4 w-4" />
-                                              )}
-                                            </button>
-                                            <input
-                                              type="checkbox"
-                                              checked={qtdState === "all"}
-                                              ref={(el) => {
-                                                if (el)
-                                                  el.indeterminate =
-                                                    qtdState === "some";
-                                              }}
-                                              onChange={() => toggleQtd(q)}
-                                              className="accent-blue-500"
-                                            />
-                                            <div>
-                                              <p className="text-sm font-medium">
-                                                {q.label}
-                                              </p>
-                                              <p className="text-xs text-muted-foreground">
-                                                {q.pageIndexes.length}{" "}
-                                                página(s) ·{" "}
-                                                {q.subGroups.length}{" "}
-                                                tamanho(s)
-                                              </p>
-                                            </div>
-                                          </div>
-                                          <div className="flex gap-2 items-center">
-                                            {q.downloaded && (
-                                              <span className="text-xs text-green-400">
-                                                Baixado
-                                              </span>
-                                            )}
-                                            <Button
-                                              size="sm"
-                                              variant="outline"
-                                              onClick={() =>
-                                                downloadQtdGroup(c, sk, q)
-                                              }
-                                            >
-                                              <Download className="h-4 w-4 mr-1" />{" "}
-                                              Subgrupo
-                                            </Button>
-                                          </div>
-                                        </div>
-
-                                        {/* Nível 4: tamanho */}
-                                        {qtdExpanded &&
-                                          q.subGroups.length > 0 && (
-                                            <div className="divide-y divide-slate-800/40 border-t border-slate-800/40">
-                                              {q.subGroups.map((leaf) => {
-                                                const leafPrintedCount =
-                                                  leaf.pageIndexes.filter(
-                                                    (i) =>
-                                                      printedPageIndexes.has(i),
-                                                  ).length;
-                                                const wasPrinted =
-                                                  leafPrintedCount > 0 ||
-                                                  printedSubgroupIds.has(
-                                                    leaf.id,
-                                                  );
-                                                return (
-                                                  <div
-                                                    key={leaf.id}
-                                                    className={cn(
-                                                      "flex items-center justify-between px-3 py-2 pl-20",
-                                                      leaf.downloaded &&
-                                                        "bg-green-950/10",
-                                                    )}
-                                                  >
-                                                    <div className="flex items-center gap-3">
-                                                      <input
-                                                        type="checkbox"
-                                                        checked={selectedSubIds.has(
-                                                          leaf.id,
-                                                        )}
-                                                        onChange={() =>
-                                                          toggleSub(leaf.id)
-                                                        }
-                                                        className="accent-blue-500"
-                                                      />
-                                                      <div>
-                                                        <p className="text-sm flex items-center gap-2">
-                                                          {leaf.size}
-                                                          {wasPrinted && (
-                                                            <span className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1">
-                                                              {leafPrintedCount >
-                                                              0
-                                                                ? `${leafPrintedCount} impressa(s)`
-                                                                : "Impresso"}
-                                                            </span>
-                                                          )}
-                                                          {(() => {
-                                                            const semTracking =
-                                                              leaf.pageIndexes.filter(
-                                                                (i) => {
-                                                                  const pg =
-                                                                    pagesByIndex.get(
-                                                                      i,
-                                                                    );
-                                                                  return (
-                                                                    !pg?.trackingId?.trim()
-                                                                  );
-                                                                },
-                                                              ).length;
-                                                            return semTracking >
-                                                              0 ? (
-                                                              <span
-                                                                title="Não foi possível verificar o tracking ID dessa(s) etiqueta(s) — serão impressas sem dedup."
-                                                                className="text-[10px] text-amber-400 font-medium border border-amber-700/50 rounded px-1 inline-flex items-center gap-0.5"
-                                                              >
-                                                                <AlertTriangle className="h-2.5 w-2.5" />
-                                                                {semTracking}{" "}
-                                                                sem tracking
-                                                              </span>
-                                                            ) : null;
-                                                          })()}
-                                                        </p>
-                                                        <p className="text-xs text-muted-foreground">
-                                                          {
-                                                            leaf.pageIndexes
-                                                              .length
-                                                          }{" "}
-                                                          página(s)
-                                                        </p>
-                                                      </div>
-                                                    </div>
-                                                    <div className="flex gap-2 items-center">
-                                                      {leaf.downloaded && (
-                                                        <span className="text-xs text-green-400">
-                                                          Baixado
-                                                        </span>
-                                                      )}
-                                                      <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        onClick={() =>
-                                                          downloadSubgroup(
-                                                            c,
-                                                            sk,
-                                                            q,
-                                                            leaf.id,
-                                                          )
-                                                        }
-                                                      >
-                                                        <Download className="h-4 w-4 mr-1" />{" "}
-                                                        PDF
-                                                      </Button>
-                                                    </div>
-                                                  </div>
-                                                );
-                                              })}
-                                            </div>
-                                          )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              {viewTree.map((node) => (
+                <TreeNode
+                  key={node.id}
+                  node={node}
+                  depth={0}
+                  expandedNodeIds={expandedNodeIds}
+                  selectedSubIds={selectedSubIds}
+                  printedSubgroupIds={printedSubgroupIds}
+                  pagesByIndex={pagesByIndex}
+                  toggleExpand={toggleExpand}
+                  toggleNode={toggleNode}
+                  toggleSub={toggleSub}
+                  nodeSelectionState={nodeSelectionState}
+                  downloadViewNode={downloadViewNode}
+                />
+              ))}
             </div>
 
             <div className="flex gap-2 flex-wrap pt-2 border-t border-slate-800">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() =>
-                  setSelectedSubIds(
-                    new Set(
-                      filterGroups.flatMap((c) =>
-                        c.subGroups.flatMap((sk) =>
-                          sk.subGroups.flatMap((q) =>
-                            q.subGroups.map((leaf) => leaf.id),
-                          ),
-                        ),
-                      ),
-                    ),
-                  )
-                }
+                onClick={() => setSelectedSubIds(new Set(visibleLeafIds))}
               >
                 Selecionar Todos
               </Button>
