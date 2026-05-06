@@ -104,8 +104,8 @@ type PendingDownload = {
   label: string;
   subgroupIds: string[];
   groupLabel: string;
-  // Tracking IDs em conflito (impressos nos últimos 30d) — usado pra pedir
-  // senha de reimpressão e pro hash do reprintToken.
+  // Tracking IDs em conflito (impressos nos últimos 30d) — exibidos no
+  // dialog de confirmação de reimpressão.
   conflictingTrackings: string[];
   // Detalhes (quem/quando) de cada tracking em conflito, pra exibir no dialog.
   conflictDetails: TrackingIdDuplicate[];
@@ -416,7 +416,6 @@ export default function ExpedicaoDiariaPage() {
   const [pendingDownload, setPendingDownload] = useState<PendingDownload | null>(
     null,
   );
-  const [reprintPassword, setReprintPassword] = useState("");
   const [reprintLoading, setReprintLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const { data: session } = useSession();
@@ -1074,15 +1073,15 @@ export default function ExpedicaoDiariaPage() {
   // download do browser pra garantir que toda exportação esteja registrada.
   // Fluxo: client faz upload direto pro Vercel Blob (contorna o limite de
   // ~4,5MB de body das Functions) e depois manda JSON com o blobUrl.
-  // `reprintToken` (opcional) autoriza reimpressão quando há tracking IDs
-  // já em conflito na janela de 30d — vide POST /tracking-ids/grant-reprint.
+  // `confirmReprint=true` autoriza reimpressão quando há tracking IDs já em
+  // conflito na janela de 30d — sem ele, o servidor responde 409.
   const uploadToHistorico = useCallback(
     async (
       generated: { bytes: Uint8Array; fileName: string; pageCount: number },
       groupLabel: string,
       subgroupIds: string[],
       pages: PageInfo[],
-      reprintToken: string | null,
+      confirmReprint: boolean,
     ) => {
       // Conta SKUs no lote. Cada página contribui com 1 unidade pra cada
       // SKU detectado nela (em kits com 2+ SKUs distintos, todos somam).
@@ -1131,7 +1130,7 @@ export default function ExpedicaoDiariaPage() {
           trackingIds,
           skusCount,
           sessaoId: null,
-          reprintToken,
+          confirmReprint,
         }),
       });
       if (!res.ok) {
@@ -1151,7 +1150,7 @@ export default function ExpedicaoDiariaPage() {
   );
 
   const executeDownload = useCallback(
-    async (pending: PendingDownload, reprintToken: string | null = null) => {
+    async (pending: PendingDownload, confirmReprint = false) => {
       if (!pdfBytes) return;
       let generated;
       try {
@@ -1174,15 +1173,15 @@ export default function ExpedicaoDiariaPage() {
           pending.groupLabel,
           pending.subgroupIds,
           pending.pages,
-          reprintToken,
+          confirmReprint,
         );
       } catch (e) {
         const err = e as Error & { status?: number; conflicts?: string[] };
         // 409: o servidor detectou conflito que o cliente não tinha mapeado
         // (race com outro operador, OU download anterior nesta mesma sessão
         // que ainda não estava em trackingDupsByTid). Refresca o map com os
-        // detalhes vindos do /check e reabre o dialog de senha.
-        if (err.status === 409 && !reprintToken) {
+        // detalhes vindos do /check e reabre o dialog de confirmação.
+        if (err.status === 409 && !confirmReprint) {
           const conflictTids = err.conflicts ?? [];
           let details: TrackingIdDuplicate[] = [];
           if (conflictTids.length > 0) {
@@ -1216,7 +1215,7 @@ export default function ExpedicaoDiariaPage() {
             conflictDetails: details,
           });
           toast.info(
-            "Etiquetas já impressas — informe a senha pra reimprimir",
+            "Etiquetas já impressas — confirme pra reimprimir",
           );
           return;
         }
@@ -1230,8 +1229,8 @@ export default function ExpedicaoDiariaPage() {
       markSubgroupsDownloaded(pending.subgroupIds);
 
       // Marca localmente os trackings recém-impressos pra que próximas
-      // seleções na mesma sessão acionem o dialog de senha sem depender
-      // do estado server-side ter sido recarregado.
+      // seleções na mesma sessão acionem o dialog de confirmação sem
+      // depender do estado server-side ter sido recarregado.
       setTrackingDupsByTid((prev) => {
         const next = new Map(prev);
         const nowIso = new Date().toISOString();
@@ -1245,7 +1244,7 @@ export default function ExpedicaoDiariaPage() {
             impressoEm: nowIso,
             groupLabel: pending.groupLabel,
             historicoId: "local",
-            reimpressao: !!reprintToken,
+            reimpressao: confirmReprint,
             impressoPor: userEmail
               ? { nome: userName, email: userEmail }
               : null,
@@ -1306,46 +1305,20 @@ export default function ExpedicaoDiariaPage() {
     [trackingDupsByTid, executeDownload],
   );
 
-  // Confirma reimpressão: valida senha no servidor, recebe token HMAC,
-  // dispara executeDownload com o token. POST /historico verifica o token
-  // antes de inserir — falha sem token quebra com 409.
+  // Confirma reimpressão: dispara executeDownload com confirmReprint=true.
+  // O POST /historico aceita a flag e grava reimpressao=true em
+  // tracking_id_impresso pra fins de auditoria.
   const confirmReprint = useCallback(async () => {
     if (!pendingDownload) return;
-    if (!reprintPassword) {
-      toast.error("Digite a senha de reimpressão");
-      return;
-    }
+    const pending = pendingDownload;
     setReprintLoading(true);
     try {
-      const res = await fetch(
-        "/api/expedicao-diaria/tracking-ids/grant-reprint",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            password: reprintPassword,
-            trackingIds: pendingDownload.conflictingTrackings,
-          }),
-        },
-      );
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        toast.error(data.error ?? `Falha ao validar senha (HTTP ${res.status})`);
-        return;
-      }
-      const data = (await res.json()) as { token: string };
-      const pending = pendingDownload;
       setPendingDownload(null);
-      setReprintPassword("");
-      void executeDownload(pending, data.token);
-    } catch (e) {
-      toast.error(`Erro ao validar senha: ${(e as Error).message}`);
+      await executeDownload(pending, true);
     } finally {
       setReprintLoading(false);
     }
-  }, [pendingDownload, reprintPassword, executeDownload]);
+  }, [pendingDownload, executeDownload]);
 
   // Sanitiza label pra uso em filename (remove parêntese, acento, espaços).
   const slugify = (s: string): string =>
@@ -1774,10 +1747,7 @@ export default function ExpedicaoDiariaPage() {
       <AlertDialog
         open={pendingDownload !== null}
         onOpenChange={(open) => {
-          if (!open) {
-            setPendingDownload(null);
-            setReprintPassword("");
-          }
+          if (!open) setPendingDownload(null);
         }}
       >
         <AlertDialogContent>
@@ -1787,8 +1757,8 @@ export default function ExpedicaoDiariaPage() {
               <div className="space-y-2">
                 <p>
                   {pendingDownload?.conflictingTrackings.length} etiqueta(s)
-                  deste recorte foram impressas nos últimos 30 dias. Reimprimir
-                  exige a senha de autorização.
+                  deste recorte foram impressas nos últimos 30 dias. Confirme
+                  para reimprimir.
                 </p>
                 {pendingDownload?.conflictDetails.slice(0, 5).map((d) => (
                   <p
@@ -1809,32 +1779,9 @@ export default function ExpedicaoDiariaPage() {
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="space-y-2 px-6 pb-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Senha de autorização
-            </p>
-            <input
-              type="password"
-              autoFocus
-              value={reprintPassword}
-              onChange={(e) => setReprintPassword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  void confirmReprint();
-                }
-              }}
-              placeholder="Digite a senha"
-              className="w-full border rounded-md px-3 py-2 text-sm bg-background"
-              disabled={reprintLoading}
-            />
-          </div>
           <AlertDialogFooter>
             <AlertDialogCancel
-              onClick={() => {
-                setPendingDownload(null);
-                setReprintPassword("");
-              }}
+              onClick={() => setPendingDownload(null)}
               disabled={reprintLoading}
             >
               Cancelar
@@ -1844,7 +1791,7 @@ export default function ExpedicaoDiariaPage() {
                 e.preventDefault();
                 void confirmReprint();
               }}
-              disabled={reprintLoading || reprintPassword.length === 0}
+              disabled={reprintLoading}
             >
               {reprintLoading ? (
                 <Loader2 className="h-4 w-4 mr-1 animate-spin" />

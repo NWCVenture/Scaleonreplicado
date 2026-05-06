@@ -9,7 +9,6 @@ import {
 import { and, desc, eq, gt, inArray, lt } from "drizzle-orm";
 import { generateId } from "@/lib/utils";
 import { withContaAtiva } from "@/lib/tenancy";
-import { verifyReprintToken } from "@/lib/expedicao-reprint-token";
 import type { db as dbType } from "@/lib/db";
 
 type Tx = Parameters<Parameters<typeof dbType.transaction>[0]>[0];
@@ -18,7 +17,8 @@ type Tx = Parameters<Parameters<typeof dbType.transaction>[0]>[0];
 const RETENCAO_MS = 10 * 24 * 60 * 60 * 1000;
 
 // Janela de dedup por trackingId — 30 dias. Linhas em `tracking_id_impresso`
-// vivem por esse intervalo e bloqueiam reimpressão sem token.
+// vivem por esse intervalo. POST sem `confirmReprint=true` aborta com 409
+// quando há conflito; o cliente reapresenta com a flag pra reimprimir.
 const DEDUP_RETENCAO_MS = 30 * 24 * 60 * 60 * 1000;
 
 function isTenancyAuthError(err: unknown): boolean {
@@ -136,7 +136,7 @@ export async function POST(request: NextRequest) {
       trackingIds?: unknown;
       skusCount?: unknown;
       sessaoId?: unknown;
-      reprintToken?: unknown;
+      confirmReprint?: unknown;
     } | null;
 
     if (!body || typeof body.blobUrl !== "string" || !body.blobUrl) {
@@ -191,10 +191,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const reprintToken =
-      typeof body.reprintToken === "string" && body.reprintToken
-        ? body.reprintToken
-        : null;
+    const confirmReprint = body.confirmReprint === true;
 
     const id = generateId();
     const expiresAt = new Date(Date.now() + RETENCAO_MS);
@@ -202,7 +199,8 @@ export async function POST(request: NextRequest) {
 
     const result = await withContaAtiva(async (tx, contaId) => {
       // 1. Valida duplicatas server-side. Se algum tracking já estiver na
-      // janela de 30d e não houver reprintToken válido, aborta com 409.
+      // janela de 30d e o cliente não tiver confirmado reimpressão, aborta
+      // com 409 — a UI exibe os duplicados e reenvia com confirmReprint=true.
       let conflictingTrackings: string[] = [];
       if (trackingIds.length > 0) {
         const conflicts = await tx
@@ -224,22 +222,10 @@ export async function POST(request: NextRequest) {
 
       let isReprint = false;
       if (conflictingTrackings.length > 0) {
-        if (!reprintToken) {
+        if (!confirmReprint) {
           return {
             kind: "conflict" as const,
             conflicts: conflictingTrackings,
-          };
-        }
-        const verified = verifyReprintToken(reprintToken, {
-          contaId,
-          usuarioId: session.user.id,
-          trackingIds: conflictingTrackings,
-        });
-        if (!verified.ok) {
-          return {
-            kind: "conflict" as const,
-            conflicts: conflictingTrackings,
-            reason: verified.reason,
           };
         }
         isReprint = true;
@@ -282,7 +268,7 @@ export async function POST(request: NextRequest) {
         .returning();
 
       // 3. INSERT batch em tracking_id_impresso — uma linha por tracking,
-      // com reimpressao=true se este POST passou pelo gate de senha.
+      // com reimpressao=true se o cliente confirmou reimpressão de duplicado.
       if (trackingIds.length > 0) {
         await tx.insert(trackingIdImpresso).values(
           trackingIds.map((tid) => ({
@@ -331,7 +317,6 @@ export async function POST(request: NextRequest) {
         {
           error: "Etiquetas já impressas nos últimos 30 dias",
           conflicts: result.conflicts,
-          reason: "reason" in result ? result.reason : undefined,
         },
         { status: 409 },
       );
