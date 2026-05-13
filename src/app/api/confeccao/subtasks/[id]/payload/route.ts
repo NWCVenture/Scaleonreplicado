@@ -11,9 +11,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
-import { withContaAtiva } from "@/lib/tenancy";
+import { generateId } from "@/lib/utils";
 import {
+  isAdminPapel,
+  requireContaAtiva,
+  withConta,
+} from "@/lib/tenancy";
+import {
+  confeccaoNota,
   confeccaoSubtask,
+  usuarioConta,
+  user,
   type ConfeccaoSubtaskPrefixo,
 } from "@/lib/db/schema";
 import { SubtaskCompraPayloadSchema } from "@/lib/confeccao/schemas/payloads/compra";
@@ -87,23 +95,25 @@ export async function PATCH(
       return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
     }
 
+    const ctxConta = await requireContaAtiva();
     const { id } = await ctx.params;
     const body = (await request.json()) as Record<string, unknown>;
+    const justificativaEdicao =
+      typeof body.justificativaEdicao === "string"
+        ? body.justificativaEdicao.trim()
+        : null;
 
-    const result = await withContaAtiva(async (tx, contaId) => {
+    const result = await withConta(ctxConta.contaId, async (tx) => {
       const [st] = await tx
         .select()
         .from(confeccaoSubtask)
         .where(
           and(
             eq(confeccaoSubtask.id, id),
-            eq(confeccaoSubtask.contaId, contaId),
+            eq(confeccaoSubtask.contaId, ctxConta.contaId),
           ),
         );
       if (!st) return { notFound: true as const };
-      if (st.status === "concluida") {
-        return { blocked: "concluida" as const };
-      }
       if (st.status === "cancelada") {
         return { blocked: "cancelada" as const };
       }
@@ -111,16 +121,64 @@ export async function PATCH(
         return { blocked: "bloqueada" as const };
       }
 
+      // Edição retroativa em subtask concluída: admin only + justificativa
+      const ehEdicaoRetroativa = st.status === "concluida";
+      if (ehEdicaoRetroativa) {
+        // Valida papel admin (consulta usuario_conta — fora de RLS)
+        const [vinculo] = await tx
+          .select({ papel: usuarioConta.papel })
+          .from(usuarioConta)
+          .where(
+            and(
+              eq(usuarioConta.usuarioId, session.user.id),
+              eq(usuarioConta.contaId, ctxConta.contaId),
+              eq(usuarioConta.ativo, true),
+            ),
+          );
+        if (!isAdminPapel(vinculo?.papel ?? null)) {
+          return { naoAdmin: true as const };
+        }
+        if (!justificativaEdicao || justificativaEdicao.length < 5) {
+          return { semJustificativa: true as const };
+        }
+      }
+
       const validacao = validarPayloadPorPrefixo(st.prefixo, body.payload);
       if (!validacao.ok) {
         return { invalido: true as const, details: validacao.details };
       }
 
+      const payloadAntigo = st.payload as Record<string, unknown>;
       const [updated] = await tx
         .update(confeccaoSubtask)
         .set({ payload: validacao.data, updatedAt: new Date() })
         .where(eq(confeccaoSubtask.id, id))
         .returning();
+
+      // Auditoria de edição retroativa
+      if (ehEdicaoRetroativa) {
+        const [editor] = await tx
+          .select({ name: user.name })
+          .from(user)
+          .where(eq(user.id, session.user.id));
+        await tx.insert(confeccaoNota).values({
+          id: generateId(),
+          contaId: ctxConta.contaId,
+          subtaskId: id,
+          autorId: session.user.id,
+          conteudo: `Payload da subtask editado retroativamente por ${editor?.name ?? "Admin"} (subtask já concluída). Justificativa: ${justificativaEdicao}`,
+          isAuditoria: true,
+          isInterna: true,
+          metadata: {
+            acao: "edicao_retroativa_payload",
+            justificativa: justificativaEdicao,
+            valorAntigo: payloadAntigo,
+            valorNovo: validacao.data,
+            editorId: session.user.id,
+          },
+        });
+      }
+
       return { ok: true as const, item: updated };
     });
 
@@ -132,12 +190,28 @@ export async function PATCH(
     }
     if ("blocked" in result) {
       const msg =
-        result.blocked === "concluida"
-          ? "Subtask concluída — use o fluxo de edição retroativa (RITM-15)"
-          : result.blocked === "cancelada"
-            ? "Subtask cancelada — não pode ser editada"
-            : "Subtask bloqueada — aguardando subtask anterior";
+        result.blocked === "cancelada"
+          ? "Subtask cancelada — não pode ser editada"
+          : "Subtask bloqueada — aguardando subtask anterior";
       return NextResponse.json({ error: msg }, { status: 400 });
+    }
+    if ("naoAdmin" in result) {
+      return NextResponse.json(
+        {
+          error:
+            "Subtask concluída — apenas admin pode editar (edição retroativa)",
+        },
+        { status: 403 },
+      );
+    }
+    if ("semJustificativa" in result) {
+      return NextResponse.json(
+        {
+          error:
+            "Edição retroativa exige `justificativaEdicao` (mínimo 5 caracteres) no payload",
+        },
+        { status: 400 },
+      );
     }
     if ("invalido" in result) {
       return NextResponse.json(

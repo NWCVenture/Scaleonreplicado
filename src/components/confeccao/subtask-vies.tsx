@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
 import { BlocoLalamoveManual } from "@/components/confeccao/bloco-lalamove-manual";
+import { abrirWhatsAppComLog } from "@/lib/confeccao/whatsapp";
 import {
   calcularCustoVies,
   type SubtaskViesPayload,
@@ -244,10 +245,13 @@ export function SubtaskVies({
       toast.error("Fábrica sem WhatsApp cadastrado");
       return;
     }
-    const limpo = fornecedor.whatsapp.replace(/\D/g, "");
-    const msg = `Olá, ${fornecedor.nome}. Sobre a OP ${opNumero} (${subtask.numero}):\n\nGostaríamos de solicitar viés. Bandeira: ${tamanhoBandeiraCm || "?"}cm. Aguardo retorno.`;
-    const url = `https://wa.me/${limpo}?text=${encodeURIComponent(msg)}`;
-    window.open(url, "_blank", "noopener");
+    abrirWhatsAppComLog({
+      telefone: fornecedor.whatsapp,
+      destinatarioNome: fornecedor.nome,
+      mensagem: `Olá, ${fornecedor.nome}. Sobre a OP ${opNumero} (${subtask.numero}):\n\nGostaríamos de solicitar viés. Bandeira: ${tamanhoBandeiraCm || "?"}cm. Aguardo retorno.`,
+      subtaskId: subtask.id,
+      contexto: `Viés — OP ${opNumero}`,
+    });
   }
 
   const custoTotal =

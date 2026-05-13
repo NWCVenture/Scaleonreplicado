@@ -27,6 +27,7 @@ import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
 import { BlocoLalamoveManual } from "@/components/confeccao/bloco-lalamove-manual";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
+import { abrirWhatsAppComLog } from "@/lib/confeccao/whatsapp";
 import type { ConfeccaoSubtask } from "@/lib/db/schema";
 import type { SubtaskCompraPayload } from "@/lib/confeccao/schemas/payloads/compra";
 
@@ -350,10 +351,13 @@ export function SubtaskCompra({
       toast.error("Fornecedor sem WhatsApp cadastrado");
       return;
     }
-    const limpo = fornecedor.whatsapp.replace(/\D/g, "");
-    const msg = `Olá, ${fornecedor.nome}. Sobre a OP ${opNumero} (${subtask.numero}):\n\nGostaria de confirmar o pedido de tecido. Aguardo retorno.`;
-    const url = `https://wa.me/${limpo}?text=${encodeURIComponent(msg)}`;
-    window.open(url, "_blank", "noopener");
+    abrirWhatsAppComLog({
+      telefone: fornecedor.whatsapp,
+      destinatarioNome: fornecedor.nome,
+      mensagem: `Olá, ${fornecedor.nome}. Sobre a OP ${opNumero} (${subtask.numero}):\n\nGostaria de confirmar o pedido de tecido. Aguardo retorno.`,
+      subtaskId: subtask.id,
+      contexto: `Compra de Tecido — OP ${opNumero}`,
+    });
   }
 
   return (
