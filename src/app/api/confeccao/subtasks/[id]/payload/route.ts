@@ -17,6 +17,7 @@ import {
   type ConfeccaoSubtaskPrefixo,
 } from "@/lib/db/schema";
 import { SubtaskCompraPayloadSchema } from "@/lib/confeccao/schemas/payloads/compra";
+import { SubtaskRiscoPayloadSchema } from "@/lib/confeccao/schemas/payloads/risco";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -37,7 +38,12 @@ function validarPayloadPorPrefixo(
       if (!r.success) return { ok: false, details: r.error.issues };
       return { ok: true, data: r.data as Record<string, unknown> };
     }
-    // Outras subtasks (RITM-09 a 13): payload aceito sem schema específico
+    case "OPRIS": {
+      const r = SubtaskRiscoPayloadSchema.safeParse(payload);
+      if (!r.success) return { ok: false, details: r.error.issues };
+      return { ok: true, data: r.data as Record<string, unknown> };
+    }
+    // Outras subtasks (RITM-10 a 13): payload aceito sem schema específico
     // por ora. Cada RITM vai adicionar seu schema aqui.
     default: {
       if (typeof payload !== "object" || payload === null) {

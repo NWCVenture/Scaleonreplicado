@@ -12,7 +12,14 @@ import {
   concluirSubtask,
   TransicaoSubtaskError,
 } from "@/lib/confeccao/transicao-subtask";
-import { ConcluirSubtaskCompraSchema } from "@/lib/confeccao/schemas/payloads/compra";
+import {
+  ConcluirSubtaskCompraSchema,
+  type SubtaskCompraPayload,
+} from "@/lib/confeccao/schemas/payloads/compra";
+import {
+  ConcluirSubtaskRiscoSchema,
+  validarLarguraVsRolo,
+} from "@/lib/confeccao/schemas/payloads/risco";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -60,8 +67,45 @@ export async function POST(
               "Payload da subtask Compra está incompleto. Preencha todos os campos pré + pós-compra antes de concluir.",
           };
         }
+      } else if (st.prefixo === "OPRIS") {
+        const r = ConcluirSubtaskRiscoSchema.safeParse(st.payload);
+        if (!r.success) {
+          return {
+            invalido: true as const,
+            details: r.error.issues,
+            mensagem:
+              "Payload do Risco está incompleto. Preencha fornecedor, tamanhos, dados técnicos e valor antes de concluir.",
+          };
+        }
+        // Validação cross-subtask: largura do risco ≤ largura do rolo (OPBUY.pos)
+        const [opbuy] = await tx
+          .select({ payload: confeccaoSubtask.payload })
+          .from(confeccaoSubtask)
+          .where(
+            and(
+              eq(confeccaoSubtask.ordemProducaoId, st.ordemProducaoId),
+              eq(confeccaoSubtask.prefixo, "OPBUY"),
+            ),
+          );
+        const larguraRoloCm =
+          (opbuy?.payload as SubtaskCompraPayload | undefined)?.pos
+            ?.larguraRoloCm ?? null;
+        const valida = validarLarguraVsRolo(r.data.larguraCm, larguraRoloCm);
+        if (!valida.ok) {
+          return {
+            invalido: true as const,
+            details: [
+              {
+                code: "custom",
+                path: ["larguraCm"],
+                message: valida.mensagem,
+              },
+            ],
+            mensagem: valida.mensagem,
+          };
+        }
       }
-      // Outras subtasks (RITM-09+): validação respectiva, por ora aceita
+      // Outras subtasks (RITM-10+): validação respectiva, por ora aceita
       // qualquer payload (cada RITM adiciona seu schema de conclusão).
 
       const transicao = await concluirSubtask(tx, {

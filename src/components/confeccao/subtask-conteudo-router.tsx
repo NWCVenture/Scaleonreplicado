@@ -5,6 +5,7 @@
 // (09-13) mostram placeholder até que cada RITM seja entregue.
 
 import { SubtaskCompra } from "./subtask-compra";
+import { SubtaskRisco } from "./subtask-risco";
 import type {
   ConfeccaoSubtask,
   ConfeccaoSubtaskPrefixo,
@@ -12,7 +13,7 @@ import type {
 
 const PLACEHOLDERS: Record<ConfeccaoSubtaskPrefixo, string> = {
   OPBUY: "RITM-08 — Compra de Tecido",
-  OPRIS: "RITM-09 — Risco (em desenvolvimento)",
+  OPRIS: "RITM-09 — Risco",
   OPCOR: "RITM-10 — Corte (em desenvolvimento)",
   OPVIE: "RITM-11 — Viés (em desenvolvimento)",
   OPSEW: "RITM-12 — Costura (em desenvolvimento)",
@@ -35,6 +36,16 @@ export function SubtaskConteudoRouter({
   if (subtask.prefixo === "OPBUY") {
     return (
       <SubtaskCompra
+        subtask={subtask}
+        opNumero={opNumero}
+        contaId={contaId}
+        onAlterado={onAlterado}
+      />
+    );
+  }
+  if (subtask.prefixo === "OPRIS") {
+    return (
+      <SubtaskRisco
         subtask={subtask}
         opNumero={opNumero}
         contaId={contaId}
