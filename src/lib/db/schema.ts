@@ -10,6 +10,7 @@ import {
   real,
   index,
   uniqueIndex,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations, sql, type InferSelectModel } from "drizzle-orm";
 
@@ -1839,8 +1840,12 @@ export const confeccaoAnexo = pgTable(
       () => confeccaoOrdemProducao.id,
       { onDelete: "cascade" },
     ),
-    // FK será adicionada via ALTER TABLE na migration da RITM-03
-    lalamoveId: text("lalamove_id"),
+    // FK adicionada na RITM-03 via Drizzle (forward ref para confeccaoLalamove).
+    // Drizzle gera ALTER TABLE ADD CONSTRAINT na migration nova.
+    lalamoveId: text("lalamove_id").references(
+      (): AnyPgColumn => confeccaoLalamove.id,
+      { onDelete: "cascade" },
+    ),
     // 'nf_compra' | 'risco_digital' | 'foto_papagaio' | 'foto_defeito'
     // | 'comprovante_lalamove' | 'outros'
     categoria: text("categoria").notNull(),
@@ -1953,3 +1958,450 @@ export type ConfeccaoSubtaskStatus =
   (typeof confeccaoSubtaskStatusEnum.enumValues)[number];
 export type ConfeccaoSubtaskPrefixo =
   (typeof confeccaoSubtaskPrefixoEnum.enumValues)[number];
+
+// ============================================================
+// 16. CONFECÇÃO — RITM-03: Lalamove, retiradas, subconferências
+// ============================================================
+// Logística (Lalamove) + fluxo de retiradas da Costura e subconferências.
+//
+// Modelagem dual-mode (manual e API) desde o MVP. Modo manual ativo em
+// V1.0; modo API ativado por feature flag em V1.3 (RITMs 25-28). Campos
+// da API ficam NULL no modo manual e vice-versa.
+//
+// ⚠️ Detalhes críticos:
+//   - order_id_api é SEMPRE text (Lalamove estendeu pra 19 dígitos em set/2025)
+//   - cotação Lalamove dura 5 minutos — validar expira_em antes de criar order
+//   - webhook_event aceita conta_id NULL (resolução posterior por role com bypass)
+//   - schedule_at sempre em UTC; converter de/para Brasília na UI
+//   - cancelamento da OP em cascata cancela orders ativos (RITM-18)
+
+export const confeccaoLalamoveStatusEnum = pgEnum(
+  "confeccao_lalamove_status",
+  [
+    "rascunho",
+    "cotado",
+    "procurando_motorista",
+    "motorista_designado",
+    "a_caminho_coleta",
+    "coletado",
+    "entregue",
+    "cancelado",
+    "rejeitado",
+    "expirado",
+  ],
+);
+
+export const confeccaoLalamoveTipoEnum = pgEnum("confeccao_lalamove_tipo", [
+  "principal", // Lalamove de fluxo (compra→corte, corte→costura, ...)
+  "outros", // Ex: envio de etiquetas — não compõe custo principal
+]);
+
+export const confeccaoLalamoveOrigemSolicitacaoEnum = pgEnum(
+  "confeccao_lalamove_origem_solicitacao",
+  ["manual", "api"],
+);
+
+export const confeccaoLalamoveCotacaoStatusEnum = pgEnum(
+  "confeccao_lalamove_cotacao_status",
+  ["valida", "expirada", "convertida_em_pedido", "descartada"],
+);
+
+export const confeccaoLalamoveWebhookEventoEnum = pgEnum(
+  "confeccao_lalamove_webhook_evento",
+  ["ORDER_STATUS_CHANGED", "DRIVER_ASSIGNED", "OUTROS"],
+);
+
+export const confeccaoRetiradaTipoEnum = pgEnum(
+  "confeccao_retirada_tipo",
+  ["parcial", "final"],
+);
+
+export const confeccaoTipoDefeitoEnum = pgEnum("confeccao_tipo_defeito", [
+  "rebarba",
+  "costura_desalinhada",
+  "costura_incompleta",
+  "gola",
+  "mancha",
+  "tecido",
+  "furo",
+  "outros",
+]);
+
+export const confeccaoDestinoReprovadasEnum = pgEnum(
+  "confeccao_destino_reprovadas",
+  ["doacao", "descarte", "retrabalho"],
+);
+
+// ------------------------------------------------------------
+// Retirada — tem que vir antes de Lalamove no schema porque
+// confeccaoLalamove.retirada_id referencia confeccao_retirada.
+// (Drizzle aceita forward ref via callback, mas declarar antes
+// quando não há dependência circular fica mais limpo.)
+// ------------------------------------------------------------
+export const confeccaoRetirada = pgTable(
+  "confeccao_retirada",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    subtaskCosturaId: text("subtask_costura_id")
+      .notNull()
+      .references(() => confeccaoSubtask.id, { onDelete: "cascade" }),
+    oficinaId: text("oficina_id")
+      .notNull()
+      .references(() => confeccaoFornecedor.id, { onDelete: "restrict" }),
+    // Numero: OPXXXXXXXX-RET-NN; sequencial por (subtask × oficina).
+    // Implementação da geração na RITM-12 (Costura).
+    numero: text("numero").notNull(),
+    tipo: confeccaoRetiradaTipoEnum("tipo").notNull(),
+    // Estrutura: {"M": {"preto": 100, "branco": 50}, "G": {...}}
+    pecasPorTamanhoCor: jsonb("pecas_por_tamanho_cor")
+      .$type<Record<string, Record<string, number>>>()
+      .notNull(),
+    dataRetirada: timestamp("data_retirada").notNull(),
+    canceladaEm: timestamp("cancelada_em"),
+    canceladaPorId: text("cancelada_por_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uq_confeccao_retirada_numero").on(table.numero),
+    index("idx_confeccao_retirada_subtask_costura").on(table.subtaskCosturaId),
+    index("idx_confeccao_retirada_oficina").on(table.oficinaId),
+  ],
+);
+
+export const confeccaoLalamove = pgTable(
+  "confeccao_lalamove",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    // Pelo menos uma das duas FKs precisa estar preenchida (CHECK adicionado
+    // manualmente no SQL da migration).
+    subtaskId: text("subtask_id").references(() => confeccaoSubtask.id, {
+      onDelete: "cascade",
+    }),
+    retiradaId: text("retirada_id").references(() => confeccaoRetirada.id, {
+      onDelete: "cascade",
+    }),
+    tipo: confeccaoLalamoveTipoEnum("tipo").notNull().default("principal"),
+    origemSolicitacao: confeccaoLalamoveOrigemSolicitacaoEnum(
+      "origem_solicitacao",
+    )
+      .notNull()
+      .default("manual"),
+    status: confeccaoLalamoveStatusEnum("status")
+      .notNull()
+      .default("rascunho"),
+    // Endereços (snapshot — não muda se fornecedor for editado depois)
+    origemEndereco: jsonb("origem_endereco")
+      .$type<Record<string, string | null>>()
+      .notNull(),
+    origemLat: text("origem_lat"),
+    origemLng: text("origem_lng"),
+    destinoEndereco: jsonb("destino_endereco")
+      .$type<Record<string, string | null>>()
+      .notNull(),
+    destinoLat: text("destino_lat"),
+    destinoLng: text("destino_lng"),
+    // Contatos (obrigatórios para API a partir do `cotado`; opcionais manual)
+    contatoOrigemNome: text("contato_origem_nome"),
+    contatoOrigemTelefone: text("contato_origem_telefone"), // E.164 quando API
+    contatoDestinoNome: text("contato_destino_nome"),
+    contatoDestinoTelefone: text("contato_destino_telefone"),
+    remarksDestino: text("remarks_destino"),
+    // Operacional
+    valor: real("valor"),
+    moeda: text("moeda").notNull().default("BRL"),
+    conteudoDescricao: text("conteudo_descricao"),
+    quantidadePecas: integer("quantidade_pecas"),
+    // API (NULL no modo manual)
+    serviceType: text("service_type"),
+    specialRequests: text("special_requests").array(),
+    scheduleAt: timestamp("schedule_at"), // sempre UTC
+    quotationIdApi: text("quotation_id_api"),
+    // ⚠️ SEMPRE text — Lalamove estendeu pra 19 dígitos em set/2025
+    orderIdApi: text("order_id_api"),
+    shareLink: text("share_link"),
+    driverIdApi: text("driver_id_api"),
+    driverNome: text("driver_nome"),
+    driverTelefone: text("driver_telefone"),
+    driverPlaca: text("driver_placa"),
+    distanciaMetros: integer("distancia_metros"),
+    priceBreakdown: jsonb("price_breakdown").$type<Record<string, unknown>>(),
+    lastDriverLat: text("last_driver_lat"),
+    lastDriverLng: text("last_driver_lng"),
+    lastDriverLocationAt: timestamp("last_driver_location_at"),
+    // Timestamps
+    dataSolicitacao: timestamp("data_solicitacao").notNull().defaultNow(),
+    dataColeta: timestamp("data_coleta"),
+    dataEntrega: timestamp("data_entrega"),
+    canceladaEm: timestamp("cancelada_em"),
+    canceladaPorId: text("cancelada_por_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    cancelamentoMotivo: text("cancelamento_motivo"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_confeccao_lalamove_subtask").on(table.subtaskId),
+    index("idx_confeccao_lalamove_retirada").on(table.retiradaId),
+    index("idx_confeccao_lalamove_status").on(table.status),
+    // Índices parciais: ajustados manualmente no SQL gerado se Drizzle não suportar
+    index("idx_confeccao_lalamove_order_id_api").on(table.orderIdApi),
+    index("idx_confeccao_lalamove_procura_alta").on(
+      table.status,
+      table.dataSolicitacao,
+    ),
+  ],
+);
+
+export const confeccaoLalamoveCotacao = pgTable(
+  "confeccao_lalamove_cotacao",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    lalamoveId: text("lalamove_id")
+      .notNull()
+      .references(() => confeccaoLalamove.id, { onDelete: "cascade" }),
+    // ID retornado por POST /v3/quotations — único
+    quotationIdApi: text("quotation_id_api").notNull().unique(),
+    status: confeccaoLalamoveCotacaoStatusEnum("status")
+      .notNull()
+      .default("valida"),
+    valorCotado: real("valor_cotado").notNull(),
+    moeda: text("moeda").notNull().default("BRL"),
+    distanciaMetros: integer("distancia_metros"),
+    serviceType: text("service_type").notNull(),
+    // Array com {stopId, address, coordinates} — os stopIds precisam ser
+    // repassados ao criar o order via POST /v3/orders
+    stopsApi: jsonb("stops_api")
+      .$type<Array<Record<string, unknown>>>()
+      .notNull(),
+    requestPayload: jsonb("request_payload")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    responsePayload: jsonb("response_payload")
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    // = criada_em + 5 minutos (regra da Lalamove)
+    expiraEm: timestamp("expira_em").notNull(),
+    criadaPorId: text("criada_por_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    // Índice parcial — ajustado manualmente no SQL pra ficar WHERE status='valida'
+    index("idx_confeccao_lalamove_cotacao_validas").on(
+      table.lalamoveId,
+      table.expiraEm,
+    ),
+  ],
+);
+
+// Log cru de webhooks da Lalamove — append-only, idempotência.
+// Aceita conta_id NULL: receiver insere antes de resolver canal/conta;
+// resolução acontece em job assíncrono que usa role com bypass RLS.
+export const confeccaoLalamoveWebhookEvent = pgTable(
+  "confeccao_lalamove_webhook_event",
+  {
+    id: text("id").primaryKey(),
+    lalamoveId: text("lalamove_id").references(() => confeccaoLalamove.id, {
+      onDelete: "set null",
+    }),
+    contaId: text("conta_id").references(() => conta.id, {
+      onDelete: "set null",
+    }),
+    evento: confeccaoLalamoveWebhookEventoEnum("evento").notNull(),
+    // Vem no payload, usado para correlacionar com lalamoves.order_id_api
+    orderIdApi: text("order_id_api").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    assinaturaHeader: text("assinatura_header"),
+    recebidoEm: timestamp("recebido_em").notNull().defaultNow(),
+    processado: boolean("processado").notNull().default(false),
+    processadoEm: timestamp("processado_em"),
+    erroProcessamento: text("erro_processamento"),
+  },
+  (table) => [
+    // Índices parciais ajustados manualmente
+    index("idx_confeccao_lalamove_webhook_nao_processados").on(
+      table.recebidoEm,
+    ),
+    index("idx_confeccao_lalamove_webhook_order").on(table.orderIdApi),
+  ],
+);
+
+// Subconferência — vinculada 1:1 a uma retirada da Costura.
+// É a unidade de trabalho dentro da subtask Conferência (OPCONF).
+export const confeccaoSubconferencia = pgTable(
+  "confeccao_subconferencia",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    subtaskConferenciaId: text("subtask_conferencia_id")
+      .notNull()
+      .references(() => confeccaoSubtask.id, { onDelete: "cascade" }),
+    retiradaId: text("retirada_id")
+      .notNull()
+      .unique()
+      .references(() => confeccaoRetirada.id, { onDelete: "cascade" }),
+    // Herda da retirada: OPXXXXXXXX-CONF-RETNN
+    numero: text("numero").notNull(),
+    status: confeccaoSubtaskStatusEnum("status")
+      .notNull()
+      .default("em_andamento"),
+    // Bloco 1 — quantitativa (sistema só revela esperado após confirmação)
+    pecasRecebidas: jsonb("pecas_recebidas").$type<
+      Record<string, Record<string, number>>
+    >(),
+    divergenciaConfirmada: boolean("divergencia_confirmada")
+      .notNull()
+      .default(false),
+    oficinaResponsavelDivergenciaId: text(
+      "oficina_responsavel_divergencia_id",
+    ).references(() => confeccaoFornecedor.id, { onDelete: "set null" }),
+    quantidadeRevelada: boolean("quantidade_revelada")
+      .notNull()
+      .default(false),
+    // Bloco 2 — inspeção visual
+    responsavelInspecaoId: text("responsavel_inspecao_id").references(
+      () => user.id,
+      { onDelete: "set null" },
+    ),
+    aprovadas: jsonb("aprovadas").$type<
+      Record<string, Record<string, number>>
+    >(),
+    reprovadas: jsonb("reprovadas").$type<
+      Record<string, Record<string, number>>
+    >(),
+    tiposDefeito: confeccaoTipoDefeitoEnum("tipos_defeito").array(),
+    dataInspecao: timestamp("data_inspecao"),
+    // Bloco 3 — destinação
+    destinoReprovadas: confeccaoDestinoReprovadasEnum("destino_reprovadas"),
+    localizacaoArmazem: text("localizacao_armazem"),
+    concluidaEm: timestamp("concluida_em"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uq_confeccao_subconferencia_numero").on(table.numero),
+    index("idx_confeccao_subconferencia_subtask").on(
+      table.subtaskConferenciaId,
+    ),
+  ],
+);
+
+export const confeccaoLalamoveRelations = relations(
+  confeccaoLalamove,
+  ({ one, many }) => ({
+    subtask: one(confeccaoSubtask, {
+      fields: [confeccaoLalamove.subtaskId],
+      references: [confeccaoSubtask.id],
+    }),
+    retirada: one(confeccaoRetirada, {
+      fields: [confeccaoLalamove.retiradaId],
+      references: [confeccaoRetirada.id],
+    }),
+    cotacoes: many(confeccaoLalamoveCotacao),
+    webhookEvents: many(confeccaoLalamoveWebhookEvent),
+  }),
+);
+
+export const confeccaoLalamoveCotacaoRelations = relations(
+  confeccaoLalamoveCotacao,
+  ({ one }) => ({
+    lalamove: one(confeccaoLalamove, {
+      fields: [confeccaoLalamoveCotacao.lalamoveId],
+      references: [confeccaoLalamove.id],
+    }),
+  }),
+);
+
+export const confeccaoLalamoveWebhookEventRelations = relations(
+  confeccaoLalamoveWebhookEvent,
+  ({ one }) => ({
+    lalamove: one(confeccaoLalamove, {
+      fields: [confeccaoLalamoveWebhookEvent.lalamoveId],
+      references: [confeccaoLalamove.id],
+    }),
+  }),
+);
+
+export const confeccaoRetiradaRelations = relations(
+  confeccaoRetirada,
+  ({ one, many }) => ({
+    subtaskCostura: one(confeccaoSubtask, {
+      fields: [confeccaoRetirada.subtaskCosturaId],
+      references: [confeccaoSubtask.id],
+    }),
+    oficina: one(confeccaoFornecedor, {
+      fields: [confeccaoRetirada.oficinaId],
+      references: [confeccaoFornecedor.id],
+    }),
+    lalamoves: many(confeccaoLalamove),
+    subconferencia: one(confeccaoSubconferencia, {
+      fields: [confeccaoRetirada.id],
+      references: [confeccaoSubconferencia.retiradaId],
+    }),
+  }),
+);
+
+export const confeccaoSubconferenciaRelations = relations(
+  confeccaoSubconferencia,
+  ({ one }) => ({
+    subtaskConferencia: one(confeccaoSubtask, {
+      fields: [confeccaoSubconferencia.subtaskConferenciaId],
+      references: [confeccaoSubtask.id],
+    }),
+    retirada: one(confeccaoRetirada, {
+      fields: [confeccaoSubconferencia.retiradaId],
+      references: [confeccaoRetirada.id],
+    }),
+    responsavelInspecao: one(user, {
+      fields: [confeccaoSubconferencia.responsavelInspecaoId],
+      references: [user.id],
+    }),
+    oficinaResponsavelDivergencia: one(confeccaoFornecedor, {
+      fields: [confeccaoSubconferencia.oficinaResponsavelDivergenciaId],
+      references: [confeccaoFornecedor.id],
+    }),
+  }),
+);
+
+export type ConfeccaoLalamove = InferSelectModel<typeof confeccaoLalamove>;
+export type ConfeccaoLalamoveCotacao = InferSelectModel<
+  typeof confeccaoLalamoveCotacao
+>;
+export type ConfeccaoLalamoveWebhookEvent = InferSelectModel<
+  typeof confeccaoLalamoveWebhookEvent
+>;
+export type ConfeccaoRetirada = InferSelectModel<typeof confeccaoRetirada>;
+export type ConfeccaoSubconferencia = InferSelectModel<
+  typeof confeccaoSubconferencia
+>;
+export type ConfeccaoLalamoveStatus =
+  (typeof confeccaoLalamoveStatusEnum.enumValues)[number];
+export type ConfeccaoLalamoveTipo =
+  (typeof confeccaoLalamoveTipoEnum.enumValues)[number];
+export type ConfeccaoLalamoveOrigemSolicitacao =
+  (typeof confeccaoLalamoveOrigemSolicitacaoEnum.enumValues)[number];
+export type ConfeccaoLalamoveCotacaoStatus =
+  (typeof confeccaoLalamoveCotacaoStatusEnum.enumValues)[number];
+export type ConfeccaoLalamoveWebhookEvento =
+  (typeof confeccaoLalamoveWebhookEventoEnum.enumValues)[number];
+export type ConfeccaoRetiradaTipo =
+  (typeof confeccaoRetiradaTipoEnum.enumValues)[number];
+export type ConfeccaoTipoDefeito =
+  (typeof confeccaoTipoDefeitoEnum.enumValues)[number];
+export type ConfeccaoDestinoReprovadas =
+  (typeof confeccaoDestinoReprovadasEnum.enumValues)[number];
