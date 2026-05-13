@@ -26,6 +26,11 @@ import {
   validarSaldoRolos,
 } from "@/lib/confeccao/schemas/payloads/corte";
 import { ConcluirSubtaskViesSchema } from "@/lib/confeccao/schemas/payloads/vies";
+import {
+  ConcluirSubtaskCosturaSchema,
+  pecasCortadasPorTamCor,
+  validarSaldoPecasVsCorte,
+} from "@/lib/confeccao/schemas/payloads/costura";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -112,6 +117,59 @@ export async function POST(
           };
         }
         const saldoOk = validarSaldoRolos(r.data.oficinas, rolosDisponiveis);
+        if (!saldoOk.ok) {
+          return {
+            invalido: true as const,
+            details: [
+              {
+                code: "custom",
+                path: ["oficinas"],
+                message: saldoOk.mensagem,
+              },
+            ],
+            mensagem: saldoOk.mensagem,
+          };
+        }
+      } else if (st.prefixo === "OPSEW") {
+        const r = ConcluirSubtaskCosturaSchema.safeParse(st.payload);
+        if (!r.success) {
+          return {
+            invalido: true as const,
+            details: r.error.issues,
+            mensagem:
+              "Costura não pode ser concluída: todas as oficinas precisam estar finalizadas (com retirada final feita) e ter prazo, peças, etiquetagem e preço/peça definidos.",
+          };
+        }
+        // Cross-subtask: saldo de peças vs rendimento do Corte
+        const [opcor] = await tx
+          .select({ payload: confeccaoSubtask.payload })
+          .from(confeccaoSubtask)
+          .where(
+            and(
+              eq(confeccaoSubtask.ordemProducaoId, st.ordemProducaoId),
+              eq(confeccaoSubtask.prefixo, "OPCOR"),
+            ),
+          );
+        const pecasDisponiveis = pecasCortadasPorTamCor(opcor?.payload);
+        if (pecasDisponiveis.size === 0) {
+          return {
+            invalido: true as const,
+            details: [
+              {
+                code: "custom",
+                path: ["oficinas"],
+                message:
+                  "Subtask Corte ainda não definiu rendimento — conclua-a primeiro",
+              },
+            ],
+            mensagem:
+              "Subtask Corte ainda não definiu rendimento — conclua-a primeiro",
+          };
+        }
+        const saldoOk = validarSaldoPecasVsCorte(
+          r.data.oficinas,
+          pecasDisponiveis,
+        );
         if (!saldoOk.ok) {
           return {
             invalido: true as const,

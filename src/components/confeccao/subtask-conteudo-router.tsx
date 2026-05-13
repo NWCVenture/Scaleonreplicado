@@ -6,6 +6,7 @@
 
 import { SubtaskCompra } from "./subtask-compra";
 import { SubtaskCorte } from "./subtask-corte";
+import { SubtaskCostura } from "./subtask-costura";
 import { SubtaskRisco } from "./subtask-risco";
 import { SubtaskVies } from "./subtask-vies";
 import type {
@@ -18,7 +19,7 @@ const PLACEHOLDERS: Record<ConfeccaoSubtaskPrefixo, string> = {
   OPRIS: "RITM-09 — Risco",
   OPCOR: "RITM-10 — Corte",
   OPVIE: "RITM-11 — Viés",
-  OPSEW: "RITM-12 — Costura (em desenvolvimento)",
+  OPSEW: "RITM-12 — Costura",
   OPCONF: "RITM-13 — Conferência (em desenvolvimento)",
 };
 
@@ -68,6 +69,16 @@ export function SubtaskConteudoRouter({
   if (subtask.prefixo === "OPVIE") {
     return (
       <SubtaskVies
+        subtask={subtask}
+        opNumero={opNumero}
+        contaId={contaId}
+        onAlterado={onAlterado}
+      />
+    );
+  }
+  if (subtask.prefixo === "OPSEW") {
+    return (
+      <SubtaskCostura
         subtask={subtask}
         opNumero={opNumero}
         contaId={contaId}
