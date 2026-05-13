@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/lib/auth-client";
+import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { Button } from "@/components/ui/button";
 import { SubtaskCard } from "@/components/confeccao/subtask-card";
 import type {
@@ -39,6 +40,8 @@ export default function SubtaskFullPage({
   const { numero, prefixo } = use(params);
   const router = useRouter();
   const { data: session, isPending } = useSession();
+  const { me } = usePapelAtivo();
+  const contaId = me?.contaAtivaId ?? "";
 
   const [opData, setOpData] = useState<OPDetalhe | null>(null);
   const [loading, setLoading] = useState(true);
@@ -125,10 +128,12 @@ export default function SubtaskFullPage({
       <SubtaskCard
         subtask={subtask}
         opNumero={opData.op.numero}
+        contaId={contaId}
         expandido
         onToggle={() => {
           /* sem efeito em modo full-page */
         }}
+        onAlterado={fetchOp}
         modoFullPage
       />
     </div>
