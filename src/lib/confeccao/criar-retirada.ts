@@ -30,6 +30,9 @@ import type {
   SubtaskCosturaPayload,
   StatusInternoOficina,
 } from "@/lib/confeccao/schemas/payloads/costura";
+import { calcularSaldosOP, validarSaldoRetirada } from "@/lib/confeccao/saldos";
+import type { SubtaskCompraPayload } from "@/lib/confeccao/schemas/payloads/compra";
+import type { SubtaskCortePayload } from "@/lib/confeccao/schemas/payloads/corte";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -40,7 +43,8 @@ export class RetiradaError extends Error {
       | "oficina_nao_encontrada"
       | "retirada_nao_encontrada"
       | "subconferencia_em_andamento"
-      | "subtask_conferencia_nao_existe",
+      | "subtask_conferencia_nao_existe"
+      | "saldo_insuficiente",
     message: string,
   ) {
     super(message);
@@ -144,6 +148,49 @@ export async function criarRetirada(
       "subtask_conferencia_nao_existe",
       "Subtask Conferência da OP não foi encontrada — não pode criar retirada",
     );
+  }
+
+  // 3.5. Valida saldo: peças retiradas (incluindo retiradas anteriores não
+  // canceladas) ≤ peças enviadas pra oficina (RITM-14).
+  const subtasksOP = await tx
+    .select({
+      prefixo: confeccaoSubtask.prefixo,
+      payload: confeccaoSubtask.payload,
+    })
+    .from(confeccaoSubtask)
+    .where(eq(confeccaoSubtask.ordemProducaoId, stCostura.ordemProducaoId));
+  const compraPayload = subtasksOP.find((s) => s.prefixo === "OPBUY")
+    ?.payload as SubtaskCompraPayload | undefined;
+  const cortePayload = subtasksOP.find((s) => s.prefixo === "OPCOR")
+    ?.payload as SubtaskCortePayload | undefined;
+  const retiradasExistentes = await tx
+    .select({
+      oficinaId: confeccaoRetirada.oficinaId,
+      pecasPorTamanhoCor: confeccaoRetirada.pecasPorTamanhoCor,
+      canceladaEm: confeccaoRetirada.canceladaEm,
+    })
+    .from(confeccaoRetirada)
+    .where(eq(confeccaoRetirada.subtaskCosturaId, input.subtaskCosturaId));
+  const saldos = calcularSaldosOP({
+    compra: compraPayload,
+    corte: cortePayload,
+    costura: payload,
+    retiradas: retiradasExistentes.map((r) => ({
+      oficinaId: r.oficinaId,
+      pecasPorTamanhoCor: r.pecasPorTamanhoCor as Record<
+        string,
+        Record<string, number>
+      >,
+      canceladaEm: r.canceladaEm,
+    })),
+  });
+  const valSaldo = validarSaldoRetirada({
+    oficinaId: input.oficinaId,
+    pecasNovaRetirada: input.pecasPorTamanhoCor,
+    saldoCostura: saldos.costura,
+  });
+  if (!valSaldo.ok) {
+    throw new RetiradaError("saldo_insuficiente", valSaldo.mensagem);
   }
 
   // 4. Numera retirada e INSERT

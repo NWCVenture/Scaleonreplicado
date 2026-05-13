@@ -90,7 +90,8 @@ after(async () => {
 });
 
 async function criarOPComOficinaCostura() {
-  // Cria OP, encontra subtask costura, popula payload com a oficina
+  // Cria OP, popula payloads das subtasks com dados mínimos pra
+  // validar saldo nas retiradas (Compra→rolos, Corte→peças, Costura→envio).
   const result = await db.transaction(async (tx) =>
     criarOP(tx, {
       contaId: CONTA,
@@ -98,9 +99,48 @@ async function criarOPComOficinaCostura() {
       data: { produtoId, temVies: false, atribuidoAId: USR },
     }),
   );
+  const subtaskCompra = result.subtasks.find((s) => s.prefixo === "OPBUY")!;
+  const subtaskCorte = result.subtasks.find((s) => s.prefixo === "OPCOR")!;
   const subtaskCostura = result.subtasks.find((s) => s.prefixo === "OPSEW")!;
   const subtaskConf = result.subtasks.find((s) => s.prefixo === "OPCONF")!;
-  // Coloca oficina no payload pra criarRetirada conseguir achar
+  // Compra: 5 rolos de co1
+  await db
+    .update(confeccaoSubtask)
+    .set({
+      payload: {
+        pos: {
+          rolosRecebidos: [
+            { corId: "co1", pesos: [10, 10, 10, 10, 10] },
+          ],
+          precoKgEfetivo: 25,
+          gramaturaGM2: 180,
+          larguraRoloCm: 165,
+        },
+      },
+    })
+    .where(eq(confeccaoSubtask.id, subtaskCompra.id));
+  // Corte: 1000 peças cortadas em M de co1
+  await db
+    .update(confeccaoSubtask)
+    .set({
+      payload: {
+        oficinas: [
+          {
+            oficinaId: "of-corte",
+            modoSeparacao: "por_cor",
+            rolosEnviadosPorCor: { co1: 5 },
+            folhasEnfesto: 10,
+            rendimentoTotal: 1000,
+            rendimentoPorTamanhoCor: [
+              { tamanho: "M", corId: "co1", quantidade: 1000 },
+            ],
+            precoPorPeca: 1,
+          },
+        ],
+      },
+    })
+    .where(eq(confeccaoSubtask.id, subtaskCorte.id));
+  // Costura: oficina com 100 peças M co1 enviadas
   await db
     .update(confeccaoSubtask)
     .set({
@@ -109,6 +149,9 @@ async function criarOPComOficinaCostura() {
           {
             oficinaId,
             statusInterno: "em_producao",
+            pecasEnviadasPorTamanhoCor: [
+              { tamanho: "M", corId: "co1", quantidade: 100 },
+            ],
           },
         ],
       },
