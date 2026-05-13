@@ -26,6 +26,7 @@ import {
   FileSpreadsheet,
   FileText,
   FileDown,
+  Factory,
   LogOut,
   Lock,
   MousePointerClick,
@@ -57,6 +58,10 @@ const outrosHrefs = [
   "/processador-anuncios",
   "/recuperar-dados",
 ];
+
+// Confecção tem sub-rotas dinâmicas (/ops/[numero]/...), então usamos
+// startsWith em vez de array fechado pra highlight da seção.
+const confeccaoBasePath = "/confeccao";
 
 const adminOnlyPages = ["/gerenciar-usuarios", "/gerenciar-conta"];
 
@@ -102,6 +107,11 @@ const expedicaoItems = [
     icon: FileDown,
   },
   { href: "/gerenciar-skus", label: "Gerenciar SKUs", icon: Tag },
+];
+
+const confeccaoItems = [
+  { href: "/confeccao", label: "Ordens de Produção", icon: Factory },
+  { href: "/confeccao/cadastros", label: "Cadastros", icon: Boxes },
 ];
 
 const outrosItems = [
@@ -153,6 +163,8 @@ export default function DashboardLayout({
   const [outrosAberta, setOutrosAberta] = useState(() =>
     outrosHrefs.includes(pathname)
   );
+  const confeccaoEscopo = pathname.startsWith(confeccaoBasePath);
+  const [confeccaoAberta, setConfeccaoAberta] = useState(() => confeccaoEscopo);
 
   // Init modoLivre from sessionStorage (client-only)
   useEffect(() => {
@@ -260,9 +272,14 @@ export default function DashboardLayout({
     ? expedicaoItems.filter((item) => expedicaoRoleAllowed.has(item.href))
     : expedicaoItems;
   const filteredOutros = isExpedicao ? [] : outrosItems;
+  // Confecção é oculta para papel "expedicao"
+  const filteredConfeccao = isExpedicao ? [] : confeccaoItems;
 
   function renderNavItem(item: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }) {
-    const isActive = pathname === item.href;
+    // Match exato OU sub-rota (ex: /confeccao/ops/X ativa "Ordens de Produção")
+    const isActive =
+      pathname === item.href ||
+      (item.href !== "/" && pathname.startsWith(item.href + "/"));
     return (
       <Link
         key={item.href}
@@ -281,7 +298,9 @@ export default function DashboardLayout({
   }
 
   function renderMobileNavItem(item: { href: string; label: string; icon: React.ComponentType<{ className?: string }> }) {
-    const isActive = pathname === item.href;
+    const isActive =
+      pathname === item.href ||
+      (item.href !== "/" && pathname.startsWith(item.href + "/"));
     return (
       <Link
         key={item.href}
@@ -354,6 +373,36 @@ export default function DashboardLayout({
               </div>
             )}
           </div>
+
+          {/* Confecção section (hidden for expedicao role) */}
+          {!isExpedicao && filteredConfeccao.length > 0 && (
+            <div>
+              <button
+                onClick={() => setConfeccaoAberta((v) => !v)}
+                className={cn(
+                  "w-full flex items-center justify-between px-4 py-2.5 rounded-md text-sm font-bold transition-colors",
+                  confeccaoEscopo
+                    ? "bg-primary/10 text-primary"
+                    : "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground text-sidebar-foreground/80"
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <Factory className="h-4 w-4" />
+                  Confecção
+                </div>
+                {confeccaoAberta ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </button>
+              {confeccaoAberta && (
+                <div className="mt-1 ml-3 pl-3 border-l-2 border-sidebar-border space-y-0.5">
+                  {filteredConfeccao.map(renderNavItem)}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Outros section (hidden for expedicao role) */}
           {!isExpedicao && (
@@ -509,6 +558,30 @@ export default function DashboardLayout({
                 </div>
               )}
             </div>
+
+            {/* Confecção mobile (hidden for expedicao role) */}
+            {!isExpedicao && filteredConfeccao.length > 0 && (
+              <div>
+                <button
+                  onClick={() => setConfeccaoAberta((v) => !v)}
+                  className="w-full flex items-center justify-between px-4 py-3 rounded-md text-sm font-bold bg-secondary hover:bg-secondary/80"
+                >
+                  <div className="flex items-center gap-3">
+                    <Factory className="h-5 w-5" /> Confecção
+                  </div>
+                  {confeccaoAberta ? (
+                    <ChevronDown className="h-4 w-4" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4" />
+                  )}
+                </button>
+                {confeccaoAberta && (
+                  <div className="ml-4 pl-3 border-l-2 border-border mt-1 space-y-1">
+                    {filteredConfeccao.map(renderMobileNavItem)}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Outros mobile (hidden for expedicao role) */}
             {!isExpedicao && (
