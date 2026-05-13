@@ -169,6 +169,13 @@
       "when": 1778642550747,
       "tag": "0023_third_stryfe",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1778643683714,
+      "tag": "0024_sad_nekra",
+      "breakpoints": true
     }
   ]
 }

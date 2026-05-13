@@ -64,6 +64,11 @@ const TABELAS_PADRAO = [
   "confeccao_tipo_tecido",
   "confeccao_cor",
   "confeccao_fornecedor_tecido_preco",
+  // Módulo Confecção — OP + Subtasks + Notas + Anexos (0024, RITM-02)
+  "confeccao_ordem_producao",
+  "confeccao_subtask",
+  "confeccao_nota",
+  "confeccao_anexo",
 ] as const;
 
 // eventos_webhook_tiktok aceita conta_id NULL (receiver insere antes de

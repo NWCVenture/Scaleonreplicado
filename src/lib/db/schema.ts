@@ -1644,3 +1644,312 @@ export type ConfeccaoFornecedorTecidoPreco = InferSelectModel<
 >;
 export type ConfeccaoFornecedorCategoria =
   (typeof confeccaoFornecedorCategoriaEnum.enumValues)[number];
+
+// ============================================================
+// 15. CONFECÇÃO — RITM-02: OP, subtasks, notas, anexos
+// ============================================================
+// Espinha dorsal do módulo: cada Ordem de Produção (OP) gera 5 ou 6
+// subtasks (Compra → Risco → Corte → [Viés condicional] → Costura →
+// Conferência). Notas são criadas manualmente ou automaticamente por
+// auditoria. Anexos são URLs do Vercel Blob (helper na RITM-04).
+//
+// Sequencial da OP é GLOBAL (não por conta). Implementado via sequence
+// `confeccao_op_sequencial` (criada manualmente na migration porque
+// Drizzle não tem suporte nativo a sequences). Helper de numeração em
+// src/lib/confeccao/numeracao.ts.
+
+export const confeccaoOpStatusEnum = pgEnum("confeccao_op_status", [
+  "em_andamento",
+  "concluida",
+  "cancelada",
+]);
+
+export const confeccaoSubtaskStatusEnum = pgEnum("confeccao_subtask_status", [
+  "bloqueada",
+  "pendente",
+  "em_andamento",
+  "concluida",
+  "cancelada",
+]);
+
+export const confeccaoSubtaskPrefixoEnum = pgEnum(
+  "confeccao_subtask_prefixo",
+  [
+    "OPBUY", // Compra de Tecido
+    "OPRIS", // Risco
+    "OPCOR", // Corte
+    "OPVIE", // Viés (condicional)
+    "OPSEW", // Costura
+    "OPCONF", // Conferência
+  ],
+);
+
+export const confeccaoOrdemProducao = pgTable(
+  "confeccao_ordem_producao",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    // Número visível no formato OPMMAANNNN (ex: OP05260001).
+    // Único globalmente (não por conta) — decisão atual; reavaliar
+    // quando houver múltiplas contas produtivas com numerações próprias.
+    numero: text("numero").notNull(),
+    // Sequencial contínuo (0-9999), reseta após 9999 via CYCLE da sequence.
+    sequencialGlobal: integer("sequencial_global").notNull(),
+    produtoId: text("produto_id")
+      .notNull()
+      .references(() => confeccaoProduto.id),
+    temVies: boolean("tem_vies").notNull().default(false),
+    status: confeccaoOpStatusEnum("status").notNull().default("em_andamento"),
+    criadaPorId: text("criada_por_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    atribuidoAId: text("atribuido_a_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    observacoes: text("observacoes"),
+    canceladaEm: timestamp("cancelada_em"),
+    canceladaPorId: text("cancelada_por_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    // Só preenchido se OP já estava fechada quando foi cancelada (dupla
+    // autorização — outro admin precisa autorizar).
+    cancelamentoAutorizadoPorId: text(
+      "cancelamento_autorizado_por_id",
+    ).references(() => user.id, { onDelete: "set null" }),
+    cancelamentoJustificativa: text("cancelamento_justificativa"),
+    concluidaEm: timestamp("concluida_em"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uq_confeccao_op_numero").on(table.numero),
+    index("idx_confeccao_op_conta_status").on(table.contaId, table.status),
+    index("idx_confeccao_op_atribuido").on(table.atribuidoAId),
+    index("idx_confeccao_op_produto").on(table.produtoId),
+  ],
+);
+
+export const confeccaoSubtask = pgTable(
+  "confeccao_subtask",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    ordemProducaoId: text("ordem_producao_id")
+      .notNull()
+      .references(() => confeccaoOrdemProducao.id, { onDelete: "cascade" }),
+    // Número visível na UI: [PREFIXO]NNNN (ex: OPBUY0001)
+    numero: text("numero").notNull(),
+    // ID interno único globalmente: [PREFIXO]-MMAA-NNNN (ex: OPBUY-0526-0001)
+    idInterno: text("id_interno").notNull(),
+    prefixo: confeccaoSubtaskPrefixoEnum("prefixo").notNull(),
+    // 1..6, define ordem visual no stepper
+    ordemSequencial: integer("ordem_sequencial").notNull(),
+    status: confeccaoSubtaskStatusEnum("status")
+      .notNull()
+      .default("bloqueada"),
+    atribuidoAId: text("atribuido_a_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    // Payload JSONB com campos específicos por tipo de subtask.
+    // Validação via Zod no app layer (RITMs 08-13 definem schemas).
+    // NÃO confiar que o conteúdo é válido só porque está no banco.
+    payload: jsonb("payload")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    // Valor do serviço da subtask. Conferência não tem custo → null.
+    valorServico: real("valor_servico"),
+    iniciadaEm: timestamp("iniciada_em"),
+    concluidaEm: timestamp("concluida_em"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uq_confeccao_subtask_id_interno").on(table.idInterno),
+    // Só uma subtask de cada prefixo por OP
+    uniqueIndex("uq_confeccao_subtask_op_prefixo").on(
+      table.ordemProducaoId,
+      table.prefixo,
+    ),
+    index("idx_confeccao_subtask_status").on(table.status),
+    index("idx_confeccao_subtask_atribuido").on(table.atribuidoAId),
+  ],
+);
+
+export const confeccaoNota = pgTable(
+  "confeccao_nota",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    ordemProducaoId: text("ordem_producao_id").references(
+      () => confeccaoOrdemProducao.id,
+      { onDelete: "cascade" },
+    ),
+    subtaskId: text("subtask_id").references(() => confeccaoSubtask.id, {
+      onDelete: "cascade",
+    }),
+    // NULL quando auditoria automática do sistema (sem autor humano)
+    autorId: text("autor_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    conteudo: text("conteudo").notNull(),
+    isAuditoria: boolean("is_auditoria").notNull().default(false),
+    // Preparação para notas públicas (V2). Por ora todas são internas.
+    isInterna: boolean("is_interna").notNull().default(true),
+    // Auditoria estruturada: {campoAlterado, valorAntigo, valorNovo, ...}
+    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_confeccao_nota_op_data").on(
+      table.ordemProducaoId,
+      table.createdAt,
+    ),
+    index("idx_confeccao_nota_subtask_data").on(
+      table.subtaskId,
+      table.createdAt,
+    ),
+    index("idx_confeccao_nota_auditoria").on(
+      table.isAuditoria,
+      table.createdAt,
+    ),
+  ],
+);
+
+// Anexo no Vercel Blob (URL + pathname). Fluxo de upload na RITM-04.
+// `lalamoveId` é text sem FK porque a tabela `confeccao_lalamove` é
+// criada na RITM-03 — a FK é adicionada lá via ALTER TABLE.
+export const confeccaoAnexo = pgTable(
+  "confeccao_anexo",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    subtaskId: text("subtask_id").references(() => confeccaoSubtask.id, {
+      onDelete: "cascade",
+    }),
+    ordemProducaoId: text("ordem_producao_id").references(
+      () => confeccaoOrdemProducao.id,
+      { onDelete: "cascade" },
+    ),
+    // FK será adicionada via ALTER TABLE na migration da RITM-03
+    lalamoveId: text("lalamove_id"),
+    // 'nf_compra' | 'risco_digital' | 'foto_papagaio' | 'foto_defeito'
+    // | 'comprovante_lalamove' | 'outros'
+    categoria: text("categoria").notNull(),
+    nomeArquivo: text("nome_arquivo").notNull(),
+    tipoMime: text("tipo_mime").notNull(),
+    // 50 MB max — CHECK adicionado manualmente no SQL gerado
+    tamanhoBytes: integer("tamanho_bytes").notNull(),
+    // URL completa do Vercel Blob; unique → impede dupla confirmação silenciosa
+    blobUrl: text("blob_url").notNull().unique(),
+    // Pathname relativo no Blob, usado em del()
+    blobPathname: text("blob_pathname").notNull(),
+    enviadoPorId: text("enviado_por_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_confeccao_anexo_subtask").on(table.subtaskId),
+    index("idx_confeccao_anexo_op").on(table.ordemProducaoId),
+    index("idx_confeccao_anexo_lalamove").on(table.lalamoveId),
+    index("idx_confeccao_anexo_categoria").on(table.categoria),
+  ],
+);
+
+export const confeccaoOrdemProducaoRelations = relations(
+  confeccaoOrdemProducao,
+  ({ one, many }) => ({
+    conta: one(conta, {
+      fields: [confeccaoOrdemProducao.contaId],
+      references: [conta.id],
+    }),
+    produto: one(confeccaoProduto, {
+      fields: [confeccaoOrdemProducao.produtoId],
+      references: [confeccaoProduto.id],
+    }),
+    criadaPor: one(user, {
+      fields: [confeccaoOrdemProducao.criadaPorId],
+      references: [user.id],
+      relationName: "opCriadaPor",
+    }),
+    atribuidoA: one(user, {
+      fields: [confeccaoOrdemProducao.atribuidoAId],
+      references: [user.id],
+      relationName: "opAtribuidoA",
+    }),
+    subtasks: many(confeccaoSubtask),
+    notas: many(confeccaoNota),
+    anexos: many(confeccaoAnexo),
+  }),
+);
+
+export const confeccaoSubtaskRelations = relations(
+  confeccaoSubtask,
+  ({ one, many }) => ({
+    ordemProducao: one(confeccaoOrdemProducao, {
+      fields: [confeccaoSubtask.ordemProducaoId],
+      references: [confeccaoOrdemProducao.id],
+    }),
+    atribuidoA: one(user, {
+      fields: [confeccaoSubtask.atribuidoAId],
+      references: [user.id],
+    }),
+    notas: many(confeccaoNota),
+    anexos: many(confeccaoAnexo),
+  }),
+);
+
+export const confeccaoNotaRelations = relations(confeccaoNota, ({ one }) => ({
+  ordemProducao: one(confeccaoOrdemProducao, {
+    fields: [confeccaoNota.ordemProducaoId],
+    references: [confeccaoOrdemProducao.id],
+  }),
+  subtask: one(confeccaoSubtask, {
+    fields: [confeccaoNota.subtaskId],
+    references: [confeccaoSubtask.id],
+  }),
+  autor: one(user, {
+    fields: [confeccaoNota.autorId],
+    references: [user.id],
+  }),
+}));
+
+export const confeccaoAnexoRelations = relations(
+  confeccaoAnexo,
+  ({ one }) => ({
+    ordemProducao: one(confeccaoOrdemProducao, {
+      fields: [confeccaoAnexo.ordemProducaoId],
+      references: [confeccaoOrdemProducao.id],
+    }),
+    subtask: one(confeccaoSubtask, {
+      fields: [confeccaoAnexo.subtaskId],
+      references: [confeccaoSubtask.id],
+    }),
+    enviadoPor: one(user, {
+      fields: [confeccaoAnexo.enviadoPorId],
+      references: [user.id],
+    }),
+  }),
+);
+
+export type ConfeccaoOrdemProducao = InferSelectModel<
+  typeof confeccaoOrdemProducao
+>;
+export type ConfeccaoSubtask = InferSelectModel<typeof confeccaoSubtask>;
+export type ConfeccaoNota = InferSelectModel<typeof confeccaoNota>;
+export type ConfeccaoAnexo = InferSelectModel<typeof confeccaoAnexo>;
+export type ConfeccaoOpStatus =
+  (typeof confeccaoOpStatusEnum.enumValues)[number];
+export type ConfeccaoSubtaskStatus =
+  (typeof confeccaoSubtaskStatusEnum.enumValues)[number];
+export type ConfeccaoSubtaskPrefixo =
+  (typeof confeccaoSubtaskPrefixoEnum.enumValues)[number];
