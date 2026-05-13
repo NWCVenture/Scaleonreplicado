@@ -58,6 +58,12 @@ const TABELAS_PADRAO = [
   "modelo_tamanho",
   // Dedup robusta de tracking ID (0022)
   "tracking_id_impresso",
+  // Módulo Confecção — Cadastros (0023, RITM-01)
+  "confeccao_produto",
+  "confeccao_fornecedor",
+  "confeccao_tipo_tecido",
+  "confeccao_cor",
+  "confeccao_fornecedor_tecido_preco",
 ] as const;
 
 // eventos_webhook_tiktok aceita conta_id NULL (receiver insere antes de

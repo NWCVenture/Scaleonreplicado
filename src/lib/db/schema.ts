@@ -1464,3 +1464,183 @@ export type PlataformaCanal = (typeof plataformaCanalEnum.enumValues)[number];
 export type EmissorNota = (typeof emissorNotaEnum.enumValues)[number];
 export type StatusRenovacaoOauth =
   (typeof statusRenovacaoOauthEnum.enumValues)[number];
+
+// ============================================================
+// 14. CONFECÇÃO (Módulo de Confecção — RITM-01: Cadastros)
+// ============================================================
+// Domínio isolado do módulo de canais (TikTok). Tabelas prefixadas
+// `confeccao_*` para deixar claro o escopo. `confeccao_produto` é o
+// produto produzido pela confecção — separado de `sku_catalogo` (SKU
+// comercial); vínculo entre os dois é roadmap futuro. `confeccao_cor`
+// também é separada de `cor_catalogo` por mesma razão (semântica
+// diferente — cores do tecido em produção vs cores do SKU comercial).
+
+export const confeccaoFornecedorCategoriaEnum = pgEnum(
+  "confeccao_fornecedor_categoria",
+  ["risco", "tecido", "corte", "costura", "vies"],
+);
+
+export const confeccaoProduto = pgTable(
+  "confeccao_produto",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    nome: text("nome").notNull(),
+    descricao: text("descricao"),
+    ativo: boolean("ativo").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_confeccao_produto_conta").on(table.contaId),
+    uniqueIndex("uq_confeccao_produto_nome_conta").on(table.contaId, table.nome),
+  ],
+);
+
+export const confeccaoFornecedor = pgTable(
+  "confeccao_fornecedor",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    nome: text("nome").notNull(),
+    // Array de enum — multi-categoria (ex: ["tecido", "corte"])
+    categorias: confeccaoFornecedorCategoriaEnum("categorias")
+      .array()
+      .notNull(),
+    // Formato livre (BR human-readable), usado em links wa.me/{numero}
+    whatsapp: text("whatsapp").notNull(),
+    // Formato E.164 (+5511999999999) — obrigatório quando usar API Lalamove
+    telefoneE164: text("telefone_e164"),
+    enderecoRua: text("endereco_rua").notNull(),
+    enderecoNumero: text("endereco_numero").notNull(),
+    enderecoComplemento: text("endereco_complemento"),
+    enderecoBairro: text("endereco_bairro").notNull(),
+    enderecoCep: text("endereco_cep").notNull(),
+    enderecoCidade: text("endereco_cidade").notNull(),
+    enderecoEstado: text("endereco_estado").notNull(),
+    // Preenchidos por geocoding background (RITM-05). text por consistência
+    // com o resto do projeto (primeira tabela com geo).
+    latitude: text("latitude"),
+    longitude: text("longitude"),
+    contatoNome: text("contato_nome"),
+    observacoes: text("observacoes"),
+    ativo: boolean("ativo").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_confeccao_fornecedor_conta").on(table.contaId),
+    // GIN index para filtro por categoria via operadores de array (@>, &&).
+    // Drizzle gera "USING gin" via .using("gin", ...). Validar SQL gerado;
+    // se necessário, ajustar manualmente.
+    index("idx_confeccao_fornecedor_categorias")
+      .using("gin", table.categorias),
+  ],
+);
+
+export const confeccaoTipoTecido = pgTable(
+  "confeccao_tipo_tecido",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    nome: text("nome").notNull(),
+    ativo: boolean("ativo").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_confeccao_tipo_tecido_conta").on(table.contaId),
+    uniqueIndex("uq_confeccao_tipo_tecido_nome_conta").on(
+      table.contaId,
+      table.nome,
+    ),
+  ],
+);
+
+export const confeccaoCor = pgTable(
+  "confeccao_cor",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    nome: text("nome").notNull(),
+    ativo: boolean("ativo").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_confeccao_cor_conta").on(table.contaId),
+    uniqueIndex("uq_confeccao_cor_nome_conta").on(table.contaId, table.nome),
+  ],
+);
+
+// Preço sugerido por (fornecedor × tipo de tecido). Read-only nas
+// subtasks da Compra (campo "preço sugerido").
+export const confeccaoFornecedorTecidoPreco = pgTable(
+  "confeccao_fornecedor_tecido_preco",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    fornecedorId: text("fornecedor_id")
+      .notNull()
+      .references(() => confeccaoFornecedor.id, { onDelete: "cascade" }),
+    tipoTecidoId: text("tipo_tecido_id")
+      .notNull()
+      .references(() => confeccaoTipoTecido.id, { onDelete: "cascade" }),
+    precoKgSugerido: real("preco_kg_sugerido").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uq_confeccao_fornecedor_tecido_preco").on(
+      table.fornecedorId,
+      table.tipoTecidoId,
+    ),
+    index("idx_confeccao_fornecedor_tecido_preco_conta").on(table.contaId),
+  ],
+);
+
+export const confeccaoFornecedorRelations = relations(
+  confeccaoFornecedor,
+  ({ many }) => ({
+    precos: many(confeccaoFornecedorTecidoPreco),
+  }),
+);
+
+export const confeccaoTipoTecidoRelations = relations(
+  confeccaoTipoTecido,
+  ({ many }) => ({
+    precos: many(confeccaoFornecedorTecidoPreco),
+  }),
+);
+
+export const confeccaoFornecedorTecidoPrecoRelations = relations(
+  confeccaoFornecedorTecidoPreco,
+  ({ one }) => ({
+    fornecedor: one(confeccaoFornecedor, {
+      fields: [confeccaoFornecedorTecidoPreco.fornecedorId],
+      references: [confeccaoFornecedor.id],
+    }),
+    tipoTecido: one(confeccaoTipoTecido, {
+      fields: [confeccaoFornecedorTecidoPreco.tipoTecidoId],
+      references: [confeccaoTipoTecido.id],
+    }),
+  }),
+);
+
+export type ConfeccaoProduto = InferSelectModel<typeof confeccaoProduto>;
+export type ConfeccaoFornecedor = InferSelectModel<typeof confeccaoFornecedor>;
+export type ConfeccaoTipoTecido = InferSelectModel<typeof confeccaoTipoTecido>;
+export type ConfeccaoCor = InferSelectModel<typeof confeccaoCor>;
+export type ConfeccaoFornecedorTecidoPreco = InferSelectModel<
+  typeof confeccaoFornecedorTecidoPreco
+>;
+export type ConfeccaoFornecedorCategoria =
+  (typeof confeccaoFornecedorCategoriaEnum.enumValues)[number];
