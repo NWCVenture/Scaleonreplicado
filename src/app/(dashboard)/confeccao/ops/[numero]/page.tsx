@@ -1,28 +1,53 @@
 "use client";
 
-// Stub — implementação completa do stepper vertical da OP vem na RITM-07.
-// Por ora, apenas mostra header básico com número da OP e link voltar.
+// Tela da OP com header fixo + stepper vertical das 5/6 subtasks.
+// URLs próprias por subtask via /confeccao/ops/[numero]/subtasks/[prefixo].
 
 import { use, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Factory } from "lucide-react";
+import { toast } from "sonner";
 import { useSession } from "@/lib/auth-client";
-import { PageHeader } from "@/components/layout/page-header";
-import { Badge } from "@/components/ui/badge";
+import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { OPHeader } from "@/components/confeccao/op-header";
+import { SubtaskCard } from "@/components/confeccao/subtask-card";
+import { NotasOP } from "@/components/confeccao/notas-op";
+import type { ConfeccaoSubtask } from "@/lib/db/schema";
 
 interface OPDetalhe {
-  id: string;
-  numero: string;
-  status: "em_andamento" | "concluida" | "cancelada";
-  temVies: boolean;
-  produtoId: string;
-  produtoNome: string;
-  atribuidoNome: string | null;
-  createdAt: string;
+  op: {
+    id: string;
+    numero: string;
+    status: "em_andamento" | "concluida" | "cancelada";
+    temVies: boolean;
+    observacoes: string | null;
+    produtoId: string;
+    produtoNome: string;
+    produtoDescricao: string | null;
+    createdAt: string;
+    atribuidoAId: string;
+    criadaPor: { id: string; name: string; email: string } | null;
+    atribuidoA: { id: string; name: string; email: string } | null;
+  };
+  subtasks: Array<
+    ConfeccaoSubtask & {
+      atribuidoNome: string | null;
+    }
+  >;
+  progresso: {
+    subtasksConcluidas: number;
+    subtasksTotal: number;
+    percentual: number;
+  };
 }
 
-export default function OpDetailPage({
+export default function OPDetailPage({
   params,
 }: {
   params: Promise<{ numero: string }>;
@@ -30,29 +55,42 @@ export default function OpDetailPage({
   const { numero } = use(params);
   const router = useRouter();
   const { data: session, isPending } = useSession();
-  const [op, setOp] = useState<OPDetalhe | null>(null);
+  const { isAdmin } = usePapelAtivo();
+
+  const [data, setData] = useState<OPDetalhe | null>(null);
   const [loading, setLoading] = useState(true);
+  const [expandidas, setExpandidas] = useState<Set<string>>(new Set());
+  const [historicoOpen, setHistoricoOpen] = useState(false);
 
   const fetchOp = useCallback(async () => {
     setLoading(true);
     try {
-      // GET de detalhe ainda não existe — usa GET list com filtro por numero
-      // (implementação completa será feita na RITM-07).
-      const res = await fetch(
-        `/api/confeccao/ops?search=${encodeURIComponent(numero)}&pageSize=1`,
-        { cache: "no-store" },
-      );
-      if (!res.ok) {
-        setOp(null);
+      const res = await fetch(`/api/confeccao/ops/${numero}`, {
+        cache: "no-store",
+      });
+      if (res.status === 404) {
+        toast.error("OP não encontrada");
+        router.replace("/confeccao");
         return;
       }
-      const data = await res.json();
-      const match = (data.items as OPDetalhe[]).find((o) => o.numero === numero);
-      setOp(match ?? null);
+      if (!res.ok) throw new Error();
+      const json = (await res.json()) as OPDetalhe;
+      setData(json);
+      // Auto-expande a primeira subtask "pendente" ou "em_andamento"
+      // Não muda se o usuário já interagiu (set não-vazio)
+      setExpandidas((prev) => {
+        if (prev.size > 0) return prev;
+        const ativa = json.subtasks.find(
+          (s) => s.status === "pendente" || s.status === "em_andamento",
+        );
+        return ativa ? new Set([ativa.id]) : new Set();
+      });
+    } catch {
+      toast.error("Erro ao carregar OP");
     } finally {
       setLoading(false);
     }
-  }, [numero]);
+  }, [numero, router]);
 
   useEffect(() => {
     if (isPending) return;
@@ -63,66 +101,72 @@ export default function OpDetailPage({
     void fetchOp();
   }, [isPending, session, router, fetchOp]);
 
-  if (isPending || !session || loading) {
+  function toggleSubtask(id: string) {
+    setExpandidas((prev) => {
+      const novo = new Set(prev);
+      if (novo.has(id)) novo.delete(id);
+      else novo.add(id);
+      return novo;
+    });
+  }
+
+  if (isPending || !session || loading || !data) {
     return (
       <div className="p-6 text-sm text-muted-foreground">Carregando…</div>
     );
   }
 
-  if (!op) {
-    return (
-      <div className="space-y-4 p-6">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push("/confeccao")}
-        >
-          <ArrowLeft className="size-4" />
-          Voltar
-        </Button>
-        <div className="text-sm text-muted-foreground">OP não encontrada.</div>
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-6 p-6">
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => router.push("/confeccao")}
-      >
-        <ArrowLeft className="size-4" />
-        Voltar
-      </Button>
-
-      <PageHeader
-        title={op.numero}
-        description={`${op.produtoNome} • Atribuída a ${op.atribuidoNome ?? "—"}`}
-        icon={<Factory className="size-8 text-blue-500" />}
+    <div className="p-6 pt-0 space-y-4">
+      <OPHeader
+        numero={data.op.numero}
+        status={data.op.status}
+        temVies={data.op.temVies}
+        produtoNome={data.op.produtoNome}
+        criadaPorNome={data.op.criadaPor?.name ?? null}
+        atribuidoAId={data.op.atribuidoAId}
+        atribuidoNome={data.op.atribuidoA?.name ?? null}
+        progresso={data.progresso}
+        isAdmin={isAdmin}
+        onAtualizado={() => void fetchOp()}
+        onAbrirHistorico={() => setHistoricoOpen(true)}
       />
 
-      <div className="flex gap-2">
-        <Badge variant={op.status === "concluida" ? "secondary" : "default"}>
-          {op.status === "em_andamento"
-            ? "Em andamento"
-            : op.status === "concluida"
-              ? "Concluída"
-              : "Cancelada"}
-        </Badge>
-        {op.temVies && <Badge variant="outline">Com Viés</Badge>}
+      {data.op.observacoes && (
+        <div className="rounded border bg-muted/40 p-3 text-sm text-muted-foreground whitespace-pre-wrap">
+          <span className="font-medium text-foreground">Observações: </span>
+          {data.op.observacoes}
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {data.subtasks.map((s) => (
+          <SubtaskCard
+            key={s.id}
+            subtask={s}
+            opNumero={data.op.numero}
+            expandido={expandidas.has(s.id)}
+            onToggle={() => toggleSubtask(s.id)}
+          />
+        ))}
       </div>
 
-      <div className="rounded-md border bg-muted/30 p-6 text-sm text-muted-foreground">
-        <p className="font-medium text-foreground mb-2">
-          Stepper de subtasks em construção
-        </p>
-        <p>
-          O stepper vertical com header fixo + cards expansíveis vem na
-          próxima entrega (RITM-07). Por ora, a OP foi criada com as subtasks
-          corretas no banco — você pode confirmar via Drizzle Studio.
-        </p>
+      <div className="flex justify-end">
+        <Button variant="ghost" size="sm" onClick={() => router.push("/confeccao")}>
+          ← Voltar à lista
+        </Button>
       </div>
+
+      <Sheet open={historicoOpen} onOpenChange={setHistoricoOpen}>
+        <SheetContent className="sm:max-w-md overflow-y-auto px-6 py-6">
+          <SheetHeader className="px-0">
+            <SheetTitle>Histórico — {data.op.numero}</SheetTitle>
+          </SheetHeader>
+          <div className="mt-4">
+            <NotasOP opNumero={data.op.numero} incluirSubtasks />
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
