@@ -69,11 +69,19 @@ const TABELAS_PADRAO = [
   "confeccao_subtask",
   "confeccao_nota",
   "confeccao_anexo",
+  // Módulo Confecção — Lalamove + Retiradas + Subconferências (0025, RITM-03)
+  "confeccao_lalamove",
+  "confeccao_lalamove_cotacao",
+  "confeccao_retirada",
+  "confeccao_subconferencia",
 ] as const;
 
-// eventos_webhook_tiktok aceita conta_id NULL (receiver insere antes de
-// resolver o canal/conta; resolução acontece em role com bypass).
-const TABELA_WEBHOOK = "eventos_webhook_tiktok";
+// Tabelas com variante "conta_id IS NULL": receiver insere antes de
+// resolver canal/conta; resolução acontece em role com bypass.
+const TABELAS_WEBHOOK = [
+  "eventos_webhook_tiktok",
+  "confeccao_lalamove_webhook_event", // RITM-03
+] as const;
 
 async function main() {
   console.log("=== Restaurando RLS + policies ===");
@@ -81,7 +89,7 @@ async function main() {
   console.log("");
 
   // Valida que as tabelas existem antes de tentar criar policies
-  const tabelasEsperadas = [...TABELAS_PADRAO, TABELA_WEBHOOK];
+  const tabelasEsperadas = [...TABELAS_PADRAO, ...TABELAS_WEBHOOK];
   const existentes = await client<{ table_name: string }[]>`
     SELECT table_name
     FROM information_schema.tables
@@ -111,20 +119,22 @@ async function main() {
       console.log(`  ✓ ${tabela}`);
     }
 
-    // eventos_webhook_tiktok: variante com IS NULL
-    await tx.unsafe(
-      `ALTER TABLE "${TABELA_WEBHOOK}" ENABLE ROW LEVEL SECURITY`,
-    );
-    await tx.unsafe(
-      `DROP POLICY IF EXISTS tenant_isolation ON "${TABELA_WEBHOOK}"`,
-    );
-    await tx.unsafe(
-      `CREATE POLICY tenant_isolation ON "${TABELA_WEBHOOK}" ` +
-        `USING (conta_id IS NULL OR conta_id = current_setting('app.conta_atual', true)) ` +
-        `WITH CHECK (conta_id IS NULL OR conta_id = current_setting('app.conta_atual', true))`,
-    );
-    aplicados++;
-    console.log(`  ✓ ${TABELA_WEBHOOK} (variante IS NULL)`);
+    // Variantes com conta_id IS NULL (receivers de webhook)
+    for (const tabela of TABELAS_WEBHOOK) {
+      await tx.unsafe(
+        `ALTER TABLE "${tabela}" ENABLE ROW LEVEL SECURITY`,
+      );
+      await tx.unsafe(
+        `DROP POLICY IF EXISTS tenant_isolation ON "${tabela}"`,
+      );
+      await tx.unsafe(
+        `CREATE POLICY tenant_isolation ON "${tabela}" ` +
+          `USING (conta_id IS NULL OR conta_id = current_setting('app.conta_atual', true)) ` +
+          `WITH CHECK (conta_id IS NULL OR conta_id = current_setting('app.conta_atual', true))`,
+      );
+      aplicados++;
+      console.log(`  ✓ ${tabela} (variante IS NULL)`);
+    }
   });
 
   console.log("");
