@@ -46,6 +46,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
 import { BlocoLalamoveManual } from "@/components/confeccao/bloco-lalamove-manual";
+import { abrirWhatsAppComLog } from "@/lib/confeccao/whatsapp";
 import type {
   EtiquetagemLinha,
   OficinaCostura,
@@ -600,7 +601,6 @@ export function SubtaskCostura({
                     size="sm"
                     variant="outline"
                     onClick={() => {
-                      const limpo = o.oficinaWhatsapp.replace(/\D/g, "");
                       const totalPecas = Object.values(o.pecasMatriz).reduce(
                         (s, m) =>
                           s +
@@ -610,9 +610,13 @@ export function SubtaskCostura({
                           ),
                         0,
                       );
-                      const msg = `Olá, ${o.oficinaNome}. OP ${opNumero} (${subtask.numero}):\n\nTotal: ${totalPecas} peças\nPrazo: ${o.prazoProducao ? new Date(o.prazoProducao).toLocaleString("pt-BR") : "a combinar"}\n\nAguardo confirmação.`;
-                      const url = `https://wa.me/${limpo}?text=${encodeURIComponent(msg)}`;
-                      window.open(url, "_blank", "noopener");
+                      abrirWhatsAppComLog({
+                        telefone: o.oficinaWhatsapp,
+                        destinatarioNome: o.oficinaNome,
+                        mensagem: `Olá, ${o.oficinaNome}. OP ${opNumero} (${subtask.numero}):\n\nTotal: ${totalPecas} peças\nPrazo: ${o.prazoProducao ? new Date(o.prazoProducao).toLocaleString("pt-BR") : "a combinar"}\n\nAguardo confirmação.`,
+                        subtaskId: subtask.id,
+                        contexto: `Costura — OP ${opNumero} — Oficina ${o.oficinaNome}`,
+                      });
                     }}
                     className="w-full"
                   >

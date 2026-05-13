@@ -13,6 +13,7 @@ import {
   SubtaskStatusBadge,
 } from "./subtask-status-badge";
 import { SubtaskConteudoRouter } from "./subtask-conteudo-router";
+import { ReabrirSubtaskButton } from "./reabrir-subtask-button";
 import type { ConfeccaoSubtask } from "@/lib/db/schema";
 
 export interface SubtaskCardProps {
@@ -99,6 +100,13 @@ export function SubtaskCard({
 
         <div className="shrink-0 flex items-center gap-2">
           <SubtaskStatusBadge status={subtask.status} />
+          {subtask.status === "concluida" && (
+            <ReabrirSubtaskButton
+              subtaskId={subtask.id}
+              subtaskNumero={subtask.numero}
+              onReaberta={onAlterado}
+            />
+          )}
           {!modoFullPage && podeExpandir && (
             <Button
               variant="ghost"
