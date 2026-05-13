@@ -18,16 +18,20 @@ import type { ConfeccaoSubtask } from "@/lib/db/schema";
 export interface SubtaskCardProps {
   subtask: ConfeccaoSubtask & { atribuidoNome?: string | null };
   opNumero: string;
+  contaId: string;
   expandido: boolean;
   onToggle: () => void;
+  onAlterado: () => void;
   modoFullPage?: boolean;
 }
 
 export function SubtaskCard({
   subtask,
   opNumero,
+  contaId,
   expandido,
   onToggle,
+  onAlterado,
   modoFullPage = false,
 }: SubtaskCardProps) {
   const bloqueada = subtask.status === "bloqueada";
@@ -118,7 +122,12 @@ export function SubtaskCard({
 
       {expandido && podeExpandir && (
         <div className="border-t p-4">
-          <SubtaskConteudoRouter subtask={subtask} />
+          <SubtaskConteudoRouter
+            subtask={subtask}
+            opNumero={opNumero}
+            contaId={contaId}
+            onAlterado={onAlterado}
+          />
         </div>
       )}
     </div>

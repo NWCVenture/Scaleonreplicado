@@ -55,7 +55,8 @@ export default function OPDetailPage({
   const { numero } = use(params);
   const router = useRouter();
   const { data: session, isPending } = useSession();
-  const { isAdmin } = usePapelAtivo();
+  const { isAdmin, me } = usePapelAtivo();
+  const contaId = me?.contaAtivaId ?? "";
 
   const [data, setData] = useState<OPDetalhe | null>(null);
   const [loading, setLoading] = useState(true);
@@ -145,8 +146,10 @@ export default function OPDetailPage({
             key={s.id}
             subtask={s}
             opNumero={data.op.numero}
+            contaId={contaId}
             expandido={expandidas.has(s.id)}
             onToggle={() => toggleSubtask(s.id)}
+            onAlterado={() => void fetchOp()}
           />
         ))}
       </div>
