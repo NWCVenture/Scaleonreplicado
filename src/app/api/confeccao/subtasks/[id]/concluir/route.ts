@@ -30,7 +30,9 @@ import {
   ConcluirSubtaskCosturaSchema,
   pecasCortadasPorTamCor,
   validarSaldoPecasVsCorte,
+  type SubtaskCosturaPayload,
 } from "@/lib/confeccao/schemas/payloads/costura";
+import { confeccaoSubconferencia } from "@/lib/db/schema";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -181,6 +183,72 @@ export async function POST(
               },
             ],
             mensagem: saldoOk.mensagem,
+          };
+        }
+      } else if (st.prefixo === "OPCONF") {
+        // Conferência só fecha quando:
+        //  - Todas as subconferências da subtask estão concluidas
+        //  - Todas as oficinas da Costura estão "finalizada" (sem retiradas pendentes)
+        const subconfs = await tx
+          .select({ status: confeccaoSubconferencia.status })
+          .from(confeccaoSubconferencia)
+          .where(eq(confeccaoSubconferencia.subtaskConferenciaId, st.id));
+        if (subconfs.length === 0) {
+          return {
+            invalido: true as const,
+            details: [
+              {
+                code: "custom",
+                path: [],
+                message:
+                  "Nenhuma subconferência existe ainda. Aguarde a primeira retirada da Costura criar uma.",
+              },
+            ],
+            mensagem:
+              "Nenhuma subconferência existe ainda. Aguarde a primeira retirada da Costura criar uma.",
+          };
+        }
+        const pendentes = subconfs.filter((s) => s.status !== "concluida");
+        if (pendentes.length > 0) {
+          return {
+            invalido: true as const,
+            details: [
+              {
+                code: "custom",
+                path: [],
+                message: `${pendentes.length} subconferência(s) ainda não concluída(s)`,
+              },
+            ],
+            mensagem: `${pendentes.length} subconferência(s) ainda não concluída(s) — conclua-as antes de fechar a Conferência`,
+          };
+        }
+        // Verifica Costura
+        const [opsew] = await tx
+          .select({ payload: confeccaoSubtask.payload })
+          .from(confeccaoSubtask)
+          .where(
+            and(
+              eq(confeccaoSubtask.ordemProducaoId, st.ordemProducaoId),
+              eq(confeccaoSubtask.prefixo, "OPSEW"),
+            ),
+          );
+        const oficinas =
+          (opsew?.payload as SubtaskCosturaPayload | undefined)?.oficinas ??
+          [];
+        const naoFinalizadas = oficinas.filter(
+          (o) => o.statusInterno !== "finalizada",
+        );
+        if (naoFinalizadas.length > 0) {
+          return {
+            invalido: true as const,
+            details: [
+              {
+                code: "custom",
+                path: [],
+                message: `${naoFinalizadas.length} oficina(s) da Costura sem retirada final`,
+              },
+            ],
+            mensagem: `${naoFinalizadas.length} oficina(s) da Costura sem retirada final — finalize-as antes`,
           };
         }
       } else if (st.prefixo === "OPVIE") {

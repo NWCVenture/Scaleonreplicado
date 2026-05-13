@@ -5,6 +5,7 @@
 // (09-13) mostram placeholder até que cada RITM seja entregue.
 
 import { SubtaskCompra } from "./subtask-compra";
+import { SubtaskConferencia } from "./subtask-conferencia";
 import { SubtaskCorte } from "./subtask-corte";
 import { SubtaskCostura } from "./subtask-costura";
 import { SubtaskRisco } from "./subtask-risco";
@@ -20,7 +21,7 @@ const PLACEHOLDERS: Record<ConfeccaoSubtaskPrefixo, string> = {
   OPCOR: "RITM-10 — Corte",
   OPVIE: "RITM-11 — Viés",
   OPSEW: "RITM-12 — Costura",
-  OPCONF: "RITM-13 — Conferência (em desenvolvimento)",
+  OPCONF: "RITM-13 — Conferência",
 };
 
 export interface SubtaskConteudoRouterProps {
@@ -79,6 +80,16 @@ export function SubtaskConteudoRouter({
   if (subtask.prefixo === "OPSEW") {
     return (
       <SubtaskCostura
+        subtask={subtask}
+        opNumero={opNumero}
+        contaId={contaId}
+        onAlterado={onAlterado}
+      />
+    );
+  }
+  if (subtask.prefixo === "OPCONF") {
+    return (
+      <SubtaskConferencia
         subtask={subtask}
         opNumero={opNumero}
         contaId={contaId}
