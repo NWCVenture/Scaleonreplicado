@@ -20,6 +20,11 @@ import {
   ConcluirSubtaskRiscoSchema,
   validarLarguraVsRolo,
 } from "@/lib/confeccao/schemas/payloads/risco";
+import {
+  ConcluirSubtaskCorteSchema,
+  rolosCompradosPorCorDeCompra,
+  validarSaldoRolos,
+} from "@/lib/confeccao/schemas/payloads/corte";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -65,6 +70,58 @@ export async function POST(
             details: r.error.issues,
             mensagem:
               "Payload da subtask Compra está incompleto. Preencha todos os campos pré + pós-compra antes de concluir.",
+          };
+        }
+      } else if (st.prefixo === "OPCOR") {
+        const r = ConcluirSubtaskCorteSchema.safeParse(st.payload);
+        if (!r.success) {
+          return {
+            invalido: true as const,
+            details: r.error.issues,
+            mensagem:
+              "Payload do Corte está incompleto. Cada oficina precisa ter rolos enviados, folhas, rendimento e preço/peça.",
+          };
+        }
+        // Validação cross-subtask: saldo de rolos vindo da Compra
+        const [opbuy] = await tx
+          .select({ payload: confeccaoSubtask.payload })
+          .from(confeccaoSubtask)
+          .where(
+            and(
+              eq(confeccaoSubtask.ordemProducaoId, st.ordemProducaoId),
+              eq(confeccaoSubtask.prefixo, "OPBUY"),
+            ),
+          );
+        const rolosDisponiveis = rolosCompradosPorCorDeCompra(
+          opbuy?.payload as SubtaskCompraPayload | undefined,
+        );
+        if (rolosDisponiveis.size === 0) {
+          return {
+            invalido: true as const,
+            details: [
+              {
+                code: "custom",
+                path: ["oficinas"],
+                message:
+                  "Subtask Compra ainda não definiu rolos recebidos — conclua-a primeiro",
+              },
+            ],
+            mensagem:
+              "Subtask Compra ainda não definiu rolos recebidos — conclua-a primeiro",
+          };
+        }
+        const saldoOk = validarSaldoRolos(r.data.oficinas, rolosDisponiveis);
+        if (!saldoOk.ok) {
+          return {
+            invalido: true as const,
+            details: [
+              {
+                code: "custom",
+                path: ["oficinas"],
+                message: saldoOk.mensagem,
+              },
+            ],
+            mensagem: saldoOk.mensagem,
           };
         }
       } else if (st.prefixo === "OPRIS") {
