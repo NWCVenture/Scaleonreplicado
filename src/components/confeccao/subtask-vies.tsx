@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, MessageCircle, Play } from "lucide-react";
+import { CheckCircle2, Play } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,7 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
 import { BlocoLalamoveManual } from "@/components/confeccao/bloco-lalamove-manual";
-import { abrirWhatsAppComLog } from "@/lib/confeccao/whatsapp";
+import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
 import {
   calcularCustoVies,
   type SubtaskViesPayload,
@@ -240,20 +240,6 @@ export function SubtaskVies({
     }
   }
 
-  function abrirWhatsApp() {
-    if (!fornecedor?.whatsapp) {
-      toast.error("Fábrica sem WhatsApp cadastrado");
-      return;
-    }
-    abrirWhatsAppComLog({
-      telefone: fornecedor.whatsapp,
-      destinatarioNome: fornecedor.nome,
-      mensagem: `Olá, ${fornecedor.nome}. Sobre a OP ${opNumero} (${subtask.numero}):\n\nGostaríamos de solicitar viés. Bandeira: ${tamanhoBandeiraCm || "?"}cm. Aguardo retorno.`,
-      subtaskId: subtask.id,
-      contexto: `Viés — OP ${opNumero}`,
-    });
-  }
-
   const custoTotal =
     metragemProduzidaM && precoPorMetro
       ? calcularCustoVies({
@@ -311,15 +297,18 @@ export function SubtaskVies({
               className="w-full"
             />
             {fornecedor?.whatsapp && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={abrirWhatsApp}
+              <WhatsappTemplatePicker
+                categoria="vies"
+                opNumero={opNumero}
+                subtaskId={subtask.id}
+                telefone={fornecedor.whatsapp}
+                destinatarioNome={fornecedor.nome}
+                fornecedorId={fornecedor.id}
+                mensagemFallback={`Olá, {fornecedor_nome}. Sobre a OP {op_numero} (${subtask.numero}):\n\nGostaríamos de solicitar viés. Bandeira: {tamanho_bandeira}. Aguardo retorno.`}
+                contexto={`Viés — OP ${opNumero}`}
+                label="Solicitar viés via WhatsApp"
                 className="w-full"
-              >
-                <MessageCircle className="size-3.5" />
-                Solicitar viés via WhatsApp
-              </Button>
+              />
             )}
           </div>
 

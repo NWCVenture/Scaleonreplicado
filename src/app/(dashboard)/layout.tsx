@@ -112,6 +112,7 @@ const expedicaoItems = [
 const confeccaoItems = [
   { href: "/confeccao", label: "Ordens de Produção", icon: Factory },
   { href: "/confeccao/cadastros", label: "Cadastros", icon: Boxes },
+  { href: "/confeccao/templates", label: "Templates WhatsApp", icon: Tag },
 ];
 
 const outrosItems = [
