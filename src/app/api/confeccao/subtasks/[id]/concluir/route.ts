@@ -25,6 +25,7 @@ import {
   rolosCompradosPorCorDeCompra,
   validarSaldoRolos,
 } from "@/lib/confeccao/schemas/payloads/corte";
+import { ConcluirSubtaskViesSchema } from "@/lib/confeccao/schemas/payloads/vies";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -122,6 +123,16 @@ export async function POST(
               },
             ],
             mensagem: saldoOk.mensagem,
+          };
+        }
+      } else if (st.prefixo === "OPVIE") {
+        const r = ConcluirSubtaskViesSchema.safeParse(st.payload);
+        if (!r.success) {
+          return {
+            invalido: true as const,
+            details: r.error.issues,
+            mensagem:
+              "Payload do Viés está incompleto. Preencha fábrica, tamanho da bandeira, tipo/cor, metragem e preço antes de concluir.",
           };
         }
       } else if (st.prefixo === "OPRIS") {
