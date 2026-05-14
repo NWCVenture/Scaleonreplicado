@@ -42,6 +42,7 @@ import {
   UserCog,
   Truck,
   Briefcase,
+  Pencil,
 } from "lucide-react";
 
 type UserRow = {
@@ -126,6 +127,10 @@ export default function GerenciarUsuariosPage() {
   const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
+  const [editTarget, setEditTarget] = useState<UserRow | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", email: "" });
+  const [editLoading, setEditLoading] = useState(false);
+
   const [papelLoadingId, setPapelLoadingId] = useState<string | null>(null);
 
   const fetchUsers = useCallback(async () => {
@@ -204,6 +209,55 @@ export default function GerenciarUsuariosPage() {
       );
     } finally {
       setPapelLoadingId(null);
+    }
+  }
+
+  function openEdit(u: UserRow) {
+    setEditTarget(u);
+    setEditForm({ name: u.name, email: u.email });
+  }
+
+  async function handleEditSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editTarget) return;
+    // Só envia campos que mudaram pra não revalidar/colidir email à toa.
+    const payload: { name?: string; email?: string } = {};
+    if (editForm.name.trim() && editForm.name.trim() !== editTarget.name)
+      payload.name = editForm.name.trim();
+    if (
+      editForm.email.trim() &&
+      editForm.email.trim().toLowerCase() !== editTarget.email.toLowerCase()
+    )
+      payload.email = editForm.email.trim().toLowerCase();
+
+    if (Object.keys(payload).length === 0) {
+      setEditTarget(null);
+      return;
+    }
+
+    setEditLoading(true);
+    try {
+      const res = await fetch(`/api/users/${editTarget.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Erro ao atualizar usuário");
+        return;
+      }
+      toast.success("Usuário atualizado!");
+      setUsers((prev) =>
+        prev.map((x) =>
+          x.id === editTarget.id
+            ? { ...x, name: data.name ?? x.name, email: data.email ?? x.email }
+            : x,
+        ),
+      );
+      setEditTarget(null);
+    } finally {
+      setEditLoading(false);
     }
   }
 
@@ -331,22 +385,33 @@ export default function GerenciarUsuariosPage() {
                     {new Date(u.createdAt).toLocaleDateString("pt-BR")}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 w-7 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                      disabled={isOwner || isSelf}
-                      title={
-                        isOwner
-                          ? "Owner não pode ser removido"
-                          : isSelf
-                            ? "Você não pode remover sua própria conta"
-                            : "Remover usuário desta conta"
-                      }
-                      onClick={() => setDeleteTarget(u)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                        title="Editar nome e email"
+                        onClick={() => openEdit(u)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                        disabled={isOwner || isSelf}
+                        title={
+                          isOwner
+                            ? "Owner não pode ser removido"
+                            : isSelf
+                              ? "Você não pode remover sua própria conta"
+                              : "Remover usuário desta conta"
+                        }
+                        onClick={() => setDeleteTarget(u)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -462,6 +527,78 @@ export default function GerenciarUsuariosPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit user dialog */}
+      <Dialog
+        open={!!editTarget}
+        onOpenChange={(o) => !o && !editLoading && setEditTarget(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="h-5 w-5" />
+              Editar Usuário
+            </DialogTitle>
+          </DialogHeader>
+          {editTarget && (
+            <form onSubmit={handleEditSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-name">Nome</Label>
+                <Input
+                  id="edit-name"
+                  placeholder="Nome completo"
+                  value={editForm.name}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, name: e.target.value }))
+                  }
+                  required
+                  minLength={2}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-email">Email</Label>
+                <Input
+                  id="edit-email"
+                  type="email"
+                  placeholder="usuario@email.com"
+                  value={editForm.email}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, email: e.target.value }))
+                  }
+                  disabled={editTarget.papelNaConta === "owner"}
+                  required
+                />
+                {editTarget.papelNaConta === "owner" && (
+                  <p className="text-[11px] text-amber-500">
+                    Email do owner é alterado em Gerenciar Conta (requer confirmação por email).
+                  </p>
+                )}
+                {editTarget.papelNaConta !== "owner" &&
+                  editForm.email.trim().toLowerCase() !==
+                    editTarget.email.toLowerCase() && (
+                    <p className="text-[11px] text-amber-500">
+                      O usuário precisará verificar o novo email para liberar funcionalidades que dependem disso.
+                    </p>
+                  )}
+              </div>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setEditTarget(null)}
+                  disabled={editLoading}
+                >
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={editLoading} className="gap-2">
+                  {editLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Salvar
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
 

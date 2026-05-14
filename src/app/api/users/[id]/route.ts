@@ -58,8 +58,9 @@ const patchSchema = z
       .enum(["admin", "supervisor", "funcionario", "expedicao"])
       .optional(),
     name: z.string().min(2).optional(),
+    email: z.string().email().toLowerCase().optional(),
   })
-  .refine((data) => data.papel || data.role || data.name, {
+  .refine((data) => data.papel || data.role || data.name || data.email, {
     message: "Forneça pelo menos um campo para atualizar",
   });
 
@@ -91,7 +92,7 @@ export async function PATCH(
     );
   }
 
-  const { papel, role, name } = parsed.data;
+  const { papel, role, name, email } = parsed.data;
   const novoPapel = papel ?? (role ? ROLE_LEGACY_MAP[role] : undefined);
 
   if (novoPapel && vinculo.papel === "owner") {
@@ -115,12 +116,43 @@ export async function PATCH(
     );
   }
 
+  // Troca de email do owner deve passar pelo fluxo seguro com double-confirm
+  // (POST /api/conta/email-change) pois o email é o conta.emailPrincipal.
+  if (email && vinculo.papel === "owner") {
+    return NextResponse.json(
+      {
+        error:
+          "Email do owner deve ser alterado em Gerenciar Conta (requer confirmação por email).",
+      },
+      { status: 403 },
+    );
+  }
+
+  if (email) {
+    const [colisao] = await db
+      .select({ id: user.id })
+      .from(user)
+      .where(eq(user.email, email))
+      .limit(1);
+    if (colisao && colisao.id !== id) {
+      return NextResponse.json(
+        { error: "Este email já está em uso por outro usuário." },
+        { status: 409 },
+      );
+    }
+  }
+
   await db.transaction(async (tx) => {
-    if (name) {
-      await tx
-        .update(user)
-        .set({ name, updatedAt: new Date() })
-        .where(eq(user.id, id));
+    const userUpdates: Partial<typeof user.$inferInsert> = {};
+    if (name) userUpdates.name = name;
+    if (email) {
+      userUpdates.email = email;
+      // Reset de emailVerified ao trocar o endereço — exigir nova verificação.
+      userUpdates.emailVerified = false;
+    }
+    if (Object.keys(userUpdates).length > 0) {
+      userUpdates.updatedAt = new Date();
+      await tx.update(user).set(userUpdates).where(eq(user.id, id));
     }
     if (novoPapel) {
       await tx
