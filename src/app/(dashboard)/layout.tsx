@@ -28,6 +28,7 @@ import {
   FileDown,
   Factory,
   LayoutDashboard,
+  ShieldCheck,
   LogOut,
   Lock,
   MousePointerClick,
@@ -112,6 +113,11 @@ const expedicaoItems = [
 
 const confeccaoItems = [
   { href: "/confeccao/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  {
+    href: "/confeccao/dashboard/qualidade",
+    label: "Dashboard Qualidade",
+    icon: ShieldCheck,
+  },
   { href: "/confeccao", label: "Ordens de Produção", icon: Factory },
   { href: "/confeccao/cadastros", label: "Cadastros", icon: Boxes },
   { href: "/confeccao/templates", label: "Templates WhatsApp", icon: Tag },
