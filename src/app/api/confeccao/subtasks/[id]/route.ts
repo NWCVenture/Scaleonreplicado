@@ -15,6 +15,7 @@ import {
   confeccaoSubtask,
   user,
 } from "@/lib/db/schema";
+import { notificarAtribuidoSubtaskMudou } from "@/lib/confeccao/email";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -187,7 +188,14 @@ export async function PATCH(
         });
       }
 
-      return { ok: true as const, item: updated };
+      return {
+        ok: true as const,
+        item: updated,
+        atribuidoMudou:
+          parsed.atribuidoAId !== undefined &&
+          parsed.atribuidoAId !== stAtual.atribuidoAId,
+        atribuidoAnteriorId: stAtual.atribuidoAId,
+      };
     });
 
     if ("notFound" in result) {
@@ -195,6 +203,14 @@ export async function PATCH(
         { error: "Subtask não encontrada" },
         { status: 404 },
       );
+    }
+    if (result.atribuidoMudou) {
+      notificarAtribuidoSubtaskMudou({
+        subtaskId: result.item.id,
+        atribuidoAnteriorId: result.atribuidoAnteriorId,
+        atribuidoNovoId: parsed.atribuidoAId ?? null,
+        editorId: adminCtx.userId,
+      });
     }
     return NextResponse.json({ item: result.item });
   } catch (err) {

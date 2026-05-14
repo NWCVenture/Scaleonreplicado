@@ -16,6 +16,7 @@ import {
   confeccaoSubtask,
   user,
 } from "@/lib/db/schema";
+import { notificarAtribuidoOpMudou } from "@/lib/confeccao/email";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -246,11 +247,24 @@ export async function PATCH(
         });
       }
 
-      return { ok: true as const, op: updated };
+      return {
+        ok: true as const,
+        op: updated,
+        atribuidoMudou,
+        atribuidoAnteriorId: opAtual.atribuidoAId,
+      };
     });
 
     if ("notFound" in result) {
       return NextResponse.json({ error: "OP não encontrada" }, { status: 404 });
+    }
+    if (result.atribuidoMudou && parsed.atribuidoAId) {
+      notificarAtribuidoOpMudou({
+        opId: result.op.id,
+        atribuidoAnteriorId: result.atribuidoAnteriorId,
+        atribuidoNovoId: parsed.atribuidoAId,
+        editorId: adminCtx.userId,
+      });
     }
     return NextResponse.json({ item: result.op });
   } catch (err) {

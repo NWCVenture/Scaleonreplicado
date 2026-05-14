@@ -16,6 +16,7 @@ import {
   ListarOPsQuerySchema,
 } from "@/lib/confeccao/schemas/op";
 import { criarOP, CriarOPError } from "@/lib/confeccao/criar-op";
+import { notificarOpCriada } from "@/lib/confeccao/email";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -182,6 +183,8 @@ export async function POST(request: NextRequest) {
         data: parsed,
       }),
     );
+
+    notificarOpCriada({ opId: result.op.id, criadorId: adminCtx.userId });
 
     return NextResponse.json(result, { status: 201 });
   } catch (err) {

@@ -33,6 +33,10 @@ import {
   type SubtaskCosturaPayload,
 } from "@/lib/confeccao/schemas/payloads/costura";
 import { confeccaoSubconferencia } from "@/lib/db/schema";
+import {
+  notificarOpConcluida,
+  notificarSubtaskConcluida,
+} from "@/lib/confeccao/email";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -307,7 +311,19 @@ export async function POST(
         subtaskId: id,
         usuarioId: session.user.id,
       });
-      return { ok: true as const, subtask: transicao };
+      // Após a transição, lê OP pra saber se foi marcada como concluída
+      const [opAtual] = await tx
+        .select({
+          id: confeccaoSubtask.ordemProducaoId,
+        })
+        .from(confeccaoSubtask)
+        .where(eq(confeccaoSubtask.id, id));
+      return {
+        ok: true as const,
+        subtask: transicao,
+        ordemProducaoId: opAtual?.id ?? st.ordemProducaoId,
+        atribuidoAnteriorId: st.atribuidoAId,
+      };
     });
 
     if ("notFound" in result) {
@@ -322,6 +338,23 @@ export async function POST(
         { status: 400 },
       );
     }
+
+    // Dispara notificações fire-and-forget (após commit da transação)
+    notificarSubtaskConcluida({
+      subtaskAnteriorId: result.subtask.id,
+      proximaSubtaskId: result.subtask.proximaDesbloqueada?.id ?? null,
+      atribuidoAnteriorId: result.atribuidoAnteriorId,
+      executorId: session.user.id,
+    });
+    // OP concluída: detecta lendo status atual (concluirSubtask marca a OP
+    // quando todas as subtasks fecham)
+    if (!result.subtask.proximaDesbloqueada) {
+      notificarOpConcluida({
+        opId: result.ordemProducaoId,
+        executorId: session.user.id,
+      });
+    }
+
     return NextResponse.json({ subtask: result.subtask });
   } catch (err) {
     if (err instanceof TransicaoSubtaskError) {

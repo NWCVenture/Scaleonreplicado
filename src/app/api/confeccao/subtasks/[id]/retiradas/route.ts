@@ -6,11 +6,16 @@ import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { withContaAtiva } from "@/lib/tenancy";
-import { confeccaoRetirada, confeccaoSubconferencia } from "@/lib/db/schema";
+import {
+  confeccaoFornecedor,
+  confeccaoRetirada,
+  confeccaoSubconferencia,
+} from "@/lib/db/schema";
 import {
   criarRetirada,
   RetiradaError,
 } from "@/lib/confeccao/criar-retirada";
+import { notificarRetiradaParcial } from "@/lib/confeccao/email";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -90,8 +95,8 @@ export async function POST(
     const { id } = await ctx.params;
     const parsed = CriarRetiradaPayloadSchema.parse(await request.json());
 
-    const result = await withContaAtiva(async (tx, contaId) =>
-      criarRetirada(tx, {
+    const result = await withContaAtiva(async (tx, contaId) => {
+      const r = await criarRetirada(tx, {
         contaId,
         subtaskCosturaId: id,
         oficinaId: parsed.oficinaId,
@@ -99,8 +104,28 @@ export async function POST(
         pecasPorTamanhoCor: parsed.pecasPorTamanhoCor,
         dataRetirada: new Date(parsed.dataRetirada),
         usuarioId: session.user.id,
-      }),
-    );
+      });
+      const [oficina] = await tx
+        .select({ nome: confeccaoFornecedor.nome })
+        .from(confeccaoFornecedor)
+        .where(eq(confeccaoFornecedor.id, parsed.oficinaId));
+      return { ...r, oficinaNome: oficina?.nome ?? "(oficina)" };
+    });
+
+    if (parsed.tipo === "parcial") {
+      const total = Object.values(parsed.pecasPorTamanhoCor).reduce(
+        (s, m) => s + Object.values(m).reduce((s2, v) => s2 + v, 0),
+        0,
+      );
+      notificarRetiradaParcial({
+        subtaskCosturaId: id,
+        retiradaNumero: result.retirada.numero,
+        oficinaNome: result.oficinaNome,
+        subconferenciaNumero: result.subconferencia.numero,
+        totalPecas: total,
+        executorId: session.user.id,
+      });
+    }
 
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
