@@ -34,6 +34,7 @@ import { Progress } from "@/components/ui/progress";
 import { Label } from "@/components/ui/label";
 import { LookupUsuarioConta } from "./lookup-usuario-conta";
 import { CancelarOpDialog } from "./cancelar-op-dialog";
+import { EvidenciasSheet } from "./evidencias-sheet";
 
 interface OPHeaderProps {
   numero: string;
@@ -59,6 +60,7 @@ export function OPHeader(props: OPHeaderProps) {
   const [novoAtribuidoId, setNovoAtribuidoId] = useState(props.atribuidoAId);
   const [saving, setSaving] = useState(false);
   const [cancelarOpen, setCancelarOpen] = useState(false);
+  const [evidenciasOpen, setEvidenciasOpen] = useState(false);
   const podeCancelar =
     props.isAdmin && props.status !== "cancelada";
 
@@ -156,8 +158,9 @@ export function OPHeader(props: OPHeaderProps) {
           <Button
             variant="outline"
             size="sm"
-            disabled
-            title="Evidências de Pagamento — RITM-19"
+            onClick={() => setEvidenciasOpen(true)}
+            title="Evidências de Pagamento"
+            aria-label="Evidências de Pagamento"
           >
             <ReceiptText className="size-3.5" />
           </Button>
@@ -205,6 +208,12 @@ export function OPHeader(props: OPHeaderProps) {
         opStatus={props.status}
         usuarioAtualId={props.usuarioAtualId}
         onCancelado={props.onAtualizado}
+      />
+
+      <EvidenciasSheet
+        open={evidenciasOpen}
+        onOpenChange={setEvidenciasOpen}
+        opNumero={props.numero}
       />
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
