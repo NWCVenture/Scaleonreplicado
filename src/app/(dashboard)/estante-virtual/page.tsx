@@ -25,14 +25,17 @@ import {
   RefreshCw,
 } from "lucide-react";
 import {
-  parseQRCode,
   isThisWeek,
   compareSKU,
   type ParsedQR,
 } from "@/lib/estante-utils";
 import { ModalCriar } from "@/components/estante-virtual/modal-criar";
 import { ModalImportar } from "@/components/estante-virtual/modal-importar";
-import { ModalScanner } from "@/components/estante-virtual/modal-scanner";
+import {
+  ModalScanner,
+  type PendingFardo,
+  type SessionLogEntry,
+} from "@/components/estante-virtual/modal-scanner";
 import { FardosAgrupados } from "@/components/estante-virtual/fardos-agrupados";
 import { HistoricoView } from "@/components/estante-virtual/historico-view";
 
@@ -80,14 +83,37 @@ export default function EstanteVirtualPage() {
   >("adicionar");
   const [showImportar, setShowImportar] = useState(false);
 
-  // Scanner state
-  const [pendingQR, setPendingQR] = useState<{
-    raw: string;
-    parsed: ParsedQR;
-  } | null>(null);
+  // Scanner state — pendingFardos é a fila acumulada antes do confirm.
+  // sessionLog substitui o toast.warning porque o operador frequentemente
+  // bipa longe da tela e perderia avisos efêmeros.
+  const [pendingFardos, setPendingFardos] = useState<PendingFardo[]>([]);
   const [bipagemScanned, setBipagemScanned] = useState<string[]>([]);
+  const [sessionLog, setSessionLog] = useState<SessionLogEntry[]>([]);
+  const [isConfirming, setIsConfirming] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [removingId, setRemovingId] = useState<string | null>(null);
+
+  const appendLog = useCallback(
+    (tipo: SessionLogEntry["tipo"], mensagem: string) => {
+      setSessionLog((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          timestamp: Date.now(),
+          tipo,
+          mensagem,
+        },
+      ]);
+    },
+    [],
+  );
+
+  const fardoKey = useCallback((parsed: ParsedQR, raw: string) => {
+    // Chave de dedup local. UUID > codigoFardo > raw normalizado.
+    if (parsed.uuid) return `uuid:${parsed.uuid}`;
+    if (parsed.codigoFardo) return `cod:${parsed.codigoFardo}`;
+    return `raw:${raw.trim().toUpperCase()}`;
+  }, []);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -154,93 +180,155 @@ export default function EstanteVirtualPage() {
   };
 
   const handleScanComplete = useCallback(
-    async (parsed: ParsedQR, raw: string) => {
+    (parsed: ParsedQR, raw: string) => {
       if (!selectedId) return;
 
-      if (scannerMode === "adicionar") {
-        try {
-          const res = await fetch(`/api/estantes/${selectedId}/fardos`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              fardos: [
-                {
-                  qrCode: raw.trim(),
-                  sku: parsed.sku,
-                  lote: parsed.lote,
-                  quantidade: parsed.qtd,
-                },
-              ],
-            }),
-          });
-          if (!res.ok) throw new Error("Erro ao adicionar");
-          toast.success(`Fardo adicionado: ${parsed.sku}`);
-          fetchDetail(selectedId);
-        } catch {
-          toast.error("Erro ao adicionar fardo");
-        }
-      } else if (scannerMode === "retirar") {
-        setPendingQR({ raw, parsed });
-      } else if (scannerMode === "bipagem") {
+      if (scannerMode === "bipagem") {
         const key = `${parsed.sku}|${parsed.lote}`;
         if (bipagemScanned.includes(key)) {
-          toast.warning("Ja bipado");
+          appendLog("warning", `Já bipado nesta sessão: ${parsed.sku} (lote ${parsed.lote})`);
           return;
         }
         setBipagemScanned((prev) => [...prev, key]);
-        toast.success(`Bipado: ${parsed.sku}`);
+        appendLog("success", `Bipado: ${parsed.sku} (lote ${parsed.lote})`);
+        return;
       }
+
+      // Modos adicionar e retirar: acumular em pendingFardos com dedup local.
+      const key = fardoKey(parsed, raw);
+      if (pendingFardos.some((p) => p.key === key)) {
+        appendLog(
+          "warning",
+          `Já está na fila: ${parsed.sku} (lote ${parsed.lote}, qtd ${parsed.qtd})`,
+        );
+        return;
+      }
+      setPendingFardos((prev) => [...prev, { key, raw, parsed }]);
+      appendLog(
+        "success",
+        `Adicionado à fila: ${parsed.sku} (lote ${parsed.lote}, qtd ${parsed.qtd})`,
+      );
     },
-    [selectedId, scannerMode, bipagemScanned, fetchDetail],
+    [selectedId, scannerMode, bipagemScanned, pendingFardos, appendLog, fardoKey],
   );
 
-  const handleConfirmRetirada = useCallback(async () => {
-    if (!pendingQR || !selectedId) return;
-    const norm = (s: string) => s.toUpperCase().replace(/\s+/g, " ").trim();
-    // Match por prioridade: UUID (v3) → codigoFardo (v2/v3) → SKU+LOTE (v1).
-    // Garante que o fardo correto seja retirado quando há duplicatas
-    // (mesmo SKU+LOTE) — cada QR v3 tem UUID único.
-    const { uuid, codigoFardo, sku: parsedSku, lote: parsedLote } =
-      pendingQR.parsed;
-    let match: EstanteFardoItem | undefined;
-    if (uuid) {
-      match = fardos.find((f) => parseQRCode(f.qrCode)?.uuid === uuid);
-    } else if (codigoFardo) {
-      match = fardos.find(
-        (f) => parseQRCode(f.qrCode)?.codigoFardo === codigoFardo,
-      );
-    } else {
-      match = fardos.find(
-        (f) =>
-          norm(f.sku) === norm(parsedSku) &&
-          norm(f.lote) === norm(parsedLote),
-      );
-    }
-    if (!match) {
-      toast.error(`Fardo nao encontrado: ${parsedSku}`);
-      return;
-    }
-    let ok = false;
+  const handleRemovePending = useCallback(
+    (key: string) => {
+      const removed = pendingFardos.find((p) => p.key === key);
+      setPendingFardos((prev) => prev.filter((p) => p.key !== key));
+      if (removed) {
+        appendLog(
+          "info",
+          `Removido da fila: ${removed.parsed.sku} (lote ${removed.parsed.lote})`,
+        );
+      }
+    },
+    [pendingFardos, appendLog],
+  );
+
+  const handleConfirmInclusao = useCallback(async () => {
+    if (!selectedId || pendingFardos.length === 0) return;
+    setIsConfirming(true);
     try {
-      const res = await fetch(
-        `/api/estantes/${selectedId}/fardos/${match.id}`,
-        { method: "DELETE" },
-      );
-      ok = res.ok;
-      if (!res.ok) throw new Error("Erro ao retirar");
-      toast.success(`Fardo retirado: ${pendingQR.parsed.sku}`);
-      setPendingQR(null);
-      setShowScanner(false);
-    } catch {
-      if (!ok) toast.error("Erro ao retirar fardo");
-    } finally {
+      const res = await fetch(`/api/estantes/${selectedId}/fardos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fardos: pendingFardos.map((p) => ({
+            qrCode: p.raw.trim(),
+            sku: p.parsed.sku,
+            lote: p.parsed.lote,
+            quantidade: p.parsed.qtd,
+          })),
+        }),
+      });
+      if (!res.ok) throw new Error("Erro ao adicionar");
+      const data: {
+        added: number;
+        skipped: Array<{
+          qrCode: string;
+          sku: string;
+          lote: string;
+          motivo: "duplicado-mesma-estante" | "ja-existe-outra-estante";
+          estanteNome?: string;
+        }>;
+      } = await res.json();
+
+      if (data.added > 0) {
+        appendLog("success", `${data.added} fardo(s) adicionado(s) com sucesso`);
+        toast.success(`${data.added} fardo(s) adicionado(s)`);
+      }
+      for (const s of data.skipped ?? []) {
+        const msg =
+          s.motivo === "ja-existe-outra-estante"
+            ? `Já existe em outra estante (${s.estanteNome ?? "—"}): ${s.sku} (lote ${s.lote})`
+            : `Duplicado: ${s.sku} (lote ${s.lote})`;
+        appendLog("warning", msg);
+      }
+      if (data.added === 0 && (data.skipped?.length ?? 0) > 0) {
+        toast.warning(`Nenhum fardo adicionado — ver log da sessão`);
+      }
+      setPendingFardos([]);
       fetchDetail(selectedId);
       fetchEstantes();
+    } catch {
+      appendLog("error", "Erro ao confirmar inclusão");
+      toast.error("Erro ao adicionar fardos");
+    } finally {
+      setIsConfirming(false);
     }
-  }, [pendingQR, selectedId, fardos, fetchDetail, fetchEstantes]);
+  }, [selectedId, pendingFardos, appendLog, fetchDetail, fetchEstantes]);
+
+  const handleConfirmRetirada = useCallback(async () => {
+    if (!selectedId || pendingFardos.length === 0) return;
+    setIsConfirming(true);
+    try {
+      const res = await fetch(
+        `/api/estantes/${selectedId}/fardos/bulk-delete`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fardos: pendingFardos.map((p) => ({ qrCode: p.raw.trim() })),
+          }),
+        },
+      );
+      if (!res.ok) throw new Error("Erro ao retirar");
+      const data: {
+        removed: number;
+        naoEncontrados: Array<{ qrCode?: string; fardoId?: string }>;
+      } = await res.json();
+
+      if (data.removed > 0) {
+        appendLog("success", `${data.removed} fardo(s) retirado(s)`);
+        toast.success(`${data.removed} fardo(s) retirado(s)`);
+      }
+      // Reconstrói mensagem amigável usando o pendingFardos do client (o
+      // backend só devolve o raw/fardoId que falhou no match).
+      for (const n of data.naoEncontrados ?? []) {
+        const orig = pendingFardos.find((p) => p.raw.trim() === n.qrCode);
+        const label = orig
+          ? `${orig.parsed.sku} (lote ${orig.parsed.lote})`
+          : (n.qrCode ?? n.fardoId ?? "—");
+        appendLog("warning", `Não encontrado na estante: ${label}`);
+      }
+      if (data.removed === 0 && (data.naoEncontrados?.length ?? 0) > 0) {
+        toast.warning("Nenhum fardo retirado — ver log da sessão");
+      }
+      setPendingFardos([]);
+      fetchDetail(selectedId);
+      fetchEstantes();
+    } catch {
+      appendLog("error", "Erro ao confirmar retirada");
+      toast.error("Erro ao retirar fardos");
+    } finally {
+      setIsConfirming(false);
+    }
+  }, [selectedId, pendingFardos, appendLog, fetchDetail, fetchEstantes]);
 
   const handleConfirmBipagem = useCallback(async () => {
     if (!selectedId) return;
+    setIsConfirming(true);
     try {
       const res = await fetch(`/api/estantes/${selectedId}/bipagem`, {
         method: "POST",
@@ -248,15 +336,19 @@ export default function EstanteVirtualPage() {
         body: JSON.stringify({ scannedCount: bipagemScanned.length }),
       });
       if (!res.ok) throw new Error("Erro ao confirmar bipagem");
+      appendLog("success", `Bipagem registrada (${bipagemScanned.length} fardos)`);
       toast.success(`Bipagem registrada! ${bipagemScanned.length} fardos`);
       setBipagemScanned([]);
       setShowScanner(false);
       fetchDetail(selectedId);
       fetchEstantes();
     } catch {
+      appendLog("error", "Erro ao confirmar bipagem");
       toast.error("Erro ao confirmar bipagem");
+    } finally {
+      setIsConfirming(false);
     }
-  }, [selectedId, bipagemScanned, fetchDetail, fetchEstantes]);
+  }, [selectedId, bipagemScanned, appendLog, fetchDetail, fetchEstantes]);
 
   const handleImportar = useCallback(
     async (items: Array<{ sku: string; qtd: number; lote: string }>) => {
@@ -266,6 +358,7 @@ export default function EstanteVirtualPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            origem: "importacao",
             fardos: items.map((item) => ({
               qrCode: `${item.sku}|${item.lote}|${item.qtd}`,
               sku: item.sku,
@@ -275,7 +368,8 @@ export default function EstanteVirtualPage() {
           }),
         });
         if (!res.ok) throw new Error("Erro ao importar");
-        toast.success(`${items.length} fardos importados!`);
+        const data: { added: number } = await res.json();
+        toast.success(`${data.added} fardos importados!`);
         setShowImportar(false);
         fetchDetail(selectedId);
         fetchEstantes();
@@ -365,7 +459,8 @@ export default function EstanteVirtualPage() {
 
   const openScanner = (mode: "retirar" | "adicionar" | "bipagem") => {
     setScannerMode(mode);
-    setPendingQR(null);
+    setPendingFardos([]);
+    setSessionLog([]);
     if (mode === "bipagem") setBipagemScanned([]);
     setShowScanner(true);
   };
@@ -530,18 +625,23 @@ export default function EstanteVirtualPage() {
           onOpenChange={(open) => {
             setShowScanner(open);
             if (!open) {
-              setPendingQR(null);
+              setPendingFardos([]);
               setBipagemScanned([]);
+              setSessionLog([]);
             }
           }}
           title={scannerTitle}
           mode={scannerMode}
           onScanComplete={handleScanComplete}
-          pendingQR={pendingQR}
+          pendingFardos={pendingFardos}
+          onRemovePending={handleRemovePending}
+          onConfirmInclusao={handleConfirmInclusao}
           onConfirmRetirada={handleConfirmRetirada}
-          onLerOutro={() => setPendingQR(null)}
           bipagemScanned={bipagemScanned}
           onConfirmBipagem={handleConfirmBipagem}
+          sessionLog={sessionLog}
+          onClearLog={() => setSessionLog([])}
+          isConfirming={isConfirming}
         />
         <ModalImportar
           open={showImportar}
