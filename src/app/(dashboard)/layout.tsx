@@ -27,6 +27,7 @@ import {
   FileText,
   FileDown,
   Factory,
+  LayoutDashboard,
   LogOut,
   Lock,
   MousePointerClick,
@@ -110,6 +111,7 @@ const expedicaoItems = [
 ];
 
 const confeccaoItems = [
+  { href: "/confeccao/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/confeccao", label: "Ordens de Produção", icon: Factory },
   { href: "/confeccao/cadastros", label: "Cadastros", icon: Boxes },
   { href: "/confeccao/templates", label: "Templates WhatsApp", icon: Tag },
