@@ -16,6 +16,10 @@ import {
   user,
 } from "@/lib/db/schema";
 import { notificarAtribuidoSubtaskMudou } from "@/lib/confeccao/email";
+import {
+  assertOpAtivaBySubtask,
+  OpCanceladaError,
+} from "@/lib/confeccao/assert-op-ativa";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -120,6 +124,7 @@ export async function PATCH(
     }
 
     const result = await withContaAtiva(async (tx, contaId) => {
+      await assertOpAtivaBySubtask(tx, contaId, id);
       const [stAtual] = await tx
         .select()
         .from(confeccaoSubtask)
@@ -214,6 +219,12 @@ export async function PATCH(
     }
     return NextResponse.json({ item: result.item });
   } catch (err) {
+    if (err instanceof OpCanceladaError) {
+      return NextResponse.json(
+        { error: err.message, code: "op_cancelada" },
+        { status: 409 },
+      );
+    }
     if (err instanceof z.ZodError) {
       return NextResponse.json(
         { error: "Dados inválidos", details: err.issues },

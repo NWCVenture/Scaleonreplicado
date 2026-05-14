@@ -7,10 +7,14 @@
 // principal — pra não bloquear a resposta HTTP e não enviar email se a
 // transação rolar back.
 
+import { and, eq, inArray } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { confeccaoSubtask, user } from "@/lib/db/schema";
 import { sendEmail } from "@/lib/email";
 import {
   buildAtribuidoMudouAnteriorEmail,
   buildAtribuidoMudouNovoEmail,
+  buildOpCanceladaEmail,
   buildOpConcluidaEmail,
   buildOpCriadaEmail,
   buildRetiradaParcialEmail,
@@ -262,6 +266,77 @@ export function notificarAtribuidoSubtaskMudou(input: {
         url,
       });
       disparar(anterior, render, "atribuido-subtask-anterior");
+    }
+  })();
+}
+
+// ============================================================
+// 6b. OP cancelada
+// ============================================================
+
+export function notificarOpCancelada(input: {
+  opId: string;
+  canceladaPorId: string;
+  canceladaPorNome: string;
+  autorizadoPorNome: string | null;
+  justificativa: string;
+}): void {
+  void (async () => {
+    const op = await buscarOpPorId(input.opId);
+    if (!op) return;
+    const url = opUrl(op.numero);
+
+    // Admins/owners + atribuído OP + atribuídos das subtasks ativas
+    const admins = await buscarAdminsConta(op.contaId);
+    const atribuidoOp = await buscarUsuario(op.atribuidoAId);
+
+    let atribuidosSubtasksAtivas: DestinatarioBasico[] = [];
+    try {
+      const rows = await db
+        .select({
+          id: user.id,
+          name: user.name,
+          email: user.email,
+        })
+        .from(confeccaoSubtask)
+        .innerJoin(user, eq(user.id, confeccaoSubtask.atribuidoAId))
+        .where(
+          and(
+            eq(confeccaoSubtask.ordemProducaoId, op.id),
+            inArray(confeccaoSubtask.status, ["pendente", "em_andamento"]),
+          ),
+        );
+      atribuidosSubtasksAtivas = rows.filter(
+        (r): r is DestinatarioBasico => Boolean(r.email),
+      );
+    } catch (err) {
+      console.warn(
+        "[email] notificarOpCancelada subtasks ativas falhou:",
+        (err as Error).message,
+      );
+    }
+
+    // Deduplicação por email
+    const enviados = new Set<string>();
+    const destinatarios: DestinatarioBasico[] = [];
+    for (const d of [...admins, atribuidoOp, ...atribuidosSubtasksAtivas]) {
+      if (!d) continue;
+      if (enviados.has(d.email)) continue;
+      enviados.add(d.email);
+      destinatarios.push(d);
+    }
+
+    for (const d of destinatarios) {
+      const render = buildOpCanceladaEmail({
+        destinatarioNome: d.name,
+        opNumero: op.numero,
+        produtoNome: op.produtoNome,
+        canceladaPorNome: input.canceladaPorNome,
+        autorizadoPorNome: input.autorizadoPorNome,
+        justificativa: input.justificativa,
+        opUrl: url,
+      });
+      disparar(d, render, "op-cancelada");
     }
   })();
 }

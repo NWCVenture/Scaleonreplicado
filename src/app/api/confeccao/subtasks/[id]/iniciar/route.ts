@@ -7,6 +7,10 @@ import {
   iniciarSubtask,
   TransicaoSubtaskError,
 } from "@/lib/confeccao/transicao-subtask";
+import {
+  assertOpAtivaBySubtask,
+  OpCanceladaError,
+} from "@/lib/confeccao/assert-op-ativa";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -28,16 +32,23 @@ export async function POST(
     }
     const { id } = await ctx.params;
 
-    const result = await withContaAtiva(async (tx, contaId) =>
-      iniciarSubtask(tx, {
+    const result = await withContaAtiva(async (tx, contaId) => {
+      await assertOpAtivaBySubtask(tx, contaId, id);
+      return iniciarSubtask(tx, {
         contaId,
         subtaskId: id,
         usuarioId: session.user.id,
-      }),
-    );
+      });
+    });
 
     return NextResponse.json({ subtask: result });
   } catch (err) {
+    if (err instanceof OpCanceladaError) {
+      return NextResponse.json(
+        { error: err.message, code: "op_cancelada" },
+        { status: 409 },
+      );
+    }
     if (err instanceof TransicaoSubtaskError) {
       const status =
         err.code === "subtask_nao_encontrada" ? 404 : 400;

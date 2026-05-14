@@ -289,6 +289,53 @@ export function buildAtribuidoMudouAnteriorEmail(
 }
 
 // ============================================================
+// 6b. OP cancelada — admins + atribuído + atribuídos de subtasks ativas
+// ============================================================
+
+export interface OpCanceladaParams {
+  destinatarioNome: string;
+  opNumero: string;
+  produtoNome: string;
+  canceladaPorNome: string;
+  autorizadoPorNome: string | null;
+  justificativa: string;
+  opUrl: string;
+}
+
+export function buildOpCanceladaEmail(
+  params: OpCanceladaParams,
+): EmailRender {
+  const subject = `OP ${params.opNumero} cancelada`;
+  const linhasJustificativa = params.justificativa
+    .split(/\n+/)
+    .map((l) => `<p style="margin:0">${escapeHtml(l)}</p>`)
+    .join("");
+  const paragrafos: string[] = [
+    `A OP <strong>${escapeHtml(params.opNumero)}</strong> (${escapeHtml(params.produtoNome)}) foi cancelada por ${escapeHtml(params.canceladaPorNome)}${params.autorizadoPorNome ? `, com autorização de ${escapeHtml(params.autorizadoPorNome)}` : ""}.`,
+    `<strong>Justificativa:</strong></p>${linhasJustificativa}<p>Esta ação é definitiva — a OP não pode ser reaberta. Custos e materiais já registrados ficam categorizados como "Cancelados ${escapeHtml(params.opNumero)}" para contabilidade separada.`,
+  ];
+  const html = envelope({
+    titulo: "OP cancelada",
+    saudacao: `Olá, ${params.destinatarioNome}.`,
+    paragrafos,
+    cta: { href: params.opUrl, label: "Ver OP" },
+  });
+  const text = plain([
+    "OP cancelada",
+    "",
+    `Olá, ${params.destinatarioNome}.`,
+    `A OP ${params.opNumero} (${params.produtoNome}) foi cancelada por ${params.canceladaPorNome}${params.autorizadoPorNome ? ` com autorização de ${params.autorizadoPorNome}` : ""}.`,
+    "",
+    `Justificativa: ${params.justificativa}`,
+    "",
+    "Esta ação é definitiva — a OP não pode ser reaberta.",
+    "",
+    `Ver: ${params.opUrl}`,
+  ]);
+  return { subject, html, text };
+}
+
+// ============================================================
 // 6. Retirada parcial — atribuído Conferência
 // ============================================================
 

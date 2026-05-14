@@ -10,6 +10,7 @@ import {
   Edit2,
   Factory,
   History,
+  MoreVertical,
   Printer,
   ReceiptText,
 } from "lucide-react";
@@ -23,9 +24,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import { Label } from "@/components/ui/label";
 import { LookupUsuarioConta } from "./lookup-usuario-conta";
+import { CancelarOpDialog } from "./cancelar-op-dialog";
 
 interface OPHeaderProps {
   numero: string;
@@ -41,6 +49,7 @@ interface OPHeaderProps {
     percentual: number;
   };
   isAdmin: boolean;
+  usuarioAtualId: string;
   onAtualizado: () => void;
   onAbrirHistorico: () => void;
 }
@@ -49,6 +58,9 @@ export function OPHeader(props: OPHeaderProps) {
   const [editOpen, setEditOpen] = useState(false);
   const [novoAtribuidoId, setNovoAtribuidoId] = useState(props.atribuidoAId);
   const [saving, setSaving] = useState(false);
+  const [cancelarOpen, setCancelarOpen] = useState(false);
+  const podeCancelar =
+    props.isAdmin && props.status !== "cancelada";
 
   async function salvar(e: React.FormEvent) {
     e.preventDefault();
@@ -149,14 +161,29 @@ export function OPHeader(props: OPHeaderProps) {
           >
             <ReceiptText className="size-3.5" />
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled
-            title="Cancelar OP — RITM-18"
-          >
-            <Ban className="size-3.5" />
-          </Button>
+          {podeCancelar && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  title="Mais ações"
+                  aria-label="Mais ações"
+                >
+                  <MoreVertical className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => setCancelarOpen(true)}
+                >
+                  <Ban className="size-3.5" />
+                  Cancelar OP
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </div>
 
@@ -170,6 +197,15 @@ export function OPHeader(props: OPHeaderProps) {
           subtasks ({props.progresso.percentual}%)
         </span>
       </div>
+
+      <CancelarOpDialog
+        open={cancelarOpen}
+        onOpenChange={setCancelarOpen}
+        opNumero={props.numero}
+        opStatus={props.status}
+        usuarioAtualId={props.usuarioAtualId}
+        onCancelado={props.onAtualizado}
+      />
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="sm:max-w-md">

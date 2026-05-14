@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildAtribuidoMudouAnteriorEmail,
   buildAtribuidoMudouNovoEmail,
+  buildOpCanceladaEmail,
   buildOpConcluidaEmail,
   buildOpCriadaEmail,
   buildRetiradaParcialEmail,
@@ -159,6 +160,52 @@ test("buildRetiradaParcialEmail: escapa nome da oficina", () => {
   });
   assert.ok(!r.html.includes("<b>oficina</b>"));
   assert.match(r.html, /&lt;b&gt;oficina&lt;\/b&gt;/);
+});
+
+test("buildOpCanceladaEmail: subject inclui número, mostra justificativa e quem cancelou", () => {
+  const r = buildOpCanceladaEmail({
+    destinatarioNome: "Joana",
+    opNumero: "OP05260050",
+    produtoNome: "Camisa polo",
+    canceladaPorNome: "Karl",
+    autorizadoPorNome: null,
+    justificativa: "Cliente desistiu da produção.",
+    opUrl: "http://x",
+  });
+  assert.match(r.subject, /OP05260050/);
+  assert.match(r.html, /Karl/);
+  assert.match(r.html, /Camisa polo/);
+  assert.match(r.html, /Cliente desistiu da produção\./);
+  assert.match(r.html, /definitiva/);
+  assert.match(r.text, /Cliente desistiu/);
+});
+
+test("buildOpCanceladaEmail: inclui autorizador quando OP fechada", () => {
+  const r = buildOpCanceladaEmail({
+    destinatarioNome: "Joana",
+    opNumero: "OP05260050",
+    produtoNome: "Camisa polo",
+    canceladaPorNome: "Karl",
+    autorizadoPorNome: "Laura",
+    justificativa: "Erro de cadastro.",
+    opUrl: "http://x",
+  });
+  assert.match(r.html, /Laura/);
+  assert.match(r.text, /Laura/);
+});
+
+test("buildOpCanceladaEmail: escapa justificativa", () => {
+  const r = buildOpCanceladaEmail({
+    destinatarioNome: "Joana",
+    opNumero: "OP05260050",
+    produtoNome: "x",
+    canceladaPorNome: "Karl",
+    autorizadoPorNome: null,
+    justificativa: "<script>alert(1)</script>",
+    opUrl: "http://x",
+  });
+  assert.ok(!r.html.includes("<script>alert"));
+  assert.match(r.html, /&lt;script&gt;/);
 });
 
 test("todos os templates retornam HTML com botão CTA quando há URL", () => {

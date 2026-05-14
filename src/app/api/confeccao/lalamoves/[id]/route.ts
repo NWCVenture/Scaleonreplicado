@@ -6,7 +6,11 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { withContaAtiva } from "@/lib/tenancy";
-import { confeccaoLalamove } from "@/lib/db/schema";
+import { confeccaoLalamove, confeccaoRetirada } from "@/lib/db/schema";
+import {
+  assertOpAtivaBySubtask,
+  OpCanceladaError,
+} from "@/lib/confeccao/assert-op-ativa";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -50,6 +54,32 @@ export async function PATCH(
     const parsed = PatchLalamoveSchema.parse(await request.json());
 
     const updated = await withContaAtiva(async (tx, contaId) => {
+      // Resolve subtaskId via Lalamove (direto ou via retirada)
+      const [ll] = await tx
+        .select({
+          subtaskId: confeccaoLalamove.subtaskId,
+          retiradaId: confeccaoLalamove.retiradaId,
+        })
+        .from(confeccaoLalamove)
+        .where(
+          and(
+            eq(confeccaoLalamove.id, id),
+            eq(confeccaoLalamove.contaId, contaId),
+          ),
+        );
+      if (ll) {
+        let stId = ll.subtaskId;
+        if (!stId && ll.retiradaId) {
+          const [r] = await tx
+            .select({ subtaskCosturaId: confeccaoRetirada.subtaskCosturaId })
+            .from(confeccaoRetirada)
+            .where(eq(confeccaoRetirada.id, ll.retiradaId));
+          stId = r?.subtaskCosturaId ?? null;
+        }
+        if (stId) {
+          await assertOpAtivaBySubtask(tx, contaId, stId);
+        }
+      }
       const setObj: Record<string, unknown> = { updatedAt: new Date() };
       if (parsed.status !== undefined) {
         setObj.status = parsed.status;
@@ -91,6 +121,12 @@ export async function PATCH(
     }
     return NextResponse.json({ item: updated });
   } catch (err) {
+    if (err instanceof OpCanceladaError) {
+      return NextResponse.json(
+        { error: err.message, code: "op_cancelada" },
+        { status: 409 },
+      );
+    }
     if (err instanceof z.ZodError) {
       return NextResponse.json(
         { error: "Dados inválidos", details: err.issues },

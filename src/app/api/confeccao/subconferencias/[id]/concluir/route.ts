@@ -16,6 +16,10 @@ import {
   validarPodeConcluirSubconferencia,
   type MatrizPecas,
 } from "@/lib/confeccao/schemas/subconferencia";
+import {
+  assertOpAtivaBySubtask,
+  OpCanceladaError,
+} from "@/lib/confeccao/assert-op-ativa";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -51,6 +55,7 @@ export async function POST(
       if (sc.status === "concluida") {
         return { jaConcluida: true as const };
       }
+      await assertOpAtivaBySubtask(tx, contaId, sc.subtaskConferenciaId);
 
       const validacao = validarPodeConcluirSubconferencia({
         pecasRecebidas: sc.pecasRecebidas as MatrizPecas | null,
@@ -110,6 +115,12 @@ export async function POST(
     }
     return NextResponse.json({ item: result.item });
   } catch (err) {
+    if (err instanceof OpCanceladaError) {
+      return NextResponse.json(
+        { error: err.message, code: "op_cancelada" },
+        { status: 409 },
+      );
+    }
     if (isTenancyAuthError(err)) {
       return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
     }

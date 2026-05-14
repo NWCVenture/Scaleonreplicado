@@ -1,6 +1,7 @@
 export {
   notificarAtribuidoOpMudou,
   notificarAtribuidoSubtaskMudou,
+  notificarOpCancelada,
   notificarOpConcluida,
   notificarOpCriada,
   notificarRetiradaParcial,

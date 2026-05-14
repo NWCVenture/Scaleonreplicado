@@ -16,6 +16,10 @@ import {
   RetiradaError,
 } from "@/lib/confeccao/criar-retirada";
 import { notificarRetiradaParcial } from "@/lib/confeccao/email";
+import {
+  assertOpAtivaBySubtask,
+  OpCanceladaError,
+} from "@/lib/confeccao/assert-op-ativa";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -96,6 +100,7 @@ export async function POST(
     const parsed = CriarRetiradaPayloadSchema.parse(await request.json());
 
     const result = await withContaAtiva(async (tx, contaId) => {
+      await assertOpAtivaBySubtask(tx, contaId, id);
       const r = await criarRetirada(tx, {
         contaId,
         subtaskCosturaId: id,
@@ -129,6 +134,12 @@ export async function POST(
 
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
+    if (err instanceof OpCanceladaError) {
+      return NextResponse.json(
+        { error: err.message, code: "op_cancelada" },
+        { status: 409 },
+      );
+    }
     if (err instanceof z.ZodError) {
       return NextResponse.json(
         { error: "Dados inválidos", details: err.issues },

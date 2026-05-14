@@ -29,6 +29,10 @@ import { SubtaskRiscoPayloadSchema } from "@/lib/confeccao/schemas/payloads/risc
 import { SubtaskCortePayloadSchema } from "@/lib/confeccao/schemas/payloads/corte";
 import { SubtaskViesPayloadSchema } from "@/lib/confeccao/schemas/payloads/vies";
 import { SubtaskCosturaPayloadSchema } from "@/lib/confeccao/schemas/payloads/costura";
+import {
+  assertOpAtivaBySubtask,
+  OpCanceladaError,
+} from "@/lib/confeccao/assert-op-ativa";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -104,6 +108,7 @@ export async function PATCH(
         : null;
 
     const result = await withConta(ctxConta.contaId, async (tx) => {
+      await assertOpAtivaBySubtask(tx, ctxConta.contaId, id);
       const [st] = await tx
         .select()
         .from(confeccaoSubtask)
@@ -221,6 +226,12 @@ export async function PATCH(
     }
     return NextResponse.json({ item: result.item });
   } catch (err) {
+    if (err instanceof OpCanceladaError) {
+      return NextResponse.json(
+        { error: err.message, code: "op_cancelada" },
+        { status: 409 },
+      );
+    }
     if (err instanceof z.ZodError) {
       return NextResponse.json(
         { error: "Dados inválidos", details: err.issues },
