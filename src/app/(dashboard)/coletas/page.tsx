@@ -514,7 +514,7 @@ export default function ColetasPage() {
   // ── Copy IDs ──────────────────────────────────────────────────────────────
   const handleCopy = useCallback(async () => {
     try {
-      await copyToClipboard(bipagem.ids.join("\n"));
+      await copyToClipboard(bipagem.ids.join(","));
       toast.success(`Copiado! (${bipagem.ids.length})`);
     } catch {
       toast.error("Erro ao copiar — verifique permissões do navegador");
@@ -917,7 +917,7 @@ export default function ColetasPage() {
       const codes = data.pacotes.map(
         (p: { codigo: string }) => p.codigo,
       );
-      await copyToClipboard(codes.join("\n"));
+      await copyToClipboard(codes.join(","));
       toast.success(`Copiado! (${codes.length} IDs)`);
     } catch {
       toast.error("Erro ao copiar codigos");
