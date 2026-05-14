@@ -19,6 +19,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { QRCodeSVG } from "qrcode.react";
 import {
@@ -117,6 +127,13 @@ export default function CadastroEstoque() {
   // Print queue
   const [printQueue, setPrintQueue] = useState<PrintQueueItem[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [clearQueueDialogOpen, setClearQueueDialogOpen] = useState(false);
+  // Ref espelha o printQueue pra ler o estado fresco dentro do setTimeout
+  // (que captura o state do render no qual foi agendado).
+  const printQueueRef = useRef(printQueue);
+  useEffect(() => {
+    printQueueRef.current = printQueue;
+  }, [printQueue]);
 
   // TXT import state
   const [isTxtDialogOpen, setIsTxtDialogOpen] = useState(false);
@@ -505,9 +522,17 @@ export default function CadastroEstoque() {
     printWindow.document.close();
 
     setTimeout(() => {
-      if (confirm("Salvar itens no estoque?")) {
-        saveToStock();
-      }
+      void (async () => {
+        if (confirm("Salvar itens no estoque?")) {
+          await saveToStock();
+        }
+        // Após o fluxo de salvamento, oferece limpar a fila. Só abre o popup
+        // se ainda houver itens — quem salvou já teve a fila zerada por
+        // saveToStock e não precisa do prompt.
+        if (printQueueRef.current.length > 0) {
+          setClearQueueDialogOpen(true);
+        }
+      })();
     }, 1500);
   };
 
@@ -1049,6 +1074,32 @@ export default function CadastroEstoque() {
           </Card>
         </div>
       </div>
+
+      <AlertDialog
+        open={clearQueueDialogOpen}
+        onOpenChange={setClearQueueDialogOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Etiquetas impressas!</AlertDialogTitle>
+            <AlertDialogDescription>
+              Deseja excluir a fila atual?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Manter</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setPrintQueue([]);
+                setClearQueueDialogOpen(false);
+              }}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              Excluir Fila
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
