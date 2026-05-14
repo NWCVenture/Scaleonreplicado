@@ -16,6 +16,11 @@ import {
   confeccaoSubtask,
   user,
 } from "@/lib/db/schema";
+import { notificarAtribuidoOpMudou } from "@/lib/confeccao/email";
+import {
+  assertOpAtivaById,
+  OpCanceladaError,
+} from "@/lib/confeccao/assert-op-ativa";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -53,6 +58,9 @@ export async function GET(
           updatedAt: confeccaoOrdemProducao.updatedAt,
           concluidaEm: confeccaoOrdemProducao.concluidaEm,
           canceladaEm: confeccaoOrdemProducao.canceladaEm,
+          canceladaPorId: confeccaoOrdemProducao.canceladaPorId,
+          cancelamentoAutorizadoPorId:
+            confeccaoOrdemProducao.cancelamentoAutorizadoPorId,
           cancelamentoJustificativa:
             confeccaoOrdemProducao.cancelamentoJustificativa,
           produtoId: confeccaoOrdemProducao.produtoId,
@@ -84,6 +92,18 @@ export async function GET(
         .select({ id: user.id, name: user.name, email: user.email })
         .from(user)
         .where(eq(user.id, op.atribuidoAId));
+      const [canceladaPor] = op.canceladaPorId
+        ? await tx
+            .select({ id: user.id, name: user.name })
+            .from(user)
+            .where(eq(user.id, op.canceladaPorId))
+        : [null];
+      const [autorizadoPor] = op.cancelamentoAutorizadoPorId
+        ? await tx
+            .select({ id: user.id, name: user.name })
+            .from(user)
+            .where(eq(user.id, op.cancelamentoAutorizadoPorId))
+        : [null];
 
       // Subtasks ordenadas pelo fluxo (ordemSequencial 1..6)
       const subtasks = await tx
@@ -114,6 +134,8 @@ export async function GET(
           ...op,
           criadaPor: criador ?? null,
           atribuidoA: atribuido ?? null,
+          canceladaPor: canceladaPor ?? null,
+          autorizadoPor: autorizadoPor ?? null,
         },
         subtasks,
         progresso: {
@@ -198,6 +220,7 @@ export async function PATCH(
           ),
         );
       if (!opAtual) return { notFound: true as const };
+      await assertOpAtivaById(tx, contaId, opAtual.id);
 
       // Captura valor antigo do atribuído pra metadata da nota
       const atribuidoMudou =
@@ -246,14 +269,33 @@ export async function PATCH(
         });
       }
 
-      return { ok: true as const, op: updated };
+      return {
+        ok: true as const,
+        op: updated,
+        atribuidoMudou,
+        atribuidoAnteriorId: opAtual.atribuidoAId,
+      };
     });
 
     if ("notFound" in result) {
       return NextResponse.json({ error: "OP não encontrada" }, { status: 404 });
     }
+    if (result.atribuidoMudou && parsed.atribuidoAId) {
+      notificarAtribuidoOpMudou({
+        opId: result.op.id,
+        atribuidoAnteriorId: result.atribuidoAnteriorId,
+        atribuidoNovoId: parsed.atribuidoAId,
+        editorId: adminCtx.userId,
+      });
+    }
     return NextResponse.json({ item: result.op });
   } catch (err) {
+    if (err instanceof OpCanceladaError) {
+      return NextResponse.json(
+        { error: err.message, code: "op_cancelada" },
+        { status: 409 },
+      );
+    }
     if (err instanceof z.ZodError) {
       return NextResponse.json(
         { error: "Dados inválidos", details: err.issues },

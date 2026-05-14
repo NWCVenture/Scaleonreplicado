@@ -2405,3 +2405,41 @@ export type ConfeccaoTipoDefeito =
   (typeof confeccaoTipoDefeitoEnum.enumValues)[number];
 export type ConfeccaoDestinoReprovadas =
   (typeof confeccaoDestinoReprovadasEnum.enumValues)[number];
+
+// ============================================================
+// 17. CONFECÇÃO — RITM-16: Templates WhatsApp
+// ============================================================
+// Templates de mensagem WhatsApp por categoria de fornecedor. Corpo com
+// placeholders (ex: {op_numero}, {produto}, {tipo_tecido}) resolvidos
+// pelo helper src/lib/confeccao/resolver-placeholders.ts no momento do
+// envio. Multi-tenant — cada conta tem seus templates.
+
+export const confeccaoTemplateWhatsapp = pgTable(
+  "confeccao_template_whatsapp",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    nome: text("nome").notNull(),
+    categoria: confeccaoFornecedorCategoriaEnum("categoria").notNull(),
+    corpo: text("corpo").notNull(),
+    ativo: boolean("ativo").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_confeccao_template_whatsapp_categoria").on(
+      table.contaId,
+      table.categoria,
+    ),
+    uniqueIndex("uq_confeccao_template_whatsapp_nome_conta").on(
+      table.contaId,
+      table.nome,
+    ),
+  ],
+);
+
+export type ConfeccaoTemplateWhatsapp = InferSelectModel<
+  typeof confeccaoTemplateWhatsapp
+>;

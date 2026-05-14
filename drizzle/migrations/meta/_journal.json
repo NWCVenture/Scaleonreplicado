@@ -183,6 +183,13 @@
       "when": 1778644995047,
       "tag": "0025_bumpy_maverick",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1778697550188,
+      "tag": "0026_gray_santa_claus",
+      "breakpoints": true
     }
   ]
 }

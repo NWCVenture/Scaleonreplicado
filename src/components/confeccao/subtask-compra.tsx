@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, MessageCircle, Play, Plus, Trash2 } from "lucide-react";
+import { CheckCircle2, Play, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,7 @@ import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
 import { BlocoLalamoveManual } from "@/components/confeccao/bloco-lalamove-manual";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
-import { abrirWhatsAppComLog } from "@/lib/confeccao/whatsapp";
+import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
 import type { ConfeccaoSubtask } from "@/lib/db/schema";
 import type { SubtaskCompraPayload } from "@/lib/confeccao/schemas/payloads/compra";
 
@@ -346,20 +346,6 @@ export function SubtaskCompra({
     }
   }
 
-  function abrirWhatsApp() {
-    if (!fornecedor?.whatsapp) {
-      toast.error("Fornecedor sem WhatsApp cadastrado");
-      return;
-    }
-    abrirWhatsAppComLog({
-      telefone: fornecedor.whatsapp,
-      destinatarioNome: fornecedor.nome,
-      mensagem: `Olá, ${fornecedor.nome}. Sobre a OP ${opNumero} (${subtask.numero}):\n\nGostaria de confirmar o pedido de tecido. Aguardo retorno.`,
-      subtaskId: subtask.id,
-      contexto: `Compra de Tecido — OP ${opNumero}`,
-    });
-  }
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -414,15 +400,18 @@ export function SubtaskCompra({
                 className="w-full"
               />
               {fornecedor?.whatsapp && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={abrirWhatsApp}
+                <WhatsappTemplatePicker
+                  categoria="tecido"
+                  opNumero={opNumero}
+                  subtaskId={subtask.id}
+                  telefone={fornecedor.whatsapp}
+                  destinatarioNome={fornecedor.nome}
+                  fornecedorId={fornecedor.id}
+                  mensagemFallback={`Olá, {fornecedor_nome}. Sobre a OP {op_numero} (${subtask.numero}):\n\nGostaria de confirmar o pedido de tecido. Aguardo retorno.`}
+                  contexto={`Compra de Tecido — OP ${opNumero}`}
+                  label={`WhatsApp com ${fornecedor.nome}`}
                   className="w-full"
-                >
-                  <MessageCircle className="size-3.5" />
-                  WhatsApp com {fornecedor.nome}
-                </Button>
+                />
               )}
             </div>
             <div className="space-y-2">

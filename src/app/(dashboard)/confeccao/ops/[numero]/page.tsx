@@ -32,8 +32,12 @@ interface OPDetalhe {
     produtoDescricao: string | null;
     createdAt: string;
     atribuidoAId: string;
+    canceladaEm: string | null;
+    cancelamentoJustificativa: string | null;
     criadaPor: { id: string; name: string; email: string } | null;
     atribuidoA: { id: string; name: string; email: string } | null;
+    canceladaPor: { id: string; name: string } | null;
+    autorizadoPor: { id: string; name: string } | null;
   };
   subtasks: Array<
     ConfeccaoSubtask & {
@@ -129,9 +133,32 @@ export default function OPDetailPage({
         atribuidoNome={data.op.atribuidoA?.name ?? null}
         progresso={data.progresso}
         isAdmin={isAdmin}
+        usuarioAtualId={session.user.id}
         onAtualizado={() => void fetchOp()}
         onAbrirHistorico={() => setHistoricoOpen(true)}
       />
+
+      {data.op.status === "cancelada" && (
+        <div className="rounded border border-destructive/40 bg-destructive/5 p-3 text-sm">
+          <div className="font-medium text-destructive">OP cancelada</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {data.op.canceladaEm
+              ? new Date(data.op.canceladaEm).toLocaleString("pt-BR")
+              : ""}
+            {" • "}
+            cancelada por {data.op.canceladaPor?.name ?? "—"}
+            {data.op.autorizadoPor
+              ? `, com autorização de ${data.op.autorizadoPor.name}`
+              : ""}
+          </div>
+          {data.op.cancelamentoJustificativa && (
+            <div className="mt-2 whitespace-pre-wrap text-sm">
+              <span className="font-medium">Justificativa: </span>
+              {data.op.cancelamentoJustificativa}
+            </div>
+          )}
+        </div>
+      )}
 
       {data.op.observacoes && (
         <div className="rounded border bg-muted/40 p-3 text-sm text-muted-foreground whitespace-pre-wrap">

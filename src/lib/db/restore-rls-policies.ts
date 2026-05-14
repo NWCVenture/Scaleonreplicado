@@ -74,6 +74,8 @@ const TABELAS_PADRAO = [
   "confeccao_lalamove_cotacao",
   "confeccao_retirada",
   "confeccao_subconferencia",
+  // Módulo Confecção — Templates WhatsApp (0026, RITM-16)
+  "confeccao_template_whatsapp",
 ] as const;
 
 // Tabelas com variante "conta_id IS NULL": receiver insere antes de

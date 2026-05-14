@@ -12,7 +12,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Info,
-  MessageCircle,
   Play,
   Plus,
   Trash2,
@@ -46,7 +45,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
 import { BlocoLalamoveManual } from "@/components/confeccao/bloco-lalamove-manual";
-import { abrirWhatsAppComLog } from "@/lib/confeccao/whatsapp";
+import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
 import type {
   EtiquetagemLinha,
   OficinaCostura,
@@ -596,34 +595,34 @@ export function SubtaskCostura({
                   disabled={!podeEditar || o.statusInterno !== "enviado"}
                   className="w-full"
                 />
-                {o.oficinaWhatsapp && podeEditar && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      const totalPecas = Object.values(o.pecasMatriz).reduce(
-                        (s, m) =>
-                          s +
-                          Object.values(m).reduce(
-                            (sum, v) => sum + (Number(v) || 0),
-                            0,
-                          ),
+                {o.oficinaWhatsapp && podeEditar && (() => {
+                  const totalPecas = Object.values(o.pecasMatriz).reduce(
+                    (s, m) =>
+                      s +
+                      Object.values(m).reduce(
+                        (sum, v) => sum + (Number(v) || 0),
                         0,
-                      );
-                      abrirWhatsAppComLog({
-                        telefone: o.oficinaWhatsapp,
-                        destinatarioNome: o.oficinaNome,
-                        mensagem: `Olá, ${o.oficinaNome}. OP ${opNumero} (${subtask.numero}):\n\nTotal: ${totalPecas} peças\nPrazo: ${o.prazoProducao ? new Date(o.prazoProducao).toLocaleString("pt-BR") : "a combinar"}\n\nAguardo confirmação.`,
-                        subtaskId: subtask.id,
-                        contexto: `Costura — OP ${opNumero} — Oficina ${o.oficinaNome}`,
-                      });
-                    }}
-                    className="w-full"
-                  >
-                    <MessageCircle className="size-3.5" />
-                    Instruções via WhatsApp
-                  </Button>
-                )}
+                      ),
+                    0,
+                  );
+                  const prazoFmt = o.prazoProducao
+                    ? new Date(o.prazoProducao).toLocaleString("pt-BR")
+                    : "a combinar";
+                  return (
+                    <WhatsappTemplatePicker
+                      categoria="costura"
+                      opNumero={opNumero}
+                      subtaskId={subtask.id}
+                      telefone={o.oficinaWhatsapp}
+                      destinatarioNome={o.oficinaNome}
+                      fornecedorId={o.oficinaId}
+                      mensagemFallback={`Olá, {fornecedor_nome}. OP {op_numero} (${subtask.numero}):\n\nTotal: ${totalPecas} peças\nPrazo: ${prazoFmt}\n\nAguardo confirmação.`}
+                      contexto={`Costura — OP ${opNumero} — Oficina ${o.oficinaNome}`}
+                      label="Instruções via WhatsApp"
+                      className="w-full"
+                    />
+                  );
+                })()}
               </div>
               <div className="space-y-2">
                 <Label>Prazo de produção</Label>

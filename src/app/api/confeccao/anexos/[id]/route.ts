@@ -17,6 +17,11 @@ import {
   confeccaoOrdemProducao,
   confeccaoSubtask,
 } from "@/lib/db/schema";
+import {
+  assertOpAtivaById,
+  assertOpAtivaBySubtask,
+  OpCanceladaError,
+} from "@/lib/confeccao/assert-op-ativa";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -93,6 +98,13 @@ export async function DELETE(
         .where(eq(confeccaoAnexo.id, id));
       if (!anexo) return { notFound: true as const };
 
+      // Bloqueia se OP cancelada (RITM-18)
+      if (anexo.subtaskId) {
+        await assertOpAtivaBySubtask(tx, contaId, anexo.subtaskId);
+      } else if (anexo.ordemProducaoId) {
+        await assertOpAtivaById(tx, contaId, anexo.ordemProducaoId);
+      }
+
       // Bloquear se subtask vinculada está concluída
       if (anexo.subtaskId) {
         const [st] = await tx
@@ -165,6 +177,12 @@ export async function DELETE(
 
     return NextResponse.json({ deleted: true });
   } catch (err) {
+    if (err instanceof OpCanceladaError) {
+      return NextResponse.json(
+        { error: err.message, code: "op_cancelada" },
+        { status: 409 },
+      );
+    }
     if (isTenancyAuthError(err)) {
       return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
     }
