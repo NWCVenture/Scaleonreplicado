@@ -93,6 +93,9 @@ export async function POST(request: NextRequest) {
     };
     try {
       // Carrega dados da conta dentro de transação com RLS scoped.
+      // Defesa em camadas: além do RLS via withConta, filtramos contaId
+      // explicitamente. Garante isolamento mesmo se o role do DB tiver
+      // BYPASSRLS (caso de superuser em dev local).
       const dados = await withConta(c.id, async (tx) => {
         // OPs em andamento + produto pra nome amigável
         const opsRows = await tx
@@ -108,7 +111,12 @@ export async function POST(request: NextRequest) {
             confeccaoProduto,
             eq(confeccaoProduto.id, confeccaoOrdemProducao.produtoId),
           )
-          .where(eq(confeccaoOrdemProducao.status, "em_andamento"));
+          .where(
+            and(
+              eq(confeccaoOrdemProducao.contaId, c.id),
+              eq(confeccaoOrdemProducao.status, "em_andamento"),
+            ),
+          );
 
         if (opsRows.length === 0) {
           return null;
@@ -130,6 +138,7 @@ export async function POST(request: NextRequest) {
           .from(confeccaoSubtask)
           .where(
             and(
+              eq(confeccaoSubtask.contaId, c.id),
               eq(confeccaoSubtask.prefixo, "OPSEW"),
               inArray(confeccaoSubtask.ordemProducaoId, opIds),
             ),
@@ -143,7 +152,8 @@ export async function POST(request: NextRequest) {
             id: confeccaoFornecedor.id,
             nome: confeccaoFornecedor.nome,
           })
-          .from(confeccaoFornecedor);
+          .from(confeccaoFornecedor)
+          .where(eq(confeccaoFornecedor.contaId, c.id));
 
         // Atribuídos das subtasks
         const atribuidoIds = stRows
@@ -195,7 +205,12 @@ export async function POST(request: NextRequest) {
             dataReferencia: confeccaoAlertaAtrasoLog.dataReferencia,
           })
           .from(confeccaoAlertaAtrasoLog)
-          .where(gte(confeccaoAlertaAtrasoLog.dataReferencia, dataRefHoje));
+          .where(
+            and(
+              eq(confeccaoAlertaAtrasoLog.contaId, c.id),
+              gte(confeccaoAlertaAtrasoLog.dataReferencia, dataRefHoje),
+            ),
+          );
 
         return {
           opsRows,
@@ -248,6 +263,23 @@ export async function POST(request: NextRequest) {
         adminsIds: dados.adminsIds,
         logExistente,
       });
+
+      // Candidatos que seriam emitidos se não houvesse log do dia — usado pra
+      // contabilizar alertas já registrados em runs anteriores como "ignorados".
+      // O service filtra essas entradas internamente; contamos a diferença
+      // pra expor visibilidade da idempotência no payload de resposta.
+      if (logExistente.length > 0) {
+        const candidatosTotal = montarAlertasAtraso({
+          agora,
+          ops,
+          subtasksCostura: subtasks,
+          oficinas,
+          usuarios,
+          adminsIds: dados.adminsIds,
+          logExistente: [],
+        });
+        res.alertasIgnorados += candidatosTotal.length - alertas.length;
+      }
 
       // === Insere log com ON CONFLICT + dispara emails ===
       // Cada alerta vai num INSERT separado pra capturar o "inseriu vs.

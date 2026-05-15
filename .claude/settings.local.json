@@ -34,7 +34,15 @@
       "Bash(PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d crm_nwc -c \"SELECT tablename, rowsecurity FROM pg_tables WHERE tablename = 'confeccao_alerta_atraso_log';\")",
       "Bash(docker exec *)",
       "Bash(openssl rand *)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(gh pr create --base main --head feat/confeccao-ritm-22 --title 'feat\\(confeccao\\): RITM-22 — alertas de atraso por email \\(cron diário\\)' --body ' *)",
+      "Bash(nslookup api.github.com 8.8.8.8)",
+      "Bash(gh auth *)",
+      "Bash(gh api *)",
+      "Bash(docker cp *)",
+      "Bash(MSYS_NO_PATHCONV=1 docker cp ./seed-ritm22.sql nwc-erp-db:/tmp/seed-ritm22.sql)",
+      "Bash(MSYS_NO_PATHCONV=1 docker exec nwc-erp-db psql -U postgres -d crm_nwc -f /tmp/seed-ritm22.sql)",
+      "Bash(npx eslint *)"
     ]
   }
 }
