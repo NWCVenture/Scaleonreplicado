@@ -4,6 +4,8 @@ export {
   notificarOpCancelada,
   notificarOpConcluida,
   notificarOpCriada,
+  notificarPrazoVencendo,
+  notificarPrazoVencido,
   notificarRetiradaParcial,
   notificarSubtaskConcluida,
 } from "./eventos";

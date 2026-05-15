@@ -2,7 +2,39 @@
   "permissions": {
     "allow": [
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3009)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(git rebase *)",
+      "Bash(git stash *)",
+      "Bash(git push *)",
+      "PowerShell(& \"C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe\" pr create --base main --head feat/confeccao-ritm-16 --title \"feat\\(confeccao\\): RITM-16 a 20 — WhatsApp, email, cancelamento, evidências, dashboard\" --body-file \"$env:TEMP\\\\pr-confeccao-16-20.md\")",
+      "PowerShell(Remove-Item *)",
+      "PowerShell(& \"C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe\" pr merge 26 --merge --delete-branch 2>&1)",
+      "Bash(git fetch *)",
+      "Bash(git -C \".claude/worktrees/thirsty-fermi-e734aa\" status)",
+      "Bash(git worktree *)",
+      "Bash(git branch *)",
+      "Bash(git checkout *)",
+      "PowerShell(npx dotenv -e .env.local -- npx tsx --test --test-force-exit src/lib/confeccao/dashboard-qualidade.test.ts 2>&1 | Select-Object -Last 40)",
+      "PowerShell($out = npx tsc --noEmit 2>&1; $out | Out-String; \"EXIT=$LASTEXITCODE\")",
+      "PowerShell($out = npx eslint src/lib/confeccao/dashboard-qualidade.ts src/lib/confeccao/dashboard-qualidade.test.ts src/app/api/confeccao/dashboard/qualidade/route.ts \"src/app/\\(dashboard\\)/confeccao/dashboard/qualidade/page.tsx\" \"src/app/\\(dashboard\\)/layout.tsx\" src/components/confeccao/dashboard/qualidade 2>&1; $out | Out-String; \"EXIT=$LASTEXITCODE\")",
+      "PowerShell($out = npx eslint src/lib/confeccao/dashboard-qualidade.ts src/lib/confeccao/dashboard-qualidade.test.ts src/app/api/confeccao/dashboard/qualidade/route.ts \"src/app/\\(dashboard\\)/confeccao/dashboard/qualidade/page.tsx\" src/components/confeccao/dashboard/qualidade 2>&1; $out | Out-String; \"EXIT=$LASTEXITCODE\")",
+      "PowerShell(npx dotenv -e .env.local -- npx tsx --test --test-force-exit src/lib/confeccao/dashboard-qualidade.test.ts 2>&1 | Select-Object -Last 10)",
+      "PowerShell(npx dotenv -e .env.local -- npx tsx --test --test-force-exit src/lib/confeccao/resolver-placeholders.test.ts src/lib/confeccao/email/templates.test.ts src/lib/confeccao/cancelar-op.test.ts src/lib/confeccao/custos.test.ts src/lib/confeccao/dashboard.test.ts src/lib/confeccao/dashboard-qualidade.test.ts 2>&1 | Select-Object -Last 12)",
+      "PowerShell(npx dotenv -e .env.local -- npx tsx --test --test-force-exit src/lib/confeccao/dashboard.test.ts src/lib/confeccao/dashboard-qualidade.test.ts 2>&1 | Select-Object -Last 10)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "PowerShell(& \"C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe\" pr create --base main --head feat/confeccao-ritm-21 --title \"feat\\(confeccao\\): RITM-21 — Dashboard Qualidade por Oficina\" --body-file \"$env:TEMP\\\\pr-ritm-21.md\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe\" pr merge 27 --merge --delete-branch 2>&1)",
+      "PowerShell(npm run *)",
+      "PowerShell(npx dotenv -e .env.local -- npx tsx --test --test-force-exit src/lib/confeccao/alertas-atraso.test.ts 2>&1 | Select-Object -Last 25)",
+      "PowerShell($out = npx eslint src/lib/confeccao/alertas-atraso.ts src/lib/confeccao/alertas-atraso.test.ts src/lib/confeccao/email/templates.ts src/lib/confeccao/email/eventos.ts src/lib/confeccao/email/index.ts src/app/api/confeccao/jobs/alertas-atraso/route.ts src/lib/db/schema.ts src/lib/db/restore-rls-policies.ts 2>&1; $out | Out-String; \"EXIT=$LASTEXITCODE\")",
+      "Bash(npm run *)",
+      "Bash(npx tsx *)",
+      "Bash(powershell *)",
+      "Bash(PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d crm_nwc -c \"SELECT tablename, rowsecurity FROM pg_tables WHERE tablename = 'confeccao_alerta_atraso_log';\")",
+      "Bash(docker exec *)",
+      "Bash(openssl rand *)",
+      "Bash(curl *)"
     ]
   }
 }

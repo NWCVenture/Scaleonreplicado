@@ -375,3 +375,90 @@ export function buildRetiradaParcialEmail(
   ]);
   return { subject, html, text };
 }
+
+// ============================================================
+// 7. Alerta — prazo vencendo em 24h (atribuído da Costura)
+// ============================================================
+
+export interface AlertaPrazoVencendoParams {
+  destinatarioNome: string;
+  opNumero: string;
+  produtoNome: string;
+  oficinaNome: string;
+  prazoProducaoFormatado: string; // ex: "15/05/2026 18:00"
+  opUrl: string;
+}
+
+export function buildAlertaPrazoVencendoEmail(
+  params: AlertaPrazoVencendoParams,
+): EmailRender {
+  const subject = `Prazo vencendo em 24h — OP ${params.opNumero}`;
+  const html = envelope({
+    titulo: "Prazo vencendo em 24h",
+    saudacao: `Olá, ${params.destinatarioNome}.`,
+    paragrafos: [
+      `O prazo de produção da oficina <strong>${escapeHtml(params.oficinaNome)}</strong> na OP <strong>${escapeHtml(params.opNumero)}</strong> (${escapeHtml(params.produtoNome)}) vence em menos de 24 horas: <strong>${escapeHtml(params.prazoProducaoFormatado)}</strong>.`,
+      "Confirme o status da oficina ou registre a retirada final antes do vencimento.",
+    ],
+    cta: { href: params.opUrl, label: "Abrir OP" },
+  });
+  const text = plain([
+    "Prazo vencendo em 24h",
+    "",
+    `Olá, ${params.destinatarioNome}.`,
+    `O prazo da oficina ${params.oficinaNome} na OP ${params.opNumero} (${params.produtoNome}) vence em menos de 24h: ${params.prazoProducaoFormatado}.`,
+    "Confirme o status ou registre a retirada final.",
+    "",
+    `Abrir: ${params.opUrl}`,
+  ]);
+  return { subject, html, text };
+}
+
+// ============================================================
+// 8. Alerta — prazo vencido (atribuído + admins, re-emitido diariamente)
+// ============================================================
+
+export interface AlertaPrazoVencidoParams {
+  destinatarioNome: string;
+  opNumero: string;
+  produtoNome: string;
+  oficinaNome: string;
+  prazoProducaoFormatado: string;
+  diasAtraso: number; // 0 = vence hoje, 1+ = atrasado
+  opUrl: string;
+}
+
+export function buildAlertaPrazoVencidoEmail(
+  params: AlertaPrazoVencidoParams,
+): EmailRender {
+  const sufixoDias =
+    params.diasAtraso <= 0
+      ? "(vence hoje)"
+      : params.diasAtraso === 1
+        ? "(1 dia de atraso)"
+        : `(${params.diasAtraso} dias de atraso)`;
+  const subject = `Prazo vencido — OP ${params.opNumero} ${sufixoDias}`;
+  const html = envelope({
+    titulo: "Prazo de produção vencido",
+    saudacao: `Olá, ${params.destinatarioNome}.`,
+    paragrafos: [
+      `O prazo da oficina <strong>${escapeHtml(params.oficinaNome)}</strong> na OP <strong>${escapeHtml(params.opNumero)}</strong> (${escapeHtml(params.produtoNome)}) <strong>${escapeHtml(sufixoDias)}</strong>: ${escapeHtml(params.prazoProducaoFormatado)}.`,
+      "Por favor verifique o status, contate a oficina e registre a retirada final quando concluída.",
+    ],
+    cta: { href: params.opUrl, label: "Abrir OP" },
+    rodape:
+      "Este alerta é re-enviado diariamente enquanto a oficina não for finalizada.",
+  });
+  const text = plain([
+    "Prazo de produção vencido",
+    "",
+    `Olá, ${params.destinatarioNome}.`,
+    `Oficina ${params.oficinaNome} na OP ${params.opNumero} (${params.produtoNome}) ${sufixoDias}: ${params.prazoProducaoFormatado}.`,
+    "Verifique o status, contate a oficina e registre a retirada final quando concluída.",
+    "",
+    `Abrir: ${params.opUrl}`,
+    "",
+    "Este alerta é re-enviado diariamente enquanto a oficina não for finalizada.",
+  ]);
+  return { subject, html, text };
+}
