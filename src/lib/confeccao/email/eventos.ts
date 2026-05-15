@@ -12,6 +12,8 @@ import { db } from "@/lib/db";
 import { confeccaoSubtask, user } from "@/lib/db/schema";
 import { sendEmail } from "@/lib/email";
 import {
+  buildAlertaPrazoVencendoEmail,
+  buildAlertaPrazoVencidoEmail,
   buildAtribuidoMudouAnteriorEmail,
   buildAtribuidoMudouNovoEmail,
   buildOpCanceladaEmail,
@@ -377,4 +379,61 @@ export function notificarRetiradaParcial(input: {
     });
     disparar(destinatario, render, "retirada-parcial");
   })();
+}
+
+// ============================================================
+// 7 & 8. Alertas de atraso (RITM-22)
+// ============================================================
+// Disparados pelo cron handler (que já tem todos os dados carregados).
+// Diferente dos dispatchers acima, estas funções recebem dados pré-
+// construídos — não fazem DB lookup próprio.
+
+function formatarPrazoBR(prazoISO: string): string {
+  const d = new Date(prazoISO);
+  return d.toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Sao_Paulo",
+  });
+}
+
+export function notificarPrazoVencendo(input: {
+  destinatario: DestinatarioBasico;
+  opNumero: string;
+  produtoNome: string;
+  oficinaNome: string;
+  prazoProducaoISO: string;
+}): void {
+  const render = buildAlertaPrazoVencendoEmail({
+    destinatarioNome: input.destinatario.name,
+    opNumero: input.opNumero,
+    produtoNome: input.produtoNome,
+    oficinaNome: input.oficinaNome,
+    prazoProducaoFormatado: formatarPrazoBR(input.prazoProducaoISO),
+    opUrl: opUrl(input.opNumero),
+  });
+  disparar(input.destinatario, render, "prazo-vencendo-24h");
+}
+
+export function notificarPrazoVencido(input: {
+  destinatario: DestinatarioBasico;
+  opNumero: string;
+  produtoNome: string;
+  oficinaNome: string;
+  prazoProducaoISO: string;
+  diasAtraso: number;
+}): void {
+  const render = buildAlertaPrazoVencidoEmail({
+    destinatarioNome: input.destinatario.name,
+    opNumero: input.opNumero,
+    produtoNome: input.produtoNome,
+    oficinaNome: input.oficinaNome,
+    prazoProducaoFormatado: formatarPrazoBR(input.prazoProducaoISO),
+    diasAtraso: input.diasAtraso,
+    opUrl: opUrl(input.opNumero),
+  });
+  disparar(input.destinatario, render, "prazo-vencido");
 }

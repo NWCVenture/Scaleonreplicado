@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/confeccao/jobs/alertas-atraso",
+      "schedule": "0 12 * * *"
+    }
+  ]
+}

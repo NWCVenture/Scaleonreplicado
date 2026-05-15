@@ -2443,3 +2443,57 @@ export const confeccaoTemplateWhatsapp = pgTable(
 export type ConfeccaoTemplateWhatsapp = InferSelectModel<
   typeof confeccaoTemplateWhatsapp
 >;
+
+// ============================================================
+// 18. CONFECÇÃO — RITM-22: Alertas de atraso
+// ============================================================
+// Log de envios de alerta de prazo. Garante idempotência (UNIQUE por
+// subtask × oficina × tipo × data_referencia) — se o cron rodar 2× no
+// mesmo dia, o segundo insert vira no-op via ON CONFLICT.
+
+export const confeccaoAlertaAtrasoTipoEnum = pgEnum(
+  "confeccao_alerta_atraso_tipo",
+  ["vencendo_24h", "vencido"],
+);
+
+export const confeccaoAlertaAtrasoLog = pgTable(
+  "confeccao_alerta_atraso_log",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    ordemProducaoId: text("ordem_producao_id")
+      .notNull()
+      .references(() => confeccaoOrdemProducao.id, { onDelete: "cascade" }),
+    subtaskId: text("subtask_id")
+      .notNull()
+      .references(() => confeccaoSubtask.id, { onDelete: "cascade" }),
+    oficinaId: text("oficina_id")
+      .notNull()
+      .references(() => confeccaoFornecedor.id, { onDelete: "restrict" }),
+    tipoAlerta: confeccaoAlertaAtrasoTipoEnum("tipo_alerta").notNull(),
+    // Truncado em UTC pra 00:00:00Z do dia. Junto com tipo_alerta+subtask+oficina,
+    // forma a chave de dedup por dia.
+    dataReferencia: timestamp("data_referencia").notNull(),
+    enviadosCount: integer("enviados_count").notNull().default(0),
+    destinatariosCount: integer("destinatarios_count").notNull().default(0),
+    enviadoEm: timestamp("enviado_em").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uq_confeccao_alerta_atraso").on(
+      table.contaId,
+      table.subtaskId,
+      table.oficinaId,
+      table.tipoAlerta,
+      table.dataReferencia,
+    ),
+    index("idx_confeccao_alerta_atraso_op").on(table.ordemProducaoId),
+  ],
+);
+
+export type ConfeccaoAlertaAtrasoTipo =
+  (typeof confeccaoAlertaAtrasoTipoEnum.enumValues)[number];
+export type ConfeccaoAlertaAtrasoLog = InferSelectModel<
+  typeof confeccaoAlertaAtrasoLog
+>;
