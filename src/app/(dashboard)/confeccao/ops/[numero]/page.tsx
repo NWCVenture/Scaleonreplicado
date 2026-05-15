@@ -18,6 +18,7 @@ import {
 import { OPHeader } from "@/components/confeccao/op-header";
 import { SubtaskCard } from "@/components/confeccao/subtask-card";
 import { NotasOP } from "@/components/confeccao/notas-op";
+import { FardosNoEstoque } from "@/components/confeccao/fardos-no-estoque";
 import type { ConfeccaoSubtask } from "@/lib/db/schema";
 
 interface OPDetalhe {
@@ -166,6 +167,11 @@ export default function OPDetailPage({
           {data.op.observacoes}
         </div>
       )}
+
+      <FardosNoEstoque
+        opNumero={data.op.numero}
+        opStatus={data.op.status}
+      />
 
       <div className="space-y-2">
         {data.subtasks.map((s) => (

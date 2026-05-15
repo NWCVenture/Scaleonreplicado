@@ -43,7 +43,9 @@ import {
   Pencil,
   AlertCircle,
   Tag,
+  Factory,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { generateId } from "@/lib/utils";
 import { useSession } from "@/lib/auth-client";
 
@@ -119,6 +121,25 @@ export default function CadastroEstoque() {
   const [isLoadingLotes, setIsLoadingLotes] = useState(false);
   const [isCreatingLote, setIsCreatingLote] = useState(false);
 
+  // RITM-24 — modo de seleção de lote (custom + OP de Confecção)
+  type LoteMode = "default" | "custom" | "op";
+  const [loteMode, setLoteMode] = useState<LoteMode>("default");
+  const [opQuery, setOpQuery] = useState("");
+  const [opResults, setOpResults] = useState<
+    Array<{
+      id: string;
+      numero: string;
+      status: string;
+      produtoNome: string;
+    }>
+  >([]);
+  const [isSearchingOps, setIsSearchingOps] = useState(false);
+  const [opSelecionada, setOpSelecionada] = useState<{
+    id: string;
+    numero: string;
+    produtoNome: string;
+  } | null>(null);
+
   // Quantity state
   const [qtd, setQtd] = useState("");
   const [quantidadeFardos, setQuantidadeFardos] = useState("1");
@@ -189,6 +210,79 @@ export default function CadastroEstoque() {
       .filter((s) => s.codigo.toUpperCase().includes(q))
       .slice(0, 8);
   }, [skuInput, skuCatalogo]);
+
+  // Busca debounced de OPs quando em modo "op"
+  useEffect(() => {
+    if (loteMode !== "op") return;
+    const ctrl = new AbortController();
+    const handle = setTimeout(async () => {
+      setIsSearchingOps(true);
+      try {
+        const url = new URL("/api/confeccao/ops/lookup", window.location.origin);
+        if (opQuery.trim()) url.searchParams.set("q", opQuery.trim());
+        const res = await fetch(url.toString(), { signal: ctrl.signal });
+        if (!res.ok) throw new Error("Falha ao buscar OPs");
+        const data = await res.json();
+        setOpResults(data.ops ?? []);
+      } catch (err) {
+        if ((err as Error)?.name !== "AbortError") {
+          setOpResults([]);
+        }
+      } finally {
+        setIsSearchingOps(false);
+      }
+    }, 250);
+    return () => {
+      ctrl.abort();
+      clearTimeout(handle);
+    };
+  }, [loteMode, opQuery]);
+
+  const handleSelectOp = async (op: {
+    id: string;
+    numero: string;
+    produtoNome: string;
+  }) => {
+    setOpSelecionada(op);
+    setOpResults([]);
+    setOpQuery("");
+    try {
+      const res = await fetch(
+        `/api/confeccao/ops/${encodeURIComponent(op.numero)}/vincular-lote`,
+        { method: "POST" },
+      );
+      if (!res.ok) throw new Error("Falha ao vincular lote");
+      const data = await res.json();
+      setLote(op.numero);
+      // Atualiza o cache local de lotes pro selector tradicional refletir.
+      setCustomLotes((prev) => {
+        const semNovo = prev.filter((l) => l.id !== data.lote.id);
+        return [
+          ...semNovo,
+          {
+            id: data.lote.id,
+            nome: data.lote.nome,
+            createdAt: new Date().toISOString(),
+          },
+        ];
+      });
+      toast.success(`Lote vinculado à OP ${op.numero}`);
+    } catch {
+      toast.error("Erro ao vincular lote à OP");
+      setOpSelecionada(null);
+    }
+  };
+
+  const handleLoteModeChange = (mode: LoteMode) => {
+    setLoteMode(mode);
+    setOpSelecionada(null);
+    setOpQuery("");
+    setOpResults([]);
+    if (mode === "default") setLote("ESTOQUE PADRAO");
+    // Em "custom" não força lote — usuário escolhe no dropdown.
+    // Em "op" começa vazio até selecionar.
+    if (mode === "op") setLote("");
+  };
 
   const handleAddLote = async () => {
     if (!newLoteName.trim()) return;
@@ -709,58 +803,173 @@ export default function CadastroEstoque() {
             {/* Lote Selection */}
             <div className="space-y-3">
               <Label>Lote</Label>
-              <div className="flex gap-2">
-                <select
-                  className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                  value={lote}
-                  onChange={(e) => setLote(e.target.value)}
-                  disabled={isLoadingLotes}
+              {/* Seletor de modo (RITM-24) */}
+              <div className="flex flex-wrap gap-2 text-xs">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={loteMode === "default" ? "default" : "outline"}
+                  onClick={() => handleLoteModeChange("default")}
                 >
-                  <option value="ESTOQUE PADRAO">ESTOQUE PADRAO</option>
-                  {customLotes.map((l) => (
-                    <option key={l.id} value={l.nome}>
-                      {l.nome}
-                    </option>
-                  ))}
-                </select>
+                  Estoque padrão
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={loteMode === "custom" ? "default" : "outline"}
+                  onClick={() => handleLoteModeChange("custom")}
+                >
+                  Lote customizado
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={loteMode === "op" ? "default" : "outline"}
+                  onClick={() => handleLoteModeChange("op")}
+                >
+                  <Factory className="mr-1 h-3 w-3" />
+                  OP de Confecção
+                </Button>
+              </div>
 
-                <Dialog open={isAddingLote} onOpenChange={setIsAddingLote}>
-                  <DialogTrigger asChild>
-                    <Button variant="outline" className="h-12 w-12 p-0">
-                      <Plus className="h-5 w-5" />
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Adicionar Novo Lote</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-4 py-4">
-                      <div className="space-y-2">
-                        <Label>Nome do Lote</Label>
-                        <Input
-                          value={newLoteName}
-                          onChange={(e) => setNewLoteName(e.target.value)}
-                          placeholder="Ex: LOTE-2026-ABR"
-                          className="uppercase"
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") handleAddLote();
-                          }}
-                        />
+              {loteMode === "default" && (
+                <div className="rounded-md border border-input bg-muted/50 px-3 py-2 text-sm">
+                  ESTOQUE PADRAO
+                </div>
+              )}
+
+              {loteMode === "custom" && (
+                <div className="flex gap-2">
+                  <select
+                    className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    value={lote}
+                    onChange={(e) => setLote(e.target.value)}
+                    disabled={isLoadingLotes}
+                  >
+                    <option value="">— escolher —</option>
+                    {customLotes.map((l) => (
+                      <option key={l.id} value={l.nome}>
+                        {l.nome}
+                      </option>
+                    ))}
+                  </select>
+
+                  <Dialog open={isAddingLote} onOpenChange={setIsAddingLote}>
+                    <DialogTrigger asChild>
+                      <Button variant="outline" className="h-12 w-12 p-0">
+                        <Plus className="h-5 w-5" />
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Adicionar Novo Lote</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-4 py-4">
+                        <div className="space-y-2">
+                          <Label>Nome do Lote</Label>
+                          <Input
+                            value={newLoteName}
+                            onChange={(e) => setNewLoteName(e.target.value)}
+                            placeholder="Ex: LOTE-2026-ABR"
+                            className="uppercase"
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleAddLote();
+                            }}
+                          />
+                        </div>
+                        <Button
+                          onClick={handleAddLote}
+                          className="w-full"
+                          disabled={isCreatingLote || !newLoteName.trim()}
+                        >
+                          {isCreatingLote && (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          )}
+                          Salvar Lote
+                        </Button>
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+                </div>
+              )}
+
+              {loteMode === "op" && (
+                <div className="space-y-2">
+                  {opSelecionada ? (
+                    <div className="flex items-center justify-between rounded-md border border-input bg-muted/50 px-3 py-2 text-sm">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="secondary" className="font-mono">
+                          {opSelecionada.numero}
+                        </Badge>
+                        <span className="text-muted-foreground">
+                          {opSelecionada.produtoNome}
+                        </span>
                       </div>
                       <Button
-                        onClick={handleAddLote}
-                        className="w-full"
-                        disabled={isCreatingLote || !newLoteName.trim()}
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setOpSelecionada(null);
+                          setLote("");
+                        }}
                       >
-                        {isCreatingLote && (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        )}
-                        Salvar Lote
+                        Trocar
                       </Button>
                     </div>
-                  </DialogContent>
-                </Dialog>
-              </div>
+                  ) : (
+                    <div className="relative">
+                      <Input
+                        value={opQuery}
+                        onChange={(e) => setOpQuery(e.target.value)}
+                        placeholder="Buscar OP (ex: OP05260001 ou produto)"
+                        className="h-12 font-mono"
+                      />
+                      {isSearchingOps && (
+                        <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+                      )}
+                      {opResults.length > 0 && (
+                        <div className="absolute z-10 mt-1 w-full rounded-md border bg-popover shadow-lg max-h-72 overflow-y-auto">
+                          {opResults.map((op) => (
+                            <button
+                              key={op.id}
+                              type="button"
+                              className="w-full text-left px-3 py-2 hover:bg-accent text-sm border-b last:border-b-0"
+                              onClick={() => handleSelectOp(op)}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-mono font-semibold">
+                                  {op.numero}
+                                </span>
+                                <Badge
+                                  variant={
+                                    op.status === "concluida"
+                                      ? "default"
+                                      : "secondary"
+                                  }
+                                  className="text-[10px]"
+                                >
+                                  {op.status}
+                                </Badge>
+                              </div>
+                              <div className="text-xs text-muted-foreground truncate">
+                                {op.produtoNome}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {!isSearchingOps &&
+                        opQuery.length > 0 &&
+                        opResults.length === 0 && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Nenhuma OP encontrada.
+                          </p>
+                        )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Quantity */}
