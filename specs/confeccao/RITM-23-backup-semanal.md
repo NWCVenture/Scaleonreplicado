@@ -61,10 +61,18 @@ jobs:
 
       - name: Instalar postgresql-client-17
         run: |
-          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
+          # O runner ubuntu-latest já vem com postgresql-client-16 em /usr/bin.
+          # Sem forçar v17 no PATH, pg_dump resolve pra v16 e falha com
+          # "server version mismatch" contra o Neon (17.x).
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -81,8 +89,10 @@ jobs:
         run: npx tsx scripts/backup-confeccao.ts
 ```
 
-> Versão do `postgresql-client` precisa bater com a major do Neon.
-> Confirmar versão atual antes de mergear (`SELECT version()` em prod).
+> Versão do `postgresql-client` precisa bater com a major do Neon (PG 17
+> em maio/2026). Confirmar antes de subir versão major do Neon — se mudar,
+> editar o `postgresql-client-17` e o `/usr/lib/postgresql/17/bin` em
+> dois lugares.
 
 ### Script de backup
 
@@ -136,11 +146,29 @@ NEON_DATABASE_URL_PROD=postgresql://...@<host>/<db>?sslmode=require
 BLOB_READ_WRITE_TOKEN=<mesmo token usado pelo app>
 ```
 
-> ⚠️ Usar uma **role do Neon dedicada a backup** (read-only no banco). O
-> `pg_dump` precisa só de SELECT em todas as tabelas + acesso a metadados.
-> Criar via console do Neon: `neon_backup_ro`. Nunca usar a role principal
-> do app — em caso de leak do secret do GitHub Actions, blast radius fica
-> contido a leitura.
+> ⚠️ **Caveat descoberto na implementação (Neon free tier):** o Neon adiciona
+> **toda role nova ao grupo `neon_superuser` automaticamente**, e essa
+> membership **não pode ser revogada** pela role owner via SQL — só pela
+> plataforma (e free tier não expõe esse controle). Resultado: a role
+> `neon_backup_ro` consegue INSERT/UPDATE/DELETE igual à role principal,
+> mesmo com `GRANT SELECT` explícito.
+>
+> **O que o setup feito hoje entrega de verdade:**
+>   - ✅ **Isolação de rotação** — pode trocar a senha de `neon_backup_ro`
+>     sem mexer no `DATABASE_URL` da app. Útil em incidente onde só o
+>     secret do GitHub vazou.
+>   - ❌ **Boundary de permissão** — não, a role é efetivamente superuser.
+>     Se o secret vazar, o atacante tem acesso total ao banco.
+>
+> **Setup feito (registro pro futuro):**
+>   1. Criar role `neon_backup_ro` no console do Neon (gera senha auto)
+>   2. Rodar GRANTs via owner: `USAGE` em `public`, `SELECT` em ALL TABLES
+>      e ALL SEQUENCES, `ALTER DEFAULT PRIVILEGES` pra tabelas futuras
+>   3. Construir connection string: `postgresql://neon_backup_ro:<senha>@<host>/<db>?sslmode=require`
+>   4. Cadastrar como `NEON_DATABASE_URL_PROD` no GitHub secrets
+>
+> **Pra ter boundary real:** Neon paid tier ou outro provider. Reabrir
+> esta decisão se virar requisito (compliance, multi-tenant SaaS, etc).
 
 ### Restauração (procedimento documentado, não automatizado)
 
@@ -175,8 +203,8 @@ Conteúdo:
    - Backup do mesmo dia (re-run) → não duplica decisão
 5. Runbook de restauração existe em `docs/runbooks/restaurar-backup-confeccao.md`.
 6. Lint + typecheck limpos.
-7. Role `neon_backup_ro` criada no Neon e usada no secret (sem credencial
-   da role principal no GitHub).
+7. Role `neon_backup_ro` criada no Neon e usada no secret (a credencial
+   principal não vai pro GitHub — ver caveat sobre `neon_superuser` acima).
 
 ## Fora de escopo
 
