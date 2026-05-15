@@ -25,7 +25,11 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
-          pg_dump --version
+          # O runner já vem com postgresql-client-16 em /usr/bin; precisamos
+          # forçar o binário v17 no PATH antes do default, senão pg_dump
+          # resolve pra v16 e bate na checagem de major version do Neon.
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
 
       - name: Setup Node
         uses: actions/setup-node@v4
