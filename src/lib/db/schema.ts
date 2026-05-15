@@ -238,11 +238,20 @@ export const loteCadastrado = pgTable(
       .notNull()
       .default("nwc-root")
       .references(() => conta.id, { onDelete: "cascade" }),
+    // FK opcional pra OP do módulo Confecção (RITM-24). Permite vincular
+    // um lote a uma OP específica; lotes legados continuam com NULL.
+    // SET NULL ao deletar a OP — o QR físico já está impresso no fardo
+    // e não pode desaparecer só porque a OP foi removida do banco.
+    ordemProducaoId: text("ordem_producao_id").references(
+      () => confeccaoOrdemProducao.id,
+      { onDelete: "set null" },
+    ),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
     index("idx_lote_cadastrado_conta").on(table.contaId),
     uniqueIndex("uq_lote_cadastrado_nome_conta").on(table.nome, table.contaId),
+    index("idx_lote_cadastrado_op").on(table.ordemProducaoId),
   ]
 );
 

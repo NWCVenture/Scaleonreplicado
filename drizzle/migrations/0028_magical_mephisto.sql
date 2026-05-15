@@ -1,0 +1,3 @@
+ALTER TABLE "lote_cadastrado" ADD COLUMN "ordem_producao_id" text;--> statement-breakpoint
+ALTER TABLE "lote_cadastrado" ADD CONSTRAINT "lote_cadastrado_ordem_producao_id_confeccao_ordem_producao_id_fk" FOREIGN KEY ("ordem_producao_id") REFERENCES "public"."confeccao_ordem_producao"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "idx_lote_cadastrado_op" ON "lote_cadastrado" USING btree ("ordem_producao_id");
