@@ -1,0 +1,360 @@
+# Lalamove API v3 — Referência
+
+> **Propósito deste arquivo:** guardar trechos da documentação oficial da
+> Lalamove API v3 consultados pelos RITMs 25–28 (fase 8 — Integração
+> Lalamove API).
+>
+> **Fonte:** [developers.lalamove.com/docs](https://developers.lalamove.com/docs/)
+> **Última atualização:** 2026-05-15
+>
+> ⚠️ Quando um RITM for implementado, validar o trecho da doc oficial
+> antes de seguir — a Lalamove muda endpoints/payloads sem aviso.
+
+---
+
+## §1 — Hosts e ambientes
+
+| Ambiente | Host | Quando usar |
+|----------|------|-------------|
+| Sandbox | `https://rest.sandbox.lalamove.com` | Dev + preview + prod até validação completa (RITM-25/26 ficam aqui) |
+| Produção | `https://rest.lalamove.com` | Só ativar quando RITM-26 estiver smoke-testada e RITM-27 (webhook) deployada |
+
+Configuração via env `LALAMOVE_API_HOST` (sem hardcode). Ver
+`specs/confeccao/RITM-25-lalamove-cotacao-assistida.md` pra config completa.
+
+---
+
+## §2 — Autenticação (HMAC-SHA256)
+
+Todo request da API v3 precisa do header `Authorization: hmac <api_key>:<timestamp>:<signature>`.
+
+### Algoritmo da assinatura
+
+```
+RAW_SIGNATURE = TIMESTAMP + "\r\n" + METHOD + "\r\n" + PATH + "\r\n" + CUSTOM_HEADERS + "\r\n" + BODY
+SIGNATURE     = HMAC-SHA256(API_SECRET, RAW_SIGNATURE)  // hex lowercase
+```
+
+| Campo | Detalhe |
+|-------|---------|
+| `TIMESTAMP` | Unix epoch em **milissegundos** (string). Ex.: `"1715794800000"`. Deve estar dentro de ±30 min do horário do servidor da Lalamove. |
+| `METHOD` | Maiúsculas: `GET` / `POST` / `PUT` / `PATCH` / `DELETE` |
+| `PATH` | Path com query string, começando com `/`. Ex.: `/v3/quotations` ou `/v3/orders/12345?detail=1` |
+| `CUSTOM_HEADERS` | Geralmente vazio. Quando houver, formato `Header1: value1\nHeader2: value2`. Para nosso uso, **sempre string vazia** entre os `\r\n`. |
+| `BODY` | Para `POST`/`PUT`/`PATCH`: JSON serializado **exatamente** como vai no request (sem reformat). Para `GET`/`DELETE`: string vazia. |
+
+### Headers obrigatórios em todo request
+
+```
+Authorization: hmac <API_KEY>:<TIMESTAMP>:<SIGNATURE_HEX>
+Accept: application/json
+Content-Type: application/json
+Market: BR
+```
+
+### ⚠️ Pegadinhas
+
+- **A serialização do body precisa ser estável** — se o objeto for serializado pra assinar e re-serializado pra enviar com chaves em outra ordem, a assinatura quebra. Centralizar: serializa **uma vez**, usa a mesma string pra assinar e enviar.
+- **Não confundir milissegundos com segundos** — vários exemplos da doc usam `s`. A v3 usa **ms**.
+- **`\r\n` é literal CRLF**, não LF. Em JavaScript: `"\r\n"`.
+- **`CUSTOM_HEADERS` vazio mantém os dois `\r\n` consecutivos** — ou seja, há `\r\n\r\n` entre PATH e BODY.
+
+### Vetor de teste (válido)
+
+Pra validar o algoritmo da implementação. **Não é uma chave real** — só serve pra unit test do HMAC.
+
+```
+API_KEY    = "pk_test_demo"
+API_SECRET = "sk_test_demo_secret"
+TIMESTAMP  = "1715794800000"
+METHOD     = "POST"
+PATH       = "/v3/quotations"
+BODY       = '{"data":{"serviceType":"MOTORCYCLE"}}'
+
+RAW = "1715794800000\r\nPOST\r\n/v3/quotations\r\n\r\n{\"data\":{\"serviceType\":\"MOTORCYCLE\"}}"
+SIG = HMAC-SHA256(API_SECRET, RAW)  // hex
+    = "f3f44e4c1b1e89e6df0e2f08c9a59c95f9b6f1c25b3a3b8c80f5a2d2cb8e0d2a"  ⚠️ valor de exemplo, calcular no teste
+
+AUTH = "hmac pk_test_demo:1715794800000:" + SIG
+```
+
+> O teste em `client.test.ts` deve **calcular** a SIG com o algoritmo
+> implementado e comparar com um vetor gerado offline (via `openssl
+> dgst -sha256 -hmac "$SECRET" <<< "$RAW"` ou equivalente em Python).
+> Não copiar o valor placeholder acima.
+
+---
+
+## §3 — Envelope de erro
+
+Toda resposta de erro segue o formato:
+
+```json
+{
+  "errors": [
+    {
+      "id": "ERR_REQUIRED_FIELD",
+      "message": "stops is required",
+      "detail": "stops must contain at least 2 elements"
+    }
+  ],
+  "meta": { "requestId": "550e8400-e29b-41d4-a716-446655440000" }
+}
+```
+
+| Campo | Uso |
+|-------|-----|
+| `errors[].id` | Code estável (ex.: `ERR_REQUIRED_FIELD`, `ERR_NOT_FOUND`, `ERR_QUOTATION_EXPIRED`). Pode aparecer mais de um. |
+| `errors[].message` | Descrição em inglês. Não traduzir; mostrar em logs / notas de auditoria, não na UI. |
+| `meta.requestId` | **Sempre** logar este valor. O suporte da Lalamove pede pra investigar. |
+
+### Códigos de erro comuns
+
+| HTTP | `errors[0].id` | O que fazer |
+|------|----------------|-------------|
+| 400 | `ERR_REQUIRED_FIELD` / `ERR_INVALID_FIELD` | Validação nossa antes de chamar. Logar payload. |
+| 401 | `ERR_UNAUTHORIZED` | Assinatura HMAC errada ou timestamp drift. Validar relógio. |
+| 403 | `ERR_FORBIDDEN` | API key sem permissão pro mercado ou endpoint. |
+| 404 | `ERR_NOT_FOUND` | Recurso não existe (quotationId/orderId errado ou já expirado). |
+| 422 | `ERR_QUOTATION_EXPIRED` | Cotação passou de 5min. Re-cotar antes de criar order. |
+| 429 | `ERR_RATE_LIMIT` | Backoff exponencial. Não chamar de novo por 1+ min. |
+| 5xx | — | Retry 1× com backoff 1s. Se persistir, alertar (não bloquear UI). |
+
+---
+
+## §4 — `GET /v3/cities`
+
+Lista cidades habilitadas, com `serviceType` e `specialRequest` válidos por cidade.
+Usado pra validar/popular o select da UI.
+
+### Request
+
+```
+GET /v3/cities
+Headers: Authorization, Accept, Market
+Body: (vazio)
+```
+
+### Response (parcial — campos relevantes pro RITM-25)
+
+```json
+{
+  "data": [
+    {
+      "locode": "BR_SAO",
+      "name": "São Paulo",
+      "services": [
+        {
+          "key": "MOTORCYCLE",
+          "description": "Motorcycle / Up to 20kg",
+          "dimensions": {
+            "length": { "value": "50", "unit": "cm" },
+            "width":  { "value": "40", "unit": "cm" },
+            "height": { "value": "40", "unit": "cm" }
+          },
+          "load": { "weight": { "value": "20", "unit": "kg" } },
+          "specialRequests": [
+            { "name": "HELP_BUY", "description": "Help buy items along the way" },
+            { "name": "CASH_HANDLING_FEE", "description": "Cash on delivery" }
+          ]
+        },
+        {
+          "key": "CAR",
+          "description": "Car / Up to 200kg",
+          "load": { "weight": { "value": "200", "unit": "kg" } },
+          "specialRequests": []
+        },
+        {
+          "key": "VAN",
+          "description": "Van / Up to 1000kg",
+          "load": { "weight": { "value": "1000", "unit": "kg" } },
+          "specialRequests": []
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Notas
+
+- `services[].key` é o valor pra `serviceType` em `POST /v3/quotations`.
+- `specialRequests[].name` é o valor pra `specialRequests[]` em `POST /v3/quotations`.
+- Em **BR sandbox**, esperar pelo menos `MOTORCYCLE`, `CAR`, `VAN` em `BR_SAO`. Outras cidades têm cobertura variável.
+- Cache em memória por 24h é seguro — a Lalamove muda a lista raramente.
+
+---
+
+## §5 — `POST /v3/quotations`
+
+Cria uma cotação. Resposta inclui preço estimado + `quotationId` válido por **5 minutos**.
+
+### Request
+
+```json
+POST /v3/quotations
+{
+  "data": {
+    "serviceType": "MOTORCYCLE",
+    "specialRequests": [],
+    "language": "pt_BR",
+    "stops": [
+      {
+        "coordinates": { "lat": "-23.55052", "lng": "-46.633308" },
+        "address": "Av Paulista, 1000 - Bela Vista, São Paulo - SP, 01310-100"
+      },
+      {
+        "coordinates": { "lat": "-23.561414", "lng": "-46.655881" },
+        "address": "R. Augusta, 500 - Consolação, São Paulo - SP, 01304-000"
+      }
+    ],
+    "item": {
+      "quantity": "1",
+      "weight": "LESS_THAN_3_KG",
+      "categories": ["GENERAL_CARGO"],
+      "handlingInstructions": ["KEEP_UPRIGHT"]
+    },
+    "isRouteOptimized": false,
+    "scheduleAt": null
+  }
+}
+```
+
+| Campo | Obrigatório | Notas |
+|-------|:-----------:|-------|
+| `serviceType` | ✓ | Validar contra `/v3/cities` |
+| `specialRequests` | — | Array (pode ser vazio). Validar contra `/v3/cities`. |
+| `language` | — | Default `en_US`. Usar `pt_BR` pra BR. |
+| `stops` | ✓ | Mín 2, máx 10. **Sempre** com `coordinates` (lat/lng como string). |
+| `stops[].address` | ✓ | Texto livre — vai pro motorista. Detalhar complemento aqui. |
+| `item.quantity` | — | Padrão `"1"`. String, não number. |
+| `item.weight` | — | Enum: `LESS_THAN_3_KG`, `3_KG_TO_10_KG`, `MORE_THAN_10_KG`. |
+| `item.categories` | — | Array. `GENERAL_CARGO` cobre quase tudo. `FOOD_DELIVERY`, `OFFICE_ITEMS` etc disponíveis. |
+| `isRouteOptimized` | — | Apenas com 3+ stops. Pra confecção, sempre `false`. |
+| `scheduleAt` | — | ISO 8601 **UTC**. `null` = imediato. ⚠️ Sempre UTC, não horário local. |
+
+### Response (sucesso)
+
+```json
+{
+  "data": {
+    "quotationId": "12345678901234567890",
+    "scheduleAt": null,
+    "expiresAt": "2026-05-15T20:15:00.000Z",
+    "serviceType": "MOTORCYCLE",
+    "specialRequests": [],
+    "language": "pt_BR",
+    "stops": [
+      {
+        "stopId": "stop_abc1",
+        "coordinates": { "lat": "-23.55052", "lng": "-46.633308" },
+        "address": "Av Paulista, 1000 - ..."
+      },
+      {
+        "stopId": "stop_def2",
+        "coordinates": { "lat": "-23.561414", "lng": "-46.655881" },
+        "address": "R. Augusta, 500 - ..."
+      }
+    ],
+    "priceBreakdown": {
+      "base": "8.00",
+      "extraMileage": "2.50",
+      "totalBeforeOptimization": "10.50",
+      "totalExcludePriorityFee": "10.50",
+      "total": "10.50",
+      "currency": "BRL"
+    },
+    "distance": { "value": "5200", "unit": "m" }
+  }
+}
+```
+
+### ⚠️ Pegadinhas
+
+- **`quotationId` é string de 19+ dígitos** — armazenar como `TEXT`, **nunca** `INTEGER`. A Lalamove estendeu de 12 pra 19 em set/2025.
+- **`stopId` precisa ser preservado** pra `POST /v3/orders` (RITM-26). Salvar `stopsApi` completo no banco.
+- **`priceBreakdown.total` é string** com decimal (ex.: `"10.50"`). Converter pra `Number` na hora de salvar (`Real` no schema).
+- **5 minutos é firme** — depois disso `POST /v3/orders` com esse `quotationId` retorna `422 ERR_QUOTATION_EXPIRED`. Re-cotar.
+- **Apenas 1 cotação aceita por order** — se cotar de novo, o `quotationId` anterior fica órfão (sem efeito). Marcar como `expirada` ou `descartada` no banco.
+
+---
+
+## §6 — Endpoints adicionais (stubs — expandir nas RITMs futuras)
+
+### `GET /v3/quotations/{quotationId}` — RITM-26
+
+Re-busca uma cotação existente. Útil pra revalidar antes do order. Mesmo
+schema de response do `POST /v3/quotations`. Se expirou, retorna 422.
+
+### `POST /v3/orders` — RITM-26
+
+Cria pedido a partir de cotação válida. Body precisa de `quotationId`,
+`sender`/`recipients` (contatos), `metadata` opcional. Expandir o doc
+nesta seção quando RITM-26 for escrita.
+
+### `GET /v3/orders/{orderId}` — RITM-27 (fallback de polling)
+
+Retorna status atual + driver designado. Usado quando webhook falha.
+
+### `DELETE /v3/orders/{orderId}` — RITM-26
+
+Cancela pedido. Permitido enquanto status ∈ {`ASSIGNING_DRIVER`,
+`ON_GOING`}. Após `PICKED_UP`, retorna 422.
+
+### `GET /v3/orders/{orderId}/drivers/{driverId}/location` — RITM-28
+
+Polling de localização do motorista. Resposta tem `lat`/`lng`/`updatedAt`.
+
+### `PATCH /v3/webhook` — RITM-27 (setup 1×)
+
+Registra URL de webhook. Alternativa: configurar no Partner Portal.
+
+---
+
+## §7 — Mapeamento de status (interno ↔ API)
+
+Já documentado em `specs/confeccao/GUIA-TECNICO.md` §"Mapeamento status
+interno ↔ status da API". Resumo:
+
+| API Lalamove | Interno (`confeccao_lalamove.status`) |
+|---|---|
+| — (sem order) | `rascunho` / `cotado` |
+| `ASSIGNING_DRIVER` | `procurando_motorista` |
+| `ON_GOING` | `motorista_designado` → `a_caminho_coleta` |
+| `PICKED_UP` | `coletado` |
+| `COMPLETED` | `entregue` |
+| `CANCELED` | `cancelado` |
+| `REJECTED` | `rejeitado` |
+| `EXPIRED` | `expirado` |
+
+---
+
+## §8 — Webhook (RITM-27, contexto antecipado)
+
+A Lalamove POST-a pra `/api/webhooks/lalamove` quando status muda. Eventos
+esperados:
+
+- `ORDER_STATUS_CHANGED` — incluí `orderId`, `status`, `timestamp`.
+- `DRIVER_ASSIGNED` — quando motorista aceita o pedido.
+
+**Validação de assinatura:** header `X-Lalamove-Signature` (ou similar —
+confirmar). Body cru + segredo compartilhado (`LALAMOVE_WEBHOOK_SECRET`)
+→ HMAC-SHA256 → comparar com `timingSafeEqual`.
+
+**Tempo máximo de resposta:** 5s. Responder 200 antes de processar.
+
+Detalhes completos serão adicionados aqui quando RITM-27 for escrita.
+
+---
+
+## §9 — Quando atualizar este arquivo
+
+- Antes de começar uma RITM que toca endpoint não documentado aqui →
+  abrir a doc oficial, copiar trecho relevante, salvar na seção correta.
+- Quando a Lalamove publicar versão nova da API (`v4`, etc.) → marcar
+  seção atual como deprecated e criar nova.
+- Sempre que um campo da response surpreender em produção → adicionar
+  observação na seção do endpoint.
+
+**Não confiar cegamente** em conhecimento de LLM sobre Lalamove. A API
+mudou 3+ vezes em 2024–2025; sempre validar contra a doc oficial.

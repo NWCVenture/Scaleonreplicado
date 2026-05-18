@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
-import { BlocoLalamoveManual } from "@/components/confeccao/bloco-lalamove-manual";
+import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
 import type {
   ModoSeparacaoCorte,
@@ -892,7 +892,7 @@ export function SubtaskCorte({
         </div>
       )}
 
-      <BlocoLalamoveManual
+      <BlocoLalamove
         subtaskId={subtask.id}
         contaId={contaId}
         opNumero={opNumero}

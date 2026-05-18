@@ -23,7 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
-import { BlocoLalamoveManual } from "@/components/confeccao/bloco-lalamove-manual";
+import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
 import {
   TAMANHOS_GRADE_RISCO,
@@ -473,7 +473,7 @@ export function SubtaskRisco({
         </CardContent>
       </Card>
 
-      <BlocoLalamoveManual
+      <BlocoLalamove
         subtaskId={subtask.id}
         contaId={contaId}
         opNumero={opNumero}

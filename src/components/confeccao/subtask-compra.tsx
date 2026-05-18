@@ -25,7 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useSession } from "@/lib/auth-client";
 import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
-import { BlocoLalamoveManual } from "@/components/confeccao/bloco-lalamove-manual";
+import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
 import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
 import type { ConfeccaoSubtask } from "@/lib/db/schema";
@@ -684,7 +684,7 @@ export function SubtaskCompra({
       </Card>
 
       {/* Lalamove */}
-      <BlocoLalamoveManual
+      <BlocoLalamove
         subtaskId={subtask.id}
         contaId={contaId}
         opNumero={opNumero}
