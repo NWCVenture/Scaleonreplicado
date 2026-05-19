@@ -10,7 +10,7 @@
 // Dois Lalamoves nesta subtask:
 //  1. Corte → Fábrica de viés
 //  2. Fábrica de viés → Costura
-// Ambos via BlocoLalamoveManual reutilizado.
+// Ambos via BlocoLalamove reutilizado.
 
 import { z } from "zod";
 

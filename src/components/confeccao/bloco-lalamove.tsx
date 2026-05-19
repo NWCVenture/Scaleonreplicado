@@ -1,11 +1,18 @@
 "use client";
 
-// Bloco Lalamove manual reutilizável (subtasks Compra, Risco, Corte, Viés,
-// Costura). Cria registro com origemSolicitacao=manual; operador atualiza
-// status à mão (rascunho → coletado → entregue) e faz upload de comprovante.
+// Bloco Lalamove reutilizável (subtasks Compra, Risco, Corte, Viés, Costura).
+//
+// Modo manual: operador cria registro à mão, atualiza status (rascunho →
+// coletado → entregue), faz upload de comprovante.
+//
+// Modo API (RITM-25): quando feature flag está ligada e o lalamove tem
+// lat/lng nos dois endpoints, aparece botão "Cotar via API" que chama
+// POST /api/confeccao/lalamoves/[id]/cotar e mostra valor + countdown.
+// Criação de pedido via API é RITM-26 (botão "Confirmar pedido" fica
+// desabilitado com tooltip apontando pra próxima fase).
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Trash2, Truck } from "lucide-react";
+import { Loader2, Plus, Sparkles, Truck } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,7 +42,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
 import type { ConfeccaoLalamove } from "@/lib/db/schema";
 
-interface BlocoLalamoveManualProps {
+interface BlocoLalamoveProps {
   subtaskId?: string;
   retiradaId?: string;
   contaId: string;
@@ -57,10 +64,19 @@ const STATUS_LABEL: Record<string, string> = {
   expirado: "Expirado",
 };
 
-export function BlocoLalamoveManual(props: BlocoLalamoveManualProps) {
+// Status onde re-cotar/cotar ainda faz sentido (espelha o service).
+const STATUS_PODE_COTAR = new Set([
+  "rascunho",
+  "cotado",
+  "expirado",
+  "rejeitado",
+]);
+
+export function BlocoLalamove(props: BlocoLalamoveProps) {
   const [items, setItems] = useState<ConfeccaoLalamove[]>([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [apiHabilitada, setApiHabilitada] = useState(false);
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
@@ -85,13 +101,27 @@ export function BlocoLalamoveManual(props: BlocoLalamoveManualProps) {
     void fetchItems();
   }, [fetchItems]);
 
+  // Consulta feature flag da API Lalamove (RITM-25). Sem cache pra UI
+  // refletir mudança de env após restart sem rebuild.
+  useEffect(() => {
+    fetch("/api/confeccao/lalamoves/config", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => setApiHabilitada(Boolean(data?.flagHabilitada)))
+      .catch(() => setApiHabilitada(false));
+  }, []);
+
   return (
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-base">
             <Truck className="size-4" />
-            Lalamove (manual)
+            Lalamove
+            {apiHabilitada && (
+              <Badge variant="outline" className="text-[10px]">
+                API on
+              </Badge>
+            )}
           </CardTitle>
           {!props.readOnly && (
             <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
@@ -119,6 +149,7 @@ export function BlocoLalamoveManual(props: BlocoLalamoveManualProps) {
             contaId={props.contaId}
             opNumero={props.opNumero}
             subtaskNumero={props.subtaskNumero}
+            apiHabilitada={apiHabilitada}
           />
         ))}
       </CardContent>
@@ -144,6 +175,7 @@ function LalamoveLinha({
   contaId,
   opNumero,
   subtaskNumero,
+  apiHabilitada,
 }: {
   item: ConfeccaoLalamove;
   readOnly?: boolean;
@@ -151,7 +183,16 @@ function LalamoveLinha({
   contaId: string;
   opNumero: string;
   subtaskNumero?: string;
+  apiHabilitada: boolean;
 }) {
+  const [cotarOpen, setCotarOpen] = useState(false);
+
+  const podeCotar =
+    apiHabilitada &&
+    !readOnly &&
+    STATUS_PODE_COTAR.has(item.status) &&
+    Boolean(item.origemLat && item.origemLng) &&
+    Boolean(item.destinoLat && item.destinoLng);
   const [novoStatus, setNovoStatus] = useState(item.status);
   const [valor, setValor] = useState(
     item.valor !== null ? String(item.valor) : "",
@@ -213,15 +254,33 @@ function LalamoveLinha({
           <span className="text-xs text-muted-foreground">
             {item.tipo === "outros" ? "Outros" : "Principal"}
           </span>
+          {item.origemSolicitacao === "api" && (
+            <Badge variant="outline" className="text-[10px]">
+              via API
+            </Badge>
+          )}
         </div>
-        {item.valor !== null && (
-          <span className="font-mono text-sm">
-            R${" "}
-            {Number(item.valor).toLocaleString("pt-BR", {
-              minimumFractionDigits: 2,
-            })}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {podeCotar && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => setCotarOpen(true)}
+            >
+              <Sparkles className="size-3" />
+              Cotar via API
+            </Button>
+          )}
+          {item.valor !== null && (
+            <span className="font-mono text-sm">
+              R${" "}
+              {Number(item.valor).toLocaleString("pt-BR", {
+                minimumFractionDigits: 2,
+              })}
+            </span>
+          )}
+        </div>
       </div>
 
       {item.conteudoDescricao && (
@@ -278,6 +337,218 @@ function LalamoveLinha({
         label="Comprovante"
         disabled={readOnly}
       />
+
+      <CotarApiDialog
+        open={cotarOpen}
+        onOpenChange={setCotarOpen}
+        lalamoveId={item.id}
+        onCotado={onAlterado}
+      />
+    </div>
+  );
+}
+
+function CotarApiDialog({
+  open,
+  onOpenChange,
+  lalamoveId,
+  onCotado,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  lalamoveId: string;
+  onCotado: () => void;
+}) {
+  const [serviceTypes, setServiceTypes] = useState<
+    Array<{ key: string; description: string }>
+  >([]);
+  const [serviceType, setServiceType] = useState("MOTORCYCLE");
+  const [carregandoTypes, setCarregandoTypes] = useState(false);
+  const [cotando, setCotando] = useState(false);
+  const [resultado, setResultado] = useState<{
+    valorCotado: number;
+    moeda: string;
+    expiraEm: string;
+    distanciaMetros: number | null;
+  } | null>(null);
+
+  // Carrega serviceTypes ao abrir o dialog
+  useEffect(() => {
+    if (!open) return;
+    setCarregandoTypes(true);
+    fetch("/api/confeccao/lalamoves/service-types", { cache: "no-store" })
+      .then(async (r) => (r.ok ? r.json() : Promise.reject(await r.text())))
+      .then((data) => {
+        setServiceTypes(data.serviceTypes ?? []);
+      })
+      .catch(() => {
+        setServiceTypes([
+          { key: "MOTORCYCLE", description: "Motorcycle" },
+          { key: "CAR", description: "Car" },
+          { key: "VAN", description: "Van" },
+        ]);
+      })
+      .finally(() => setCarregandoTypes(false));
+  }, [open]);
+
+  // Reseta resultado ao fechar
+  useEffect(() => {
+    if (!open) setResultado(null);
+  }, [open]);
+
+  async function cotar() {
+    setCotando(true);
+    try {
+      const res = await fetch(
+        `/api/confeccao/lalamoves/${lalamoveId}/cotar`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ serviceType }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Erro ao cotar");
+        return;
+      }
+      setResultado({
+        valorCotado: data.valorCotado,
+        moeda: data.moeda,
+        expiraEm: data.expiraEm,
+        distanciaMetros: data.distanciaMetros,
+      });
+      toast.success("Cotação criada");
+      onCotado();
+    } finally {
+      setCotando(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Sparkles className="size-4" />
+            Cotar via API Lalamove
+          </DialogTitle>
+        </DialogHeader>
+        {!resultado ? (
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Tipo de serviço</Label>
+              <Select
+                value={serviceType}
+                onValueChange={setServiceType}
+                disabled={carregandoTypes}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {serviceTypes.map((st) => (
+                    <SelectItem key={st.key} value={st.key}>
+                      {st.description || st.key}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+              >
+                Cancelar
+              </Button>
+              <Button onClick={cotar} disabled={cotando || carregandoTypes}>
+                {cotando && <Loader2 className="size-3 animate-spin" />}
+                {cotando ? "Cotando…" : "Cotar"}
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <ResultadoCotacao
+            resultado={resultado}
+            onRecotar={() => setResultado(null)}
+            onFechar={() => onOpenChange(false)}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ResultadoCotacao({
+  resultado,
+  onRecotar,
+  onFechar,
+}: {
+  resultado: {
+    valorCotado: number;
+    moeda: string;
+    expiraEm: string;
+    distanciaMetros: number | null;
+  };
+  onRecotar: () => void;
+  onFechar: () => void;
+}) {
+  const [restanteSegundos, setRestanteSegundos] = useState(() => {
+    return Math.max(
+      0,
+      Math.floor((new Date(resultado.expiraEm).getTime() - Date.now()) / 1000),
+    );
+  });
+  useEffect(() => {
+    if (restanteSegundos <= 0) return;
+    const t = setInterval(() => {
+      setRestanteSegundos((s) => Math.max(0, s - 1));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [restanteSegundos]);
+  const expirou = restanteSegundos === 0;
+  const mm = Math.floor(restanteSegundos / 60);
+  const ss = restanteSegundos % 60;
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border bg-muted/50 p-4 text-center">
+        <div className="text-3xl font-mono font-bold">
+          {resultado.moeda} {resultado.valorCotado.toFixed(2)}
+        </div>
+        {resultado.distanciaMetros !== null && (
+          <div className="text-xs text-muted-foreground mt-1">
+            Distância: {(resultado.distanciaMetros / 1000).toFixed(1)} km
+          </div>
+        )}
+        <div
+          className={`text-xs mt-2 ${expirou ? "text-destructive" : "text-muted-foreground"}`}
+        >
+          {expirou
+            ? "Cotação expirada — cote novamente"
+            : `Expira em ${mm}:${String(ss).padStart(2, "0")}`}
+        </div>
+      </div>
+      <DialogFooter className="flex-col gap-2 sm:flex-col">
+        <Button
+          variant="default"
+          disabled
+          title="Disponível na RITM-26 (criar pedido via API)"
+          className="w-full"
+        >
+          Confirmar pedido (RITM-26)
+        </Button>
+        <div className="flex w-full gap-2">
+          <Button variant="outline" onClick={onRecotar} className="flex-1">
+            Re-cotar
+          </Button>
+          <Button variant="ghost" onClick={onFechar} className="flex-1">
+            Fechar
+          </Button>
+        </div>
+      </DialogFooter>
     </div>
   );
 }
@@ -428,5 +699,3 @@ function NovoLalamoveDialog({
   );
 }
 
-// Componente vazio reservado pra futuras refatorações
-void Trash2;

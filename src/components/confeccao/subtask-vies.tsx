@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
-import { BlocoLalamoveManual } from "@/components/confeccao/bloco-lalamove-manual";
+import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
 import {
   calcularCustoVies,
@@ -440,7 +440,7 @@ export function SubtaskVies({
         <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider px-1">
           Lalamove 1 — Ida (Corte → Fábrica)
         </div>
-        <BlocoLalamoveManual
+        <BlocoLalamove
           subtaskId={subtask.id}
           contaId={contaId}
           opNumero={opNumero}
