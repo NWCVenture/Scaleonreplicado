@@ -12,7 +12,16 @@
 // desabilitado com tooltip apontando pra próxima fase).
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Plus, Sparkles, Truck } from "lucide-react";
+import {
+  CheckCircle2,
+  Copy,
+  ExternalLink,
+  Loader2,
+  Plus,
+  Sparkles,
+  Truck,
+  XCircle,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -186,6 +195,7 @@ function LalamoveLinha({
   apiHabilitada: boolean;
 }) {
   const [cotarOpen, setCotarOpen] = useState(false);
+  const [cancelarApiOpen, setCancelarApiOpen] = useState(false);
 
   const podeCotar =
     apiHabilitada &&
@@ -193,6 +203,18 @@ function LalamoveLinha({
     STATUS_PODE_COTAR.has(item.status) &&
     Boolean(item.origemLat && item.origemLng) &&
     Boolean(item.destinoLat && item.destinoLng);
+
+  const STATUS_CANCELAVEL_API = new Set([
+    "procurando_motorista",
+    "motorista_designado",
+    "a_caminho_coleta",
+  ]);
+  const podeCancelarApi =
+    apiHabilitada &&
+    !readOnly &&
+    item.origemSolicitacao === "api" &&
+    Boolean(item.orderIdApi) &&
+    STATUS_CANCELAVEL_API.has(item.status);
   const [novoStatus, setNovoStatus] = useState(item.status);
   const [valor, setValor] = useState(
     item.valor !== null ? String(item.valor) : "",
@@ -272,6 +294,17 @@ function LalamoveLinha({
               Cotar via API
             </Button>
           )}
+          {podeCancelarApi && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => setCancelarApiOpen(true)}
+            >
+              <XCircle className="size-3" />
+              Cancelar via API
+            </Button>
+          )}
           {item.valor !== null && (
             <span className="font-mono text-sm">
               R${" "}
@@ -282,6 +315,38 @@ function LalamoveLinha({
           )}
         </div>
       </div>
+
+      {item.orderIdApi && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-mono">
+            #{item.orderIdApi.slice(0, 8)}…{item.orderIdApi.slice(-6)}
+          </span>
+          {item.shareLink && (
+            <>
+              <a
+                href={item.shareLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline flex items-center gap-1"
+              >
+                <ExternalLink className="size-3" />
+                Rastrear
+              </a>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-5 px-1.5 text-[10px]"
+                onClick={() => {
+                  void navigator.clipboard.writeText(item.shareLink!);
+                  toast.success("Link copiado");
+                }}
+              >
+                <Copy className="size-3" />
+              </Button>
+            </>
+          )}
+        </div>
+      )}
 
       {item.conteudoDescricao && (
         <div className="text-xs text-muted-foreground">
@@ -344,7 +409,113 @@ function LalamoveLinha({
         lalamoveId={item.id}
         onCotado={onAlterado}
       />
+
+      <CancelarApiDialog
+        open={cancelarApiOpen}
+        onOpenChange={setCancelarApiOpen}
+        lalamoveId={item.id}
+        onCancelado={onAlterado}
+      />
     </div>
+  );
+}
+
+function CancelarApiDialog({
+  open,
+  onOpenChange,
+  lalamoveId,
+  onCancelado,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  lalamoveId: string;
+  onCancelado: () => void;
+}) {
+  const [motivo, setMotivo] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!open) setMotivo("");
+  }, [open]);
+
+  async function confirmar() {
+    if (!motivo.trim()) {
+      toast.error("Informe um motivo");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch(
+        `/api/confeccao/lalamoves/${lalamoveId}/cancelar-api`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ motivo }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Erro ao cancelar");
+        return;
+      }
+      if (data.motivo === "api_ok") {
+        toast.success("Pedido cancelado na Lalamove");
+      } else if (data.motivo === "api_falhou") {
+        toast.warning(
+          "Cancelado internamente, mas API falhou — admin foi avisado nas notas",
+        );
+      } else if (data.motivo === "status_nao_cancelavel") {
+        toast.info("Status atual não permite cancelamento via API");
+      } else {
+        toast.info("Lalamove sem orderId — nada a cancelar na API");
+      }
+      onCancelado();
+      onOpenChange(false);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <XCircle className="size-4 text-destructive" />
+            Cancelar pedido via API
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            A Lalamove permite cancelamento até o motorista coletar a carga
+            (status `coletado` na API). Após isso, contate o suporte da
+            Lalamove diretamente.
+          </p>
+          <div className="space-y-2">
+            <Label className="text-xs">Motivo (obrigatório)</Label>
+            <Input
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}
+              placeholder="Ex: pedido feito em duplicidade"
+              maxLength={500}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Voltar
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={confirmar}
+            disabled={submitting || !motivo.trim()}
+          >
+            {submitting && <Loader2 className="size-3 animate-spin" />}
+            {submitting ? "Cancelando…" : "Cancelar pedido"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -472,8 +643,13 @@ function CotarApiDialog({
         ) : (
           <ResultadoCotacao
             resultado={resultado}
+            lalamoveId={lalamoveId}
             onRecotar={() => setResultado(null)}
             onFechar={() => onOpenChange(false)}
+            onPedidoCriado={() => {
+              onCotado();
+              onOpenChange(false);
+            }}
           />
         )}
       </DialogContent>
@@ -483,8 +659,10 @@ function CotarApiDialog({
 
 function ResultadoCotacao({
   resultado,
+  lalamoveId,
   onRecotar,
   onFechar,
+  onPedidoCriado,
 }: {
   resultado: {
     valorCotado: number;
@@ -492,8 +670,10 @@ function ResultadoCotacao({
     expiraEm: string;
     distanciaMetros: number | null;
   };
+  lalamoveId: string;
   onRecotar: () => void;
   onFechar: () => void;
+  onPedidoCriado: () => void;
 }) {
   const [restanteSegundos, setRestanteSegundos] = useState(() => {
     return Math.max(
@@ -511,6 +691,7 @@ function ResultadoCotacao({
   const expirou = restanteSegundos === 0;
   const mm = Math.floor(restanteSegundos / 60);
   const ss = restanteSegundos % 60;
+  const [confirmarOpen, setConfirmarOpen] = useState(false);
 
   return (
     <div className="space-y-4">
@@ -534,11 +715,15 @@ function ResultadoCotacao({
       <DialogFooter className="flex-col gap-2 sm:flex-col">
         <Button
           variant="default"
-          disabled
-          title="Disponível na RITM-26 (criar pedido via API)"
+          onClick={() => setConfirmarOpen(true)}
           className="w-full"
+          title={
+            expirou
+              ? "Cotação anterior expirou — o backend re-cota silenciosamente"
+              : undefined
+          }
         >
-          Confirmar pedido (RITM-26)
+          Confirmar pedido
         </Button>
         <div className="flex w-full gap-2">
           <Button variant="outline" onClick={onRecotar} className="flex-1">
@@ -549,7 +734,240 @@ function ResultadoCotacao({
           </Button>
         </div>
       </DialogFooter>
+
+      <ConfirmarPedidoDialog
+        open={confirmarOpen}
+        onOpenChange={setConfirmarOpen}
+        lalamoveId={lalamoveId}
+        onPedidoCriado={onPedidoCriado}
+      />
     </div>
+  );
+}
+
+function ConfirmarPedidoDialog({
+  open,
+  onOpenChange,
+  lalamoveId,
+  onPedidoCriado,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  lalamoveId: string;
+  onPedidoCriado: () => void;
+}) {
+  // Prefill com dados do lalamove existente
+  const [origemNome, setOrigemNome] = useState("");
+  const [origemTel, setOrigemTel] = useState("");
+  const [destinoNome, setDestinoNome] = useState("");
+  const [destinoTel, setDestinoTel] = useState("");
+  const [remarks, setRemarks] = useState("");
+  const [carregandoPrefill, setCarregandoPrefill] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [resultado, setResultado] = useState<{
+    orderIdApi: string;
+    shareLink: string | null;
+    novaCotacao: { quotationIdApi: string; valorCotado: number } | null;
+  } | null>(null);
+
+  // Carrega prefill dos contatos a partir do lalamove
+  useEffect(() => {
+    if (!open) return;
+    setCarregandoPrefill(true);
+    fetch(`/api/confeccao/lalamoves/${lalamoveId}`, { cache: "no-store" })
+      .then(async (r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.item) {
+          setOrigemNome(data.item.contatoOrigemNome ?? "");
+          setOrigemTel(data.item.contatoOrigemTelefone ?? "");
+          setDestinoNome(data.item.contatoDestinoNome ?? "");
+          setDestinoTel(data.item.contatoDestinoTelefone ?? "");
+          setRemarks(data.item.remarksDestino ?? "");
+        }
+      })
+      .finally(() => setCarregandoPrefill(false));
+  }, [open, lalamoveId]);
+
+  useEffect(() => {
+    if (!open) setResultado(null);
+  }, [open]);
+
+  async function confirmar() {
+    setSubmitting(true);
+    try {
+      const res = await fetch(
+        `/api/confeccao/lalamoves/${lalamoveId}/criar-pedido`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contatoOrigem: { nome: origemNome, telefoneE164: origemTel },
+            contatoDestino: { nome: destinoNome, telefoneE164: destinoTel },
+            remarksDestino: remarks || undefined,
+          }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Erro ao criar pedido");
+        return;
+      }
+      setResultado({
+        orderIdApi: data.orderIdApi,
+        shareLink: data.shareLink,
+        novaCotacao: data.novaCotacao ?? null,
+      });
+      if (data.novaCotacao) {
+        toast.success(
+          `Pedido criado (cotação re-emitida por R$ ${data.novaCotacao.valorCotado.toFixed(2)})`,
+        );
+      } else {
+        toast.success("Pedido criado");
+      }
+      onPedidoCriado();
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Sparkles className="size-4" />
+            Confirmar pedido via API
+          </DialogTitle>
+        </DialogHeader>
+
+        {resultado ? (
+          <div className="space-y-4">
+            <div className="rounded-md border bg-muted/50 p-4 space-y-2">
+              <div className="flex items-center gap-2 text-sm">
+                <CheckCircle2 className="size-4 text-green-600" />
+                <span className="font-medium">Pedido criado com sucesso</span>
+              </div>
+              <div className="text-xs space-y-1">
+                <div>
+                  <span className="text-muted-foreground">Order ID: </span>
+                  <span className="font-mono">{resultado.orderIdApi}</span>
+                </div>
+                {resultado.shareLink && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <a
+                      href={resultado.shareLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary text-xs underline flex items-center gap-1"
+                    >
+                      <ExternalLink className="size-3" />
+                      Abrir tracking
+                    </a>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(resultado.shareLink!);
+                        toast.success("Link copiado");
+                      }}
+                    >
+                      <Copy className="size-3" />
+                      Copiar
+                    </Button>
+                  </div>
+                )}
+                {resultado.novaCotacao && (
+                  <div className="text-amber-600 dark:text-amber-400 mt-2">
+                    ⚠ A cotação anterior havia expirado. Re-cotada
+                    automaticamente por{" "}
+                    <span className="font-mono">
+                      R$ {resultado.novaCotacao.valorCotado.toFixed(2)}
+                    </span>
+                    .
+                  </div>
+                )}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button onClick={() => onOpenChange(false)} className="w-full">
+                Fechar
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="text-xs text-muted-foreground">
+              Confira os contatos antes de criar. Eles serão enviados pra
+              Lalamove e o destinatário recebe SMS com o tracking.
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs">Origem — nome</Label>
+              <Input
+                value={origemNome}
+                onChange={(e) => setOrigemNome(e.target.value)}
+                placeholder="Ex: Fornecedor ABC"
+                disabled={carregandoPrefill}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs">Origem — telefone (E.164)</Label>
+              <Input
+                value={origemTel}
+                onChange={(e) => setOrigemTel(e.target.value)}
+                placeholder="+5511999999999"
+                disabled={carregandoPrefill}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs">Destino — nome</Label>
+              <Input
+                value={destinoNome}
+                onChange={(e) => setDestinoNome(e.target.value)}
+                placeholder="Ex: Oficina X"
+                disabled={carregandoPrefill}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs">Destino — telefone (E.164)</Label>
+              <Input
+                value={destinoTel}
+                onChange={(e) => setDestinoTel(e.target.value)}
+                placeholder="+5511988887777"
+                disabled={carregandoPrefill}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs">
+                Instruções pro motorista (opcional)
+              </Label>
+              <Input
+                value={remarks}
+                onChange={(e) => setRemarks(e.target.value)}
+                placeholder="Ex: Falar com João, sala 3"
+                maxLength={250}
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={confirmar}
+                disabled={submitting || carregandoPrefill}
+              >
+                {submitting && <Loader2 className="size-3 animate-spin" />}
+                {submitting ? "Enviando…" : "Criar pedido"}
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
