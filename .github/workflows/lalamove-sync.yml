@@ -1,0 +1,41 @@
+name: Lalamove sync (polling fallback)
+
+# Vercel Hobby tier limita cron a 1 invocação/dia. Como o polling de
+# fallback do webhook precisa rodar a cada 5min (RITM-27), usamos GitHub
+# Actions pra disparar o endpoint externamente.
+#
+# GH Actions free tier: 2000 min/mês. Esta workflow custa ~10s × 12/h × 24h
+# × 30d ≈ 24h/mês de runtime. Cabe folgado.
+#
+# Cadência efetiva pode ser ligeiramente maior (GH pode atrasar crons de
+# alta frequência em ~5-15min sob carga). Aceitável pro caso de uso.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - name: Invoca endpoint de sync
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SYNC_URL: ${{ vars.LALAMOVE_SYNC_URL || 'https://scaleonerp.com.br/api/confeccao/jobs/lalamove-sync' }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET secret não cadastrado no repo"
+            exit 1
+          fi
+          status=$(curl -s -o /tmp/body -w "%{http_code}" \
+            -X POST "$SYNC_URL" \
+            -H "Authorization: Bearer $CRON_SECRET")
+          echo "HTTP $status"
+          cat /tmp/body
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            exit 1
+          fi

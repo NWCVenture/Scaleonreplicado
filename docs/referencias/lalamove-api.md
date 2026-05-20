@@ -376,9 +376,66 @@ POST /v3/orders
   marcar `confeccao_lalamove_cotacao.status = 'convertida_em_pedido'`
   pra rastreabilidade.
 
-### `GET /v3/orders/{orderId}` — RITM-27 (fallback de polling)
+### `GET /v3/orders/{orderId}`
 
-Retorna status atual + driver designado. Usado quando webhook falha.
+Retorna estado atual do pedido. Usado pelo polling fallback do RITM-27 quando
+o webhook não chega — varremos lalamoves ativos com `updatedAt` estagnado
+(>10min) e sincronizamos.
+
+#### Request
+
+```
+GET /v3/orders/12345678901234567890
+Headers: Authorization, Accept, Market
+Body: (vazio)
+```
+
+#### Response
+
+```json
+{
+  "data": {
+    "orderId": "12345678901234567890",
+    "quotationId": "98765432101234567890",
+    "status": "PICKED_UP",
+    "shareLink": "https://share.lalamove.com/?...",
+    "distance": { "value": "5200", "unit": "m" },
+    "priceBreakdown": {
+      "base": "8.00",
+      "extraMileage": "2.50",
+      "total": "10.50",
+      "currency": "BRL"
+    },
+    "driverId": "drv_abc123",
+    "metadata": { "internalOrderId": "OP05260001-OPBUY" },
+    "stops": [
+      {
+        "stopId": "stop_abc1",
+        "coordinates": { "lat": "-23.55", "lng": "-46.63" },
+        "address": "...",
+        "name": "Origem",
+        "phone": "+5511999999999"
+      },
+      {
+        "stopId": "stop_def2",
+        "coordinates": { "lat": "-23.56", "lng": "-46.64" },
+        "address": "...",
+        "name": "Destino",
+        "phone": "+5511988887777"
+      }
+    ]
+  }
+}
+```
+
+#### Pegadinhas
+
+- `status` é o status atual da API (ex: `ASSIGNING_DRIVER`, `PICKED_UP`).
+  Usar `mapearStatusApi` em `src/lib/confeccao/lalamove/status-map.ts`
+  pra converter pro nosso enum interno.
+- `driverId` é `null` enquanto motorista não aceitou.
+- Pra detalhes do motorista (nome, telefone, placa), chamar
+  `GET /v3/orders/{orderId}/drivers/{driverId}` (não documentado aqui).
 
 ### `DELETE /v3/orders/{orderId}`
 
@@ -439,21 +496,66 @@ interno ↔ status da API". Resumo:
 
 ---
 
-## §8 — Webhook (RITM-27, contexto antecipado)
+## §8 — Webhook (RITM-27)
 
 A Lalamove POST-a pra `/api/webhooks/lalamove` quando status muda. Eventos
 esperados:
 
-- `ORDER_STATUS_CHANGED` — incluí `orderId`, `status`, `timestamp`.
-- `DRIVER_ASSIGNED` — quando motorista aceita o pedido.
+- `ORDER_STATUS_CHANGED` — inclui `orderId`, `status` (string da API), `timestamp`.
+- `DRIVER_ASSIGNED` — quando motorista aceita; inclui `driverId`, `driverName`, `driverPhone`, `driverPlateNumber`.
 
-**Validação de assinatura:** header `X-Lalamove-Signature` (ou similar —
-confirmar). Body cru + segredo compartilhado (`LALAMOVE_WEBHOOK_SECRET`)
-→ HMAC-SHA256 → comparar com `timingSafeEqual`.
+### Payload (exemplo)
 
-**Tempo máximo de resposta:** 5s. Responder 200 antes de processar.
+```json
+{
+  "event": "ORDER_STATUS_CHANGED",
+  "data": {
+    "orderId": "12345678901234567890",
+    "status": "PICKED_UP",
+    "timestamp": "2026-05-20T18:30:00.000Z"
+  }
+}
+```
 
-Detalhes completos serão adicionados aqui quando RITM-27 for escrita.
+### Validação de assinatura
+
+A Lalamove envia HMAC-SHA256 do body cru no header de assinatura.
+**Confirmar o nome exato no Partner Portal** — pode ser:
+
+- `X-Lalamove-Signature`
+- `X-Webhook-Signature`
+- `Lalamove-Signature`
+
+Nossa implementação aceita os três formatos via lookup ordenado.
+Comparação **sempre** com `timingSafeEqual` (não `===`).
+
+Algoritmo:
+```
+SIGNATURE = HMAC-SHA256(LALAMOVE_WEBHOOK_SECRET, BODY_RAW)
+```
+
+Formatos aceitos do header: `<hex>`, `sha256=<hex>`, `hmac-sha256 <hex>`.
+
+### Política de resposta
+
+- **Tempo máximo:** 5s pra a Lalamove. Maior que isso → webhook suspenso.
+- **Sempre 200** quando body é válido (mesmo sem `orderId` ou com payload
+  inesperado). **401** apenas pra assinatura inválida.
+- Processamento é **assíncrono** via `after()` (Next.js 16). Falha do
+  processador NÃO afeta o 200 retornado.
+
+### Política de retry da Lalamove
+
+- Em failure (2xx não retornado), Lalamove re-tenta com backoff exponencial
+  (~3 tentativas em ~5min).
+- Após esgotar retries, evento **é perdido**. Polling fallback (cron 5min)
+  é o backup pra garantir consistência.
+
+### Idempotência
+
+Eventos com mesma chave `(orderId, evento, timestamp)` já processados
+viram noop — `processarWebhookEvent` checa e retorna `duplicado` sem
+alterar lalamove nem criar nota duplicada.
 
 ---
 
