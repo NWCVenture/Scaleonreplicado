@@ -1,8 +1,12 @@
+// GET  /api/webhooks/lalamove — health check / verificação de URL pelo
+//   Partner Portal da Lalamove. Sempre 200.
+//
 // POST /api/webhooks/lalamove — recebe eventos da Lalamove (RITM-27).
 //
 // Fluxo:
 //   1. Lê body cru pra validar HMAC.
-//   2. Se LALAMOVE_WEBHOOK_SECRET ausente → 503 (config errada nossa).
+//   2. Se LALAMOVE_WEBHOOK_SECRET ausente → 200 com flag `pending_config`
+//      (bootstrap: portal valida URL antes de gerar o secret).
 //   3. Assinatura inválida → 401, sem persistir.
 //   4. Parse do JSON. Sem orderId → 200 + log (não bloqueia a Lalamove).
 //   5. INSERT em confeccao_lalamove_webhook_event (processado=false),
@@ -43,15 +47,29 @@ function detectarEventoTipo(eventName: unknown): EventoTipo {
   return "OUTROS";
 }
 
+// Health check / verificação de reachability pelo Partner Portal.
+// Lalamove (e outras integrações) podem testar a URL com GET antes de
+// permitir o cadastro do webhook. Sempre 200.
+export function GET() {
+  return NextResponse.json(
+    { ok: true, endpoint: "lalamove-webhook" },
+    { status: 200 },
+  );
+}
+
 export async function POST(request: NextRequest) {
   const secret = process.env.LALAMOVE_WEBHOOK_SECRET;
   if (!secret) {
-    // Erro de configuração nossa — retornamos 503 pra que a Lalamove tente
-    // de novo. NÃO retorna 2xx aqui senão perdemos o evento permanentemente.
-    console.error("[webhook lalamove] LALAMOVE_WEBHOOK_SECRET ausente");
+    // Bootstrap: enquanto o secret não está cadastrado, o Partner Portal
+    // ainda precisa validar a URL pra deixar a gente terminar o setup.
+    // Retornamos 200 (não 503) pra não bloquear o cadastro — mas NÃO
+    // processamos o evento. Logamos pra que apareça nos logs do Vercel.
+    console.warn(
+      "[webhook lalamove] requisição recebida sem LALAMOVE_WEBHOOK_SECRET configurado — bootstrap. Evento descartado.",
+    );
     return NextResponse.json(
-      { error: "config ausente" },
-      { status: 503 },
+      { ok: true, pending_config: true },
+      { status: 200 },
     );
   }
 
