@@ -281,25 +281,135 @@ POST /v3/quotations
 
 ## §6 — Endpoints adicionais (stubs — expandir nas RITMs futuras)
 
-### `GET /v3/quotations/{quotationId}` — RITM-26
+### `GET /v3/quotations/{quotationId}`
 
 Re-busca uma cotação existente. Útil pra revalidar antes do order. Mesmo
-schema de response do `POST /v3/quotations`. Se expirou, retorna 422.
+schema de response do `POST /v3/quotations`. Se expirou, retorna 422
+`ERR_QUOTATION_EXPIRED`.
 
-### `POST /v3/orders` — RITM-26
+### `POST /v3/orders`
 
-Cria pedido a partir de cotação válida. Body precisa de `quotationId`,
-`sender`/`recipients` (contatos), `metadata` opcional. Expandir o doc
-nesta seção quando RITM-26 for escrita.
+Cria pedido a partir de cotação válida. Resposta inclui `orderId` (19+
+dígitos string) e `shareLink` (URL pública de rastreio).
+
+#### Request
+
+```json
+POST /v3/orders
+{
+  "data": {
+    "quotationId": "12345678901234567890",
+    "sender": {
+      "stopId": "stop_abc1",
+      "name": "Fornecedor Tecidos ABC",
+      "phone": "+5511999999999"
+    },
+    "recipients": [
+      {
+        "stopId": "stop_def2",
+        "name": "Oficina Corte X",
+        "phone": "+5511988887777",
+        "remarks": "Entregar para João — OP05260001"
+      }
+    ],
+    "isPODEnabled": false,
+    "isRecipientSMSEnabled": true,
+    "metadata": {
+      "internalOrderId": "OP05260001-OPBUY"
+    },
+    "partner": null
+  }
+}
+```
+
+| Campo | Obrigatório | Notas |
+|-------|:-----------:|-------|
+| `quotationId` | ✓ | Da resposta de POST /v3/quotations. **Deve estar válida** (5min). Re-cotar antes se expirou. |
+| `sender.stopId` | ✓ | `stopId` do primeiro stop da cotação. **Preservado** desde `confeccao_lalamove_cotacao.stops_api`. |
+| `sender.name` | ✓ | Nome do contato (1-50 chars). |
+| `sender.phone` | ✓ | **E.164** (`+5511...`). |
+| `recipients[]` | ✓ | Array, mínimo 1. Cada item bate com um stop ≥1 da cotação. |
+| `recipients[].stopId` | ✓ | `stopId` correspondente da cotação. |
+| `recipients[].name` | ✓ | Nome (1-50 chars). |
+| `recipients[].phone` | ✓ | E.164. |
+| `recipients[].remarks` | — | Instruções pro motorista (max 250 chars). |
+| `isPODEnabled` | — | Default `false`. Quando `true`, motorista coleta foto + assinatura na entrega. |
+| `isRecipientSMSEnabled` | — | Default `true`. Lalamove envia SMS pro destinatário com o tracking. |
+| `metadata` | — | Free-form. Útil pra rastrear pelo nosso lado (ex: número da OP). |
+| `partner` | — | Sempre `null` pra Confecção. |
+
+#### Response (sucesso)
+
+```json
+{
+  "data": {
+    "orderId": "98765432101234567890",
+    "quotationId": "12345678901234567890",
+    "priceBreakdown": {
+      "base": "8.00",
+      "extraMileage": "2.50",
+      "total": "10.50",
+      "currency": "BRL"
+    },
+    "driverId": null,
+    "shareLink": "https://share.lalamove.com/?...",
+    "status": "ASSIGNING_DRIVER",
+    "distance": { "value": "5200", "unit": "m" },
+    "stops": [
+      { "stopId": "stop_abc1", "coordinates": {...}, "address": "..." },
+      { "stopId": "stop_def2", "coordinates": {...}, "address": "..." }
+    ],
+    "metadata": { "internalOrderId": "OP05260001-OPBUY" }
+  }
+}
+```
+
+#### ⚠️ Pegadinhas
+
+- **`orderId` 19+ dígitos string** — armazenar como TEXT.
+- **`shareLink`** é o link de rastreio público — pode ser compartilhado
+  com fornecedor/oficina. Salvar e exibir na UI.
+- **`status` inicial é `ASSIGNING_DRIVER`** — mapeia pro nosso
+  `procurando_motorista`.
+- **`driverId` é null** até motorista aceitar.
+- Após `POST /v3/orders` bem-sucedido, a cotação fica "consumida" —
+  marcar `confeccao_lalamove_cotacao.status = 'convertida_em_pedido'`
+  pra rastreabilidade.
 
 ### `GET /v3/orders/{orderId}` — RITM-27 (fallback de polling)
 
 Retorna status atual + driver designado. Usado quando webhook falha.
 
-### `DELETE /v3/orders/{orderId}` — RITM-26
+### `DELETE /v3/orders/{orderId}`
 
-Cancela pedido. Permitido enquanto status ∈ {`ASSIGNING_DRIVER`,
-`ON_GOING`}. Após `PICKED_UP`, retorna 422.
+Cancela pedido. Permitido enquanto status ∈ {`ASSIGNING_DRIVER`, `ON_GOING`}.
+Após `PICKED_UP` retorna `422 ERR_INVALID_ORDER_STATUS`.
+
+#### Request
+
+```
+DELETE /v3/orders/12345678901234567890
+Headers: Authorization, Accept, Market
+Body: (vazio)
+```
+
+#### Response (sucesso) — 204 No Content (ou 200 com body vazio)
+
+Sem corpo de resposta. Cliente deve marcar `confeccao_lalamove.status = 'cancelado'`
++ `cancelada_em`/`cancelada_por_id`/`cancelamento_motivo`.
+
+#### Erros comuns
+
+| HTTP | `errors[0].id` | O que fazer |
+|------|----------------|-------------|
+| 404 | `ERR_NOT_FOUND` | orderId inexistente ou já cancelado há mais de 24h (purga da Lalamove). Tratar como sucesso idempotente. |
+| 422 | `ERR_INVALID_ORDER_STATUS` | Pedido já passou de `PICKED_UP` — cancelamento não é mais possível. Marcar lalamove internamente com nota explicando. |
+
+#### ⚠️ Idempotência
+
+A Lalamove **não retorna erro** ao cancelar duas vezes — segunda chamada
+retorna 404 (ERR_NOT_FOUND) ou 204. Tratar ambos como sucesso pra
+permitir retry seguro.
 
 ### `GET /v3/orders/{orderId}/drivers/{driverId}/location` — RITM-28
 
