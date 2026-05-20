@@ -20,7 +20,7 @@ Arquitetura: §14.5 (mapeamento de status), §14.8 (webhook) + §19.4 sub-fase 8
 | Processor (puro, testável) | `src/lib/confeccao/lalamove/webhook-processor.ts` |
 | Mapeamento status API → interno | `src/lib/confeccao/lalamove/status-map.ts` |
 | Polling fallback cron | `src/app/api/confeccao/jobs/lalamove-sync/route.ts` |
-| `vercel.json`: agendamento do cron */5 * * * * | já existe — adicionar entrada |
+| GitHub Actions workflow */5 * * * * | `.github/workflows/lalamove-sync.yml` |
 | Doc: completar `GET /v3/orders/{id}` e webhook events | `docs/referencias/lalamove-api.md` |
 | Env nova: `LALAMOVE_WEBHOOK_SECRET` | `.env.example` |
 
@@ -141,19 +141,39 @@ const API_TO_INTERNO: Record<string, ConfeccaoLalamoveStatus> = {
      mudanças no banco (mesma função do processor, com payload sintético).
 - Retorna `{ eventosProcessados, lalamovesSyncados, erros }`.
 
-### Vercel cron
+### Agendamento via GitHub Actions
 
-`vercel.json` ganha entrada:
+⚠️ **Decisão de runtime:** Vercel Hobby tier limita cron a **1 invocação/dia
+por cron**. Como precisamos rodar a cada 5min, agendamos via **GitHub Actions**
+(mesmo padrão da RITM-23 backup semanal).
 
-```json
-{
-  "path": "/api/confeccao/jobs/lalamove-sync",
-  "schedule": "*/5 * * * *"
-}
+`.github/workflows/lalamove-sync.yml` (criação nova):
+
+```yaml
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Invoca endpoint de sync
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -fsSL -X POST https://scaleonerp.com.br/api/confeccao/jobs/lalamove-sync \
+            -H "Authorization: Bearer $CRON_SECRET"
 ```
 
-> Pode bater no rate limit de cron do Vercel free tier — verificar.
-> Alternativa: agendar de 10 em 10min se houver problema.
+Custo estimado de Actions: 12 invocações/h × 24h × 30d × ~10s ≈ 24h/mês.
+Free tier (2000min/mês) cobre folgado.
+
+> GH Actions pode atrasar crons de alta frequência em 5-15min sob carga
+> do GitHub. Aceitável pro caso de uso (janela stale de 10min já dá
+> margem).
 
 ### Env
 
@@ -219,3 +239,4 @@ LALAMOVE_WEBHOOK_SECRET=
 - [ ] Copiar o secret do Partner Portal pra `LALAMOVE_WEBHOOK_SECRET` no Vercel (Production + Preview + Development)
 - [ ] Validar que webhook chega: criar pedido sandbox via UI, acompanhar tabela `confeccao_lalamove_webhook_event` após o motorista aceitar
 - [ ] Adicionar `LALAMOVE_WEBHOOK_SECRET` ao `gh secret list` no GitHub se quisermos rodar testes integrados no CI (opcional)
+- [ ] Cadastrar `CRON_SECRET` como GitHub secret (mesmo valor cadastrado no Vercel) — sem ele a workflow `lalamove-sync.yml` falha logo no primeiro run
