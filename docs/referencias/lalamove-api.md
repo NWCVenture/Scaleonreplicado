@@ -468,9 +468,51 @@ A Lalamove **não retorna erro** ao cancelar duas vezes — segunda chamada
 retorna 404 (ERR_NOT_FOUND) ou 204. Tratar ambos como sucesso pra
 permitir retry seguro.
 
-### `GET /v3/orders/{orderId}/drivers/{driverId}/location` — RITM-28
+### `GET /v3/orders/{orderId}/drivers/{driverId}/location`
 
-Polling de localização do motorista. Resposta tem `lat`/`lng`/`updatedAt`.
+Polling de localização do motorista (RITM-28). Chamado pelo cron
+`lalamove-sync` a cada 5min pra cada lalamove com `status ∈
+{motorista_designado, a_caminho_coleta, coletado}` e `driverIdApi NOT NULL`.
+
+#### Request
+
+```
+GET /v3/orders/{orderId}/drivers/{driverId}/location
+Headers: Authorization, Accept, Market
+Body: (vazio)
+```
+
+#### Response (sucesso)
+
+```json
+{
+  "data": {
+    "lat": "-23.561414",
+    "lng": "-46.655881",
+    "updatedAt": "2026-05-21T18:30:00.000Z"
+  }
+}
+```
+
+> Algumas versões da API podem aninhar em `coordinates`:
+> ```json
+> { "data": { "coordinates": { "lat": "...", "lng": "..." }, "updatedAt": "..." } }
+> ```
+> Nossa implementação (`driver-location.ts`) aceita ambos os formatos.
+
+#### Errors
+
+| HTTP | Tratamento |
+|------|------------|
+| 404 | Driver ainda não reportou location (cedo demais). Contar como `semDriverDisponivel`, não erro. |
+| 500+ | Erro transitório. Contar como `erros`; próximo polling tenta de novo em 5min. |
+
+#### ⚠️ Pegadinhas
+
+- `lat`/`lng` são **strings** (não números). Salvar como `text` no DB.
+- `updatedAt` é da Lalamove (quando o motorista enviou). Não confundir
+  com `last_driver_location_at` (quando nós salvamos no nosso DB).
+- Sem nota de auditoria por update — localização muda muito; viraria spam.
 
 ### `PATCH /v3/webhook` — RITM-27 (setup 1×)
 
