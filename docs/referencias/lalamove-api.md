@@ -519,22 +519,31 @@ esperados:
 
 ### Validação de assinatura
 
-A Lalamove envia HMAC-SHA256 do body cru no header de assinatura.
-**Confirmar o nome exato no Partner Portal** — pode ser:
+⚠️ **Descoberta durante setup (2026-05-21):** a doc oficial da Lalamove v3
+NÃO documenta secret de webhook nem header de assinatura. O Partner Portal
+só pede que o endpoint retorne 200 — não gera um webhook secret separado.
+A única chave compartilhada é o `API_SECRET` usado pra assinar chamadas à
+API REST (RITM-25).
+
+Possíveis cenários (a confirmar com o primeiro webhook real):
+
+1. **Lalamove não assina webhook v3** — segurança via URL secreta.
+   `LALAMOVE_WEBHOOK_SECRET` permanece vazio; nosso endpoint processa
+   eventos sem validação.
+2. **Lalamove assina com o API_SECRET** — caso afirmativo, basta setar
+   `LALAMOVE_WEBHOOK_SECRET=<mesmo valor de LALAMOVE_API_SECRET>` e o
+   código existente valida.
+3. **Header não-documentado** — endpoint atual loga todos os headers
+   recebidos no primeiro webhook (modo investigação) pra descobrirmos.
+
+Nossa implementação aceita os três formatos de header via lookup ordenado:
 
 - `X-Lalamove-Signature`
 - `X-Webhook-Signature`
 - `Lalamove-Signature`
 
-Nossa implementação aceita os três formatos via lookup ordenado.
-Comparação **sempre** com `timingSafeEqual` (não `===`).
-
-Algoritmo:
-```
-SIGNATURE = HMAC-SHA256(LALAMOVE_WEBHOOK_SECRET, BODY_RAW)
-```
-
-Formatos aceitos do header: `<hex>`, `sha256=<hex>`, `hmac-sha256 <hex>`.
+Comparação **sempre** com `timingSafeEqual`. Algoritmo HMAC-SHA256 do body
+cru. Formatos aceitos: `<hex>`, `sha256=<hex>`, `hmac-sha256 <hex>`.
 
 ### Política de resposta
 

@@ -3,16 +3,24 @@
 //
 // POST /api/webhooks/lalamove — recebe eventos da Lalamove (RITM-27).
 //
+// Política de assinatura (descoberta durante setup): a doc oficial da
+// Lalamove v3 NÃO documenta secret de webhook nem header de assinatura
+// — só pede que o endpoint retorne 200. Implementação atual:
+//   - LALAMOVE_WEBHOOK_SECRET ausente → processa sem validar assinatura.
+//     Logamos todos os headers do request pra a gente descobrir, no
+//     primeiro webhook real, se a Lalamove está enviando algum header
+//     de auth não documentado.
+//   - LALAMOVE_WEBHOOK_SECRET presente → exige assinatura HMAC válida.
+//     Caminho seguro pra quando confirmarmos que Lalamove de fato assina.
+//
 // Fluxo:
-//   1. Lê body cru pra validar HMAC.
-//   2. Se LALAMOVE_WEBHOOK_SECRET ausente → 200 com flag `pending_config`
-//      (bootstrap: portal valida URL antes de gerar o secret).
-//   3. Assinatura inválida → 401, sem persistir.
-//   4. Parse do JSON. Sem orderId → 200 + log (não bloqueia a Lalamove).
-//   5. INSERT em confeccao_lalamove_webhook_event (processado=false),
-//      tentando resolver lalamoveId + contaId via orderIdApi.
-//   6. Agenda processamento via `after()` (Next 16).
-//   7. Retorna 200 em < 1s.
+//   1. Lê body cru.
+//   2. Se SECRET presente: valida assinatura, 401 se inválida.
+//      Se SECRET ausente: pula validação + log headers (modo investigação).
+//   3. Parse JSON. Sem orderId → 200 + log.
+//   4. INSERT em confeccao_lalamove_webhook_event (processado=false).
+//   5. Agenda processamento via `after()` (Next 16).
+//   6. Retorna 200 em < 1s.
 
 import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
@@ -59,31 +67,41 @@ export function GET() {
 
 export async function POST(request: NextRequest) {
   const secret = process.env.LALAMOVE_WEBHOOK_SECRET;
-  if (!secret) {
-    // Bootstrap: enquanto o secret não está cadastrado, o Partner Portal
-    // ainda precisa validar a URL pra deixar a gente terminar o setup.
-    // Retornamos 200 (não 503) pra não bloquear o cadastro — mas NÃO
-    // processamos o evento. Logamos pra que apareça nos logs do Vercel.
-    console.warn(
-      "[webhook lalamove] requisição recebida sem LALAMOVE_WEBHOOK_SECRET configurado — bootstrap. Evento descartado.",
-    );
-    return NextResponse.json(
-      { ok: true, pending_config: true },
-      { status: 200 },
-    );
-  }
-
   const bodyRaw = await request.text();
   const assinatura =
     HEADERS_ASSINATURA.map((h) => request.headers.get(h)).find(
       (v) => v && v.length > 0,
     ) ?? null;
 
-  if (!verificarAssinaturaWebhook({ bodyRaw, assinatura, secret })) {
-    console.warn("[webhook lalamove] assinatura inválida");
-    return NextResponse.json(
-      { error: "assinatura inválida" },
-      { status: 401 },
+  if (secret) {
+    // Caminho seguro: secret cadastrado → exige assinatura válida.
+    if (!verificarAssinaturaWebhook({ bodyRaw, assinatura, secret })) {
+      console.warn("[webhook lalamove] assinatura inválida");
+      return NextResponse.json(
+        { error: "assinatura inválida" },
+        { status: 401 },
+      );
+    }
+  } else {
+    // Modo investigação: a doc da Lalamove v3 não documenta assinatura.
+    // Logamos todos os headers do primeiro webhook real pra confirmar se
+    // a Lalamove envia algum header de auth não documentado. Quando
+    // descobrirmos, cadastramos LALAMOVE_WEBHOOK_SECRET e o caminho
+    // seguro acima passa a valer.
+    const headerEntries: Record<string, string> = {};
+    request.headers.forEach((v, k) => {
+      // Filtra headers de infra pra reduzir ruído nos logs
+      if (
+        !k.startsWith("x-vercel-") &&
+        !k.startsWith("x-forwarded-") &&
+        !["host", "connection", "accept-encoding"].includes(k)
+      ) {
+        headerEntries[k] = v;
+      }
+    });
+    console.warn(
+      "[webhook lalamove] sem LALAMOVE_WEBHOOK_SECRET — processando sem validar. Headers recebidos:",
+      JSON.stringify(headerEntries),
     );
   }
 
