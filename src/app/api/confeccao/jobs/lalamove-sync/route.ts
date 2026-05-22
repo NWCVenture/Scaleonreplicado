@@ -27,6 +27,10 @@ import {
   LalamoveApiError,
 } from "@/lib/confeccao/lalamove/client";
 import { processarWebhookEvent } from "@/lib/confeccao/lalamove/webhook-processor";
+import {
+  sincronizarLocalizacaoMotoristas,
+  type SyncLocationResult,
+} from "@/lib/confeccao/lalamove/driver-location";
 
 // Status "ativos" no nosso lado — vale a pena sincronizar.
 const STATUS_ATIVOS = [
@@ -43,6 +47,7 @@ interface Resultado {
   eventosComErro: number;
   lalamovesSyncados: number;
   lalamovesComErroApi: number;
+  driverLocation: SyncLocationResult;
 }
 
 interface OrderApiResponse {
@@ -81,6 +86,12 @@ export async function POST(request: NextRequest) {
     eventosComErro: 0,
     lalamovesSyncados: 0,
     lalamovesComErroApi: 0,
+    driverLocation: {
+      consultados: 0,
+      atualizados: 0,
+      semDriverDisponivel: 0,
+      erros: 0,
+    },
   };
 
   // ─── 1. Eventos pendentes ──────────────────────────────────────────────
@@ -211,6 +222,13 @@ export async function POST(request: NextRequest) {
       }
       resultado.lalamovesComErroApi++;
     }
+  }
+
+  // ─── 3. Polling de localização dos motoristas (RITM-28) ───────────────
+  try {
+    resultado.driverLocation = await sincronizarLocalizacaoMotoristas();
+  } catch (err) {
+    console.error("[lalamove-sync] falha no polling de driver location:", err);
   }
 
   console.log("[lalamove-sync] resultado:", resultado);
