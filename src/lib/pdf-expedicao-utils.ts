@@ -12,13 +12,7 @@
 // {...}` na inicialização e clobberava a v3 do CDN, gerando o erro
 // "API version X does not match Worker version Y".
 
-import {
-  pdfjs,
-  PDFDocument,
-  StandardFonts,
-  rgb,
-  degrees,
-} from "./pdf-worker";
+import { pdfjs, PDFDocument, rgb } from "./pdf-worker";
 
 // Tipos, constantes e `buildFilterGroups` vivem em `pdf-expedicao-grouping.ts`
 // (puro, testável em Node sem o shim de DOMMatrix que pdfjs-dist exige).
@@ -204,6 +198,27 @@ export async function analyzePDFPages(
     const totalMatch = text.match(/\bTotal\s+(\d+)\b/i);
     const totalQtd = totalMatch ? parseInt(totalMatch[1], 10) : null;
 
+    // [DIAG-EXPEDICAO] remover após investigação da regressão de ícone/quadrado
+    if (totalQtd == null) {
+      // Tenta achar QUALQUER ocorrência de "Total" pra ajudar a identificar
+      // mudança de formato do DDC (ex.: "Total: 3", "Total Itens 3", etc).
+      const ctx = text.match(/.{0,40}Total.{0,40}/i);
+      console.warn(
+        `[DIAG-EXPEDICAO] página ${i + 1} sem totalQtd. Contexto "Total" no PDF:`,
+        ctx ? ctx[0] : "(palavra Total não encontrada)",
+      );
+    }
+    console.log(
+      `[DIAG-EXPEDICAO] página ${i + 1}:`,
+      {
+        products,
+        kitType,
+        totalQtd,
+        trackingId: trackingId || "(sem)",
+        carrier: carrierFromPDF,
+      },
+    );
+
     pages.push({
       index: i,
       pageNum: i + 1,
@@ -273,20 +288,47 @@ export async function generateFilteredPDF(
   const embeddedModelImages = new Map<string, EmbeddedImage>();
   const neededModels = new Set<string>();
   for (const p of pagesToInclude) p.products.forEach((m) => neededModels.add(m));
+  // [DIAG-EXPEDICAO] remover após investigação da regressão de ícone/quadrado
+  console.log("[DIAG-EXPEDICAO] generateFilteredPDF iniciado", {
+    label,
+    paginas: pagesToInclude.length,
+    modelImagesKeys: Object.keys(modelImages),
+    neededModels: Array.from(neededModels),
+  });
   for (const model of neededModels) {
     const url = modelImages[model];
-    if (!url) continue;
+    if (!url) {
+      // [DIAG-EXPEDICAO]
+      console.warn(
+        `[DIAG-EXPEDICAO] modelo "${model}" detectado no PDF mas sem entrada em modelImages — nenhum ícone será desenhado`,
+      );
+      continue;
+    }
     try {
       const resp = await fetch(url);
-      if (!resp.ok) continue;
+      if (!resp.ok) {
+        // [DIAG-EXPEDICAO]
+        console.warn(
+          `[DIAG-EXPEDICAO] fetch da imagem do modelo "${model}" falhou — status=${resp.status} url=${url}`,
+        );
+        continue;
+      }
       const imgBytes = new Uint8Array(await resp.arrayBuffer());
       const isPng = /\.png(\?|$)/i.test(url) || imgBytes[0] === 0x89;
       const embed = isPng
         ? await newDoc.embedPng(imgBytes)
         : await newDoc.embedJpg(imgBytes);
       embeddedModelImages.set(model, embed);
-    } catch {
-      // Ignora — usa fallback vetorial
+      // [DIAG-EXPEDICAO]
+      console.log(
+        `[DIAG-EXPEDICAO] imagem do modelo "${model}" embutida (${isPng ? "PNG" : "JPG"}, ${imgBytes.byteLength} bytes)`,
+      );
+    } catch (err) {
+      // [DIAG-EXPEDICAO] antes era catch silencioso
+      console.error(
+        `[DIAG-EXPEDICAO] erro ao embutir imagem do modelo "${model}":`,
+        err,
+      );
     }
   }
 
@@ -310,25 +352,6 @@ export async function generateFilteredPDF(
         width: size,
         height: size,
         color: rgb(0, 0, 0),
-      });
-    }
-
-    const hasLua = pageInfo.products.includes("LUA");
-    const hasNba = pageInfo.products.includes("NBA");
-    let alertText = "";
-    if (hasLua && hasNba) alertText = "ATENÇÃO: MANGA LONGA E REGATA";
-    else if (hasLua) alertText = "ATENÇÃO: MANGA LONGA";
-    else if (hasNba) alertText = "ATENÇÃO: REGATA";
-
-    if (alertText) {
-      const font = await newDoc.embedFont(StandardFonts.HelveticaBold);
-      page.drawText(alertText, {
-        x: 10,
-        y: 200,
-        size: 8,
-        font,
-        color: rgb(0, 0, 0),
-        rotate: degrees(270),
       });
     }
 

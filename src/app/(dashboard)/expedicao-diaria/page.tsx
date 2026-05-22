@@ -842,21 +842,42 @@ export default function ExpedicaoDiariaPage() {
     (async () => {
       try {
         const res = await fetch("/api/modelo-principal");
-        if (!res.ok) return;
+        // [DIAG-EXPEDICAO] remover após investigação da regressão de ícone/quadrado
+        console.log("[DIAG-EXPEDICAO] /api/modelo-principal status:", res.status);
+        if (!res.ok) {
+          console.warn(
+            "[DIAG-EXPEDICAO] /api/modelo-principal falhou — modelImages ficará vazio",
+          );
+          return;
+        }
         const data = (await res.json()) as {
           modelos: Array<{
             codigo: string;
             etiquetaImagemUrl: string | null;
           }>;
         };
+        // [DIAG-EXPEDICAO] dump da resposta
+        console.log(
+          "[DIAG-EXPEDICAO] modelos retornados:",
+          data.modelos.map((m) => ({
+            codigo: m.codigo,
+            temImagem: Boolean(m.etiquetaImagemUrl),
+            urlPreview: m.etiquetaImagemUrl
+              ? m.etiquetaImagemUrl.slice(0, 80)
+              : null,
+          })),
+        );
         const map: ModelImageMap = {};
         for (const m of data.modelos) {
           if (m.etiquetaImagemUrl) map[m.codigo] = m.etiquetaImagemUrl;
         }
+        // [DIAG-EXPEDICAO] mapa final usado pelo generateFilteredPDF
+        console.log("[DIAG-EXPEDICAO] modelImages map keys:", Object.keys(map));
         setModelImages(map);
         setRegisteredModels(data.modelos.map((m) => m.codigo));
-      } catch {
-        // silencioso
+      } catch (err) {
+        // [DIAG-EXPEDICAO] antes era silencioso — expondo pra investigação
+        console.error("[DIAG-EXPEDICAO] erro ao carregar modelos:", err);
       }
     })();
   }, []);
