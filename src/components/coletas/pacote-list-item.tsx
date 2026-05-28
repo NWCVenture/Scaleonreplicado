@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { cn } from "@/lib/utils";
 import type { TransportadoraLabel } from "@/types/coletas";
 import { CARRIER_COLORS, CARRIER_DISPLAY } from "@/types/coletas";
@@ -10,11 +11,13 @@ interface PacoteListItemProps {
   index: number;
   carrier: TransportadoraLabel;
   hasDevolucao: boolean;
-  onRemove: () => void;
-  onEditDevolucao: () => void;
+  onRemove: (codigo: string) => void;
+  onEditDevolucao: (codigo: string) => void;
 }
 
-export function PacoteListItem({
+// memo + callbacks que recebem `codigo` por arg => parent passa refs estáveis,
+// só re-renderiza os itens cujas props realmente mudaram (não a lista inteira).
+export const PacoteListItem = memo(function PacoteListItem({
   codigo,
   index,
   carrier,
@@ -41,7 +44,7 @@ export function PacoteListItem({
 
       {hasDevolucao && (
         <button
-          onClick={onEditDevolucao}
+          onClick={() => onEditDevolucao(codigo)}
           className="flex-shrink-0 text-green-400 hover:text-green-300 p-1 rounded hover:bg-green-500/10 transition-colors"
           title="Editar devolucao"
         >
@@ -50,7 +53,7 @@ export function PacoteListItem({
       )}
 
       <button
-        onClick={onRemove}
+        onClick={() => onRemove(codigo)}
         className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-500/10 rounded text-red-400 hover:text-red-300"
         title="Remover pacote"
       >
@@ -58,4 +61,4 @@ export function PacoteListItem({
       </button>
     </div>
   );
-}
+});

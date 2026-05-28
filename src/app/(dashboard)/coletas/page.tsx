@@ -186,7 +186,7 @@ export default function ColetasPage() {
       cancelado = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
+  }, [session?.user?.id]);
 
   // PATCH com retry exponencial (1s, 2s, 4s). Atualiza saveState a cada
   // tentativa pra UI refletir 'saving' / 'saved' / 'error'.
@@ -308,7 +308,7 @@ export default function ColetasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     hydrated,
-    session,
+    session?.user?.id,
     bipagem.ids,
     bipagem.devolucoesData,
     bipagem.currentFunction,
@@ -386,7 +386,7 @@ export default function ColetasPage() {
 
     fetchAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
+  }, [session?.user?.id]);
 
   // ── Auto-focus textarea ───────────────────────────────────────────────────
   useEffect(() => {
@@ -862,6 +862,16 @@ export default function ColetasPage() {
     setDevolucaoModalOpen(true);
   }, [bipagem.carrierPatterns]);
 
+  // Callback estável para PacoteListItem — sem isso, ref nova a cada render
+  // quebraria o React.memo do item e re-renderizaria a lista inteira por bipe.
+  const handleRemovePacote = useCallback(
+    (codigo: string) => {
+      bipagem.removeId(codigo);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    },
+    [bipagem.removeId],
+  );
+
   const handleSaveDevolucao = useCallback(
     (data: DevolucaoFormData) => {
       bipagem.setDevolucao(devolucaoPacketId, data);
@@ -1145,7 +1155,12 @@ export default function ColetasPage() {
   );
 
   // ── Render ────────────────────────────────────────────────────────────────
-  if (isPending || isLoading) {
+  // Só esconde a tela na primeira carga (sem configs ainda). Se a sessão
+  // do better-auth revalidar no meio do uso (ex.: focus event do scanner),
+  // mantemos a UI montada — caso contrário a tela "pisca" a cada bipe.
+  const isFirstLoad =
+    isLoading && bipagem.carrierPatterns.length === 0 && bipagem.kitRules.length === 0;
+  if (isPending || isFirstLoad) {
     return (
       <div className="flex items-center justify-center py-24">
         <Loader2 className="h-8 w-8 animate-spin text-zinc-500" />
@@ -1438,11 +1453,8 @@ export default function ColetasPage() {
                       index={index}
                       carrier={detectCarrier(id, bipagem.carrierPatterns)}
                       hasDevolucao={!!bipagem.devolucoesData[id]}
-                      onRemove={() => {
-                        bipagem.removeId(id);
-                        setTimeout(() => inputRef.current?.focus(), 0);
-                      }}
-                      onEditDevolucao={() => handleOpenDevolucao(id)}
+                      onRemove={handleRemovePacote}
+                      onEditDevolucao={handleOpenDevolucao}
                     />
                   ))}
                 </div>
