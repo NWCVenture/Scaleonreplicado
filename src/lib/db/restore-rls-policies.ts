@@ -78,6 +78,12 @@ const TABELAS_PADRAO = [
   "confeccao_template_whatsapp",
   // Módulo Confecção — Alertas de atraso (RITM-22)
   "confeccao_alerta_atraso_log",
+  // Módulo Central de Envios — Cadastros (RITM-01)
+  "tamanho_alias",
+  "cor_alias",
+  "feriado",
+  "canal_regra_prazo",
+  "categoria_sku",
 ] as const;
 
 // Tabelas com variante "conta_id IS NULL": receiver insere antes de

@@ -35,6 +35,14 @@ This version has breaking changes — APIs, conventions, and file structure may 
 > Se policies foram dropadas por acidente, restaurar com:
 > `dotenv -e .env.prod -- npx tsx src/lib/db/restore-rls-policies.ts`
 
+> ⚠️ **Sequences e CHECK constraints também são ignorados por `drizzle-kit push`.**
+> Existem scripts `apply-confeccao-ritm-0X-supplements.ts` que criam esses
+> objetos manualmente. `db:migrate:prod` já encadeia `db:supplements:prod`
+> automaticamente — não rode o push direto, sempre via o script npm.
+> Ao criar novos sequences/CHECK/constraints fora do `schema.ts`, adicionar
+> ao próximo `apply-*-supplements.ts` (ou criar um novo e encadeá-lo no
+> script `db:supplements:prod`).
+
 ## Scripts disponíveis
 
 | Script | Descrição |
@@ -42,7 +50,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
 | `db:generate:dev` | Gera arquivo de migration (`.env.local`) |
 | `db:generate:prod` | Gera arquivo de migration (`.env.prod`) |
 | `db:migrate:dev` | Aplica migrations no Docker local |
-| `db:migrate:prod` | Push do schema para o Neon (prod) |
+| `db:migrate:prod` | Push do schema para o Neon (prod) + roda `db:supplements:prod` |
+| `db:supplements:dev` | Aplica sequences/CHECK constraints no Docker local (sanity check — migrations versionadas já criam) |
+| `db:supplements:prod` | Aplica sequences/CHECK constraints no Neon (obrigatório após push) |
 | `db:studio:dev` | Abre Drizzle Studio contra o banco local |
 | `db:studio:prod` | Abre Drizzle Studio contra o banco prod |
 | `db:seed:dev` | Seed de dados padrão no banco local |

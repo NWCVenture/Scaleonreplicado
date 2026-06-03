@@ -8,8 +8,10 @@ import {
   jsonb,
   pgEnum,
   real,
+  date,
   index,
   uniqueIndex,
+  unique,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations, sql, type InferSelectModel } from "drizzle-orm";
@@ -1225,6 +1227,15 @@ export const modeloPrincipal = pgTable(
     ativo: boolean("ativo").notNull().default(true),
     etiquetaImagemUrl: text("etiqueta_imagem_url"),
     etiquetaImagemAtualizadaEm: timestamp("etiqueta_imagem_atualizada_em"),
+    // RITM-01 Central de Envios — cadastro-driven, sem hardcode de domínio.
+    // corPadrao: quando um SKU do modelo aparece sem cor, assume esta cor
+    //   (operador configura na UI; ex.: produto de cor única).
+    // exigeTamanho: false = produto sem grade de tamanho (peça única).
+    // corMixDefault: override de MIX por N. Mapa N→cores. Null = MIX usa
+    //   top-N de modelo_cor ativas em ordem alfabética (caminho default).
+    corPadrao: text("cor_padrao"),
+    exigeTamanho: boolean("exige_tamanho").notNull().default(true),
+    corMixDefault: jsonb("cor_mix_default").$type<Record<string, string[]>>(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [
@@ -2506,3 +2517,179 @@ export type ConfeccaoAlertaAtrasoTipo =
 export type ConfeccaoAlertaAtrasoLog = InferSelectModel<
   typeof confeccaoAlertaAtrasoLog
 >;
+
+// ============================================================
+// MÓDULO CENTRAL DE ENVIOS — RITM-01 (cadastros)
+// ============================================================
+// Todas as tabelas abaixo são puramente cadastro-driven. Nada de modelo,
+// cor, tamanho, alias, kit ou categoria fica em código — só o operador
+// popula via UI (ou via API/sync no caso de feriados).
+
+// Alias de tamanho. modeloId nullable: null = alias global da conta;
+// preenchido = alias específico daquele modelo (precedência sobre o
+// global na resolução). Uso típico: 'EXG' → 'EGG'.
+export const tamanhoAlias = pgTable(
+  "tamanho_alias",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    modeloId: text("modelo_id").references(() => modeloPrincipal.id, {
+      onDelete: "cascade",
+    }),
+    codigoAlias: text("codigo_alias").notNull(),
+    codigoReal: text("codigo_real").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_tamanho_alias_conta").on(t.contaId),
+    index("idx_tamanho_alias_modelo").on(t.modeloId),
+    // NULLS NOT DISTINCT: trata `modelo_id IS NULL` como valor único, então
+    // não dá pra cadastrar dois aliases globais com o mesmo codigoAlias.
+    // Postgres 15+ (Neon 16 / local 17 — OK).
+    unique("uq_tamanho_alias_codigo")
+      .on(t.contaId, t.modeloId, t.codigoAlias)
+      .nullsNotDistinct(),
+  ],
+);
+
+// Alias de cor. Mesma estrutura de tamanho_alias.
+export const corAlias = pgTable(
+  "cor_alias",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    modeloId: text("modelo_id").references(() => modeloPrincipal.id, {
+      onDelete: "cascade",
+    }),
+    codigoAlias: text("codigo_alias").notNull(),
+    codigoReal: text("codigo_real").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_cor_alias_conta").on(t.contaId),
+    index("idx_cor_alias_modelo").on(t.modeloId),
+    unique("uq_cor_alias_codigo")
+      .on(t.contaId, t.modeloId, t.codigoAlias)
+      .nullsNotDistinct(),
+  ],
+);
+
+// Calendário de feriados. Feriado cadastrado é pulado no cálculo de dias
+// úteis (junto com sáb/dom). `fonte` distingue origem (manual via UI,
+// nacional_api via sync BrasilAPI no RITM-06, etc.) — não é enum porque
+// pode ganhar estadual/municipal sem migration.
+// `referencia_externa` é usada pra idempotência do sync nacional.
+// `data` é DATE puro (sem timezone) — evita o bug de timezone documentado
+// no doc de arquitetura.
+export const feriado = pgTable(
+  "feriado",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    data: date("data", { mode: "string" }).notNull(),
+    descricao: text("descricao").notNull(),
+    fonte: text("fonte").notNull().default("manual"),
+    referenciaExterna: text("referencia_externa"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_feriado_conta_data").on(t.contaId, t.data),
+    uniqueIndex("uq_feriado_conta_data").on(t.contaId, t.data),
+  ],
+);
+
+// Estratégia de cálculo de prazo de envio por canal.
+//   DIAS_UTEIS_POS_VENDA: prazo = data_da_venda + N dias úteis (TikTok, Shopee)
+//   CAMPO_EXPLICITO:      prazo extraído via regex de um campo do payload (ML)
+//   HIBRIDO:              tenta CAMPO_EXPLICITO; fallback DIAS_UTEIS_POS_VENDA
+export const canalEstrategiaPrazoEnum = pgEnum("canal_estrategia_prazo", [
+  "DIAS_UTEIS_POS_VENDA",
+  "CAMPO_EXPLICITO",
+  "HIBRIDO",
+]);
+
+// Regra de cálculo de prazo por (conta, plataforma) ou (conta, canal específico).
+// canal_venda_id = NULL → regra default da plataforma na conta;
+// canal_venda_id setado → regra específica daquele canal (sobrescreve a default).
+// Unique parcial garante: no máximo 1 default por (conta, plataforma) e
+// no máximo 1 regra por (conta, canal_venda_id).
+export const canalRegraPrazo = pgTable(
+  "canal_regra_prazo",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    canalVendaId: text("canal_venda_id").references(() => canaisVenda.id, {
+      onDelete: "cascade",
+    }),
+    plataforma: plataformaCanalEnum("plataforma").notNull(),
+    estrategia: canalEstrategiaPrazoEnum("estrategia").notNull(),
+    diasUteis: integer("dias_uteis"),
+    campoPrazo: text("campo_prazo"),
+    regexPrazo: text("regex_prazo"),
+    fallbackHoje: boolean("fallback_hoje").notNull().default(false),
+    ativo: boolean("ativo").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_canal_regra_prazo_conta").on(t.contaId),
+    uniqueIndex("uq_canal_regra_prazo_default_plataforma")
+      .on(t.contaId, t.plataforma)
+      .where(sql`canal_venda_id IS NULL`),
+    uniqueIndex("uq_canal_regra_prazo_canal_especifico")
+      .on(t.contaId, t.canalVendaId)
+      .where(sql`canal_venda_id IS NOT NULL`),
+  ],
+);
+
+// Categoria do extrator de Order IDs. Cada categoria tem regras em jsonb
+// avaliadas em runtime contra o SKU original (antes da explosão).
+// Tipos de regra suportados: 'regex' | 'composicao' | 'tag'.
+// Regras dentro do array são avaliadas como OR (qualquer match conta).
+export const categoriaSku = pgTable(
+  "categoria_sku",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    nome: text("nome").notNull(),
+    ordem: integer("ordem").notNull().default(0),
+    ativo: boolean("ativo").notNull().default(true),
+    regras: jsonb("regras").$type<CategoriaRegra[]>().notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("idx_categoria_sku_conta").on(t.contaId),
+    uniqueIndex("uq_categoria_sku_nome_conta").on(t.contaId, t.nome),
+  ],
+);
+
+// Type do payload em categoria_sku.regras. Validado no endpoint (Zod),
+// não no banco.
+export type CategoriaRegra =
+  | { tipo: "regex"; pattern: string; flags?: string }
+  | {
+      tipo: "composicao";
+      modeloCodigo: string;
+      qtdMin?: number;
+      qtdMax?: number;
+    }
+  | { tipo: "tag"; tags: string[] };
+
+export type TamanhoAlias = InferSelectModel<typeof tamanhoAlias>;
+export type CorAlias = InferSelectModel<typeof corAlias>;
+export type Feriado = InferSelectModel<typeof feriado>;
+export type CanalRegraPrazo = InferSelectModel<typeof canalRegraPrazo>;
+export type CanalEstrategiaPrazo =
+  (typeof canalEstrategiaPrazoEnum.enumValues)[number];
+export type CategoriaSku = InferSelectModel<typeof categoriaSku>;
