@@ -84,6 +84,8 @@ const TABELAS_PADRAO = [
   "feriado",
   "canal_regra_prazo",
   "categoria_sku",
+  // Módulo Central de Envios — Ingestão (RITM-02)
+  "ingestao_run",
 ] as const;
 
 // Tabelas com variante "conta_id IS NULL": receiver insere antes de

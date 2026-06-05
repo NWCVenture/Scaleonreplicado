@@ -2693,3 +2693,81 @@ export type CanalRegraPrazo = InferSelectModel<typeof canalRegraPrazo>;
 export type CanalEstrategiaPrazo =
   (typeof canalEstrategiaPrazoEnum.enumValues)[number];
 export type CategoriaSku = InferSelectModel<typeof categoriaSku>;
+
+// ============================================================
+// Módulo Central de Envios — Ingestão de arquivos (RITM-02)
+// ============================================================
+
+// Status do run de ingestão. Transições válidas:
+//   pendente -> processando -> concluido | erro
+// (sem reset; um run em erro fica em erro — reupload cria novo run).
+export const ingestaoRunStatusEnum = pgEnum("ingestao_run_status", [
+  "pendente",
+  "processando",
+  "concluido",
+  "erro",
+]);
+
+// Tipo do arquivo que está sendo ingerido. Cada tipo aciona um parser
+// específico (uma Inngest function por tipo). RITM-02 cobre tiktok_csv;
+// RITM-03 adiciona ml_xlsx.
+export const ingestaoRunTipoEnum = pgEnum("ingestao_run_tipo", [
+  "tiktok_csv",
+  "ml_xlsx",
+]);
+
+// Fila durável de processamento de uploads. Cada upload de CSV/XLSX cria
+// uma linha aqui; a Inngest function pega o evento, baixa o arquivo do
+// Blob, parseia e atualiza `resultado` + `status`.
+//
+// Frontend faz polling no Postgres (não no Inngest direto) — isso
+// garante que mesmo se a Inngest function reiniciar o estado oficial
+// vive no banco.
+//
+// `resultado` é inline (jsonb) quando < ~1MB; senão offload pro Blob via
+// `resultado_blob_url`. Apenas um dos dois é não-nulo quando
+// status='concluido'.
+export const ingestaoRun = pgTable(
+  "ingestao_run",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    usuarioId: text("usuario_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    tipo: ingestaoRunTipoEnum("tipo").notNull(),
+    arquivoNome: text("arquivo_nome").notNull(),
+    arquivoBlobUrl: text("arquivo_blob_url").notNull(),
+    arquivoTamanhoBytes: integer("arquivo_tamanho_bytes").notNull(),
+    arquivoContentType: text("arquivo_content_type"),
+    inngestEventId: text("inngest_event_id"),
+    status: ingestaoRunStatusEnum("status").notNull().default("pendente"),
+    totalLinhas: integer("total_linhas"),
+    linhasValidas: integer("linhas_validas"),
+    linhasDescartadas: integer("linhas_descartadas"),
+    descartesResumo: jsonb("descartes_resumo").$type<Record<string, number>>(),
+    resultado: jsonb("resultado"),
+    resultadoBlobUrl: text("resultado_blob_url"),
+    erro: text("erro"),
+    erroCodigo: text("erro_codigo"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+  },
+  (t) => [
+    index("idx_ingestao_run_conta_created").on(t.contaId, t.createdAt.desc()),
+    // Índice parcial pra encontrar runs ativas (pendentes/processando) sem
+    // varrer concluídos — usado pelo painel de runs em andamento e por
+    // futuros jobs de "run órfã" (vide caveat 1 do spec).
+    index("idx_ingestao_run_status_ativo")
+      .on(t.status)
+      .where(sql`status IN ('pendente', 'processando')`),
+  ],
+);
+
+export type IngestaoRun = InferSelectModel<typeof ingestaoRun>;
+export type IngestaoRunStatus =
+  (typeof ingestaoRunStatusEnum.enumValues)[number];
+export type IngestaoRunTipo = (typeof ingestaoRunTipoEnum.enumValues)[number];

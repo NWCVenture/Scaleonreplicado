@@ -431,17 +431,21 @@ Espelho da ferramenta original, com adaptações cadastro-driven.
 
 ## 10. Ingestão de arquivos (TikTok CSV / ML XLSX)
 
-### 10.1 TikTok CSV — `parser-tiktok-csv.ts`
+### 10.1 TikTok CSV — `parser-tiktok-csv.ts` (RITM-02, ✅ feito)
 
 - Nome padrão: `Para_enviar_pedido-AAAA-MM-DD-HH_MM.csv`.
 - Limpa `\t` no fim de campos (TikTok adiciona).
-- Lê via PapaParse (lib client) ou `csv-parse` (server). Em scaleon vai pro
-  Inngest, então **server-side** com `csv-parse`.
-- Colunas: `Order ID`, `Tracking ID`, `Seller SKU`, `Quantity`,
+- Server-side com `csv-parse/sync`. Função pura — input Buffer/string →
+  `ResultadoParser` (sem efeito colateral, idempotente).
+- Colunas obrigatórias: `Order ID`, `Tracking ID`, `Seller SKU`, `Quantity`,
   `Buyer Username`, `Created Time` (`MM/DD/YYYY HH:MM:SS AM/PM`),
-  `Order Status`, `Order Substatus`.
+  `Order Status`. `Order Substatus` opcional.
 - Filtra `Order Status = "A ser enviado"` (cancelamentos já vêm fora,
-  mas defensivo).
+  mas defensivo). Customizável via `opts.filtrarOrderStatus`.
+- Created Time é convertido pra ISO UTC assumindo TZ `America/Sao_Paulo`
+  (UTC-3 fixo). Parse manual (não usa `new Date(str)`) — determinístico
+  entre runtimes.
+- Limite hard de input: 50MB.
 
 ### 10.2 Mercado Livre XLSX — `parser-ml-xlsx.ts`
 
@@ -562,10 +566,10 @@ e Coletas).
 
 ## 15. Roadmap proposto (RITMs)
 
-| RITM     | Escopo                                                                    | Esforço |
-|----------|---------------------------------------------------------------------------|---------|
-| **01**   | Schema novo + migration + seeds NWC (modelos LUA/NBA/BALA/BOB + cores + tamanhos + kit rules iniciais) | M |
-| **02**   | Parser TikTok CSV server-side + ingestão via Inngest                      | M |
+| RITM     | Escopo                                                                    | Esforço | Status |
+|----------|---------------------------------------------------------------------------|---------|--------|
+| **01**   | Schema cadastros + migration + seed de defaults por plataforma            | M       | ✅ feito |
+| **02**   | Parser TikTok CSV server-side + ingestão via Inngest (`ingestao_run` + Inngest setup compartilhado) | M | ✅ feito |
 | **03**   | Parser ML XLSX server-side + dedup multi-conta                            | M |
 | **04**   | Pipeline de normalização cadastro-driven (alias, ambiguidade, parse)      | L |
 | **05**   | Pipeline de explosão (kit nominal + paramétrico + MIX cadastro-driven)    | M |

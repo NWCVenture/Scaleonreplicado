@@ -211,6 +211,13 @@
       "when": 1780523770410,
       "tag": "0029_narrow_pyro",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1780699467487,
+      "tag": "0030_gigantic_obadiah_stane",
+      "breakpoints": true
     }
   ]
 }

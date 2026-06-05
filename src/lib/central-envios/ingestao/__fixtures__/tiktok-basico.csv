@@ -1,0 +1,3 @@
+Order ID,Tracking ID,Seller SKU,Quantity,Buyer Username,Created Time,Order Status,Order Substatus
+577123456789012345,TTK0001ABC123,SKU-A,1,buyer1,06/05/2026 02:42:00 PM,A ser enviado,
+577123456789012346,TTK0002ABC123,SKU-B,2,buyer2,06/05/2026 03:00:00 PM,A ser enviado,
