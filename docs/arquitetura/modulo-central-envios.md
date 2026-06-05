@@ -275,9 +275,14 @@ cronograma**.
 
 ---
 
-## 5. Explosão
+## 5. Explosão (RITM-05, ✅ feito)
 
-`src/lib/central-envios/explosao/`. Ordem de resolução:
+`src/lib/central-envios/explosao/`. Função pública `explodirSku(parsed, ctx)`
+retorna `LinhasExplodidas | ExplosaoErro`. Loader
+`carregarContextoExplosao(tx, cadastro)` canonicaliza `sku_kit_regra`
+via `parsearSku` no momento do load — regras com problema entram em
+`kitRegrasComProblema` (informativo) e não bloqueiam o load. Ordem de
+resolução:
 
 1. **Match exato em `sku_kit_regra`** (string canônica do SKU). Usa direto
    os `sku_kit_componente`.
@@ -584,7 +589,7 @@ e Coletas).
 | **02**   | Parser TikTok CSV server-side + ingestão via Inngest (`ingestao_run` + Inngest setup compartilhado) | M | ✅ feito |
 | **03**   | Parser ML XLSX server-side + dedup intra-arquivo (reusa Inngest do RITM-02) | M       | ✅ feito |
 | **04**   | Pipeline de normalização cadastro-driven (parser puro `parsearSku`, snapshot + aliases) | L       | ✅ feito |
-| **05**   | Pipeline de explosão (kit nominal + paramétrico + MIX cadastro-driven)    | M |
+| **05**   | Pipeline de explosão (kit nominal + paramétrico + MIX cadastro-driven)    | M       | ✅ feito |
 | **06**   | Cálculo de prazo + tabela `canal_regra_prazo` + feriados                  | M |
 | **07**   | Sessão server-side + auto-save + Blob para snapshots grandes              | M |
 | **08**   | UI — Upload + Dashboard + Cronograma                                       | L |
