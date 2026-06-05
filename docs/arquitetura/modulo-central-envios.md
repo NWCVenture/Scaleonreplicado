@@ -447,17 +447,26 @@ Espelho da ferramenta original, com adaptações cadastro-driven.
   entre runtimes.
 - Limite hard de input: 50MB.
 
-### 10.2 Mercado Livre XLSX — `parser-ml-xlsx.ts`
+### 10.2 Mercado Livre XLSX — `parser-ml-xlsx.ts` (RITM-03, ✅ feito)
 
 - Nome padrão:
   `AAAAMMDD_Vendas_BR_Mercado_Libre_y_Mercado_Shops_AAAA-MM-DD_HH-MMhs_<CONTA>.xlsx`.
+  **Não validamos o nome** — operador pode renomear.
 - Header na **linha 6** (índice 5), dados a partir da linha 7.
-- Colunas: `N.º de venda`, `Data da venda`, `SKU`, `Variação`, `Estado`,
-  `Unidades`, `Comprador`, `N.º de envio`.
-- Ignora linhas `PACOTE_DIVERSOS` (descrição "Pacote de N produtos") —
-  já vêm na venda principal.
-- Dedup por `N.º de venda` (múltiplas contas podem repetir).
-- Em scaleon: `xlsx` lib server-side.
+  `XLSX.utils.sheet_to_json(sheet, { header: 1, range: 5, ... })`.
+- Colunas obrigatórias: `N.º de venda`, `Data da venda`, `SKU`,
+  `Unidades`. Opcionais: `Variação`, `Estado`, `Comprador`,
+  `N.º de envio`. Atenção: `N.º` usa `º` (U+00BA, ordinal masculino).
+- Ignora linhas `Pacote de N produtos` (agregador) — vêm linha-a-linha
+  na sequência.
+- **Dedup intra-arquivo** por `N.º de venda` — mantém primeiro. Dedup
+  cross-file fica pro RITM-07 (sessão merge).
+- `Data da venda` aceita Date nativo (`cellDates: true`), serial XLSX
+  numérico, ou string pt-BR `DD/MM/YYYY [HH:MM[:SS]]`. Quando não bate,
+  `dataVendaIso` fica `null` e o `dataVendaRaw` preserva o original.
+- `Estado` (com `coleta do dia X de Y`) vem **literal** — extração de
+  prazo é RITM-06.
+- Limite hard de input: 50MB (compartilhado com TikTok via re-export).
 
 ### 10.3 Multi-arquivo / multi-conta
 
@@ -570,7 +579,7 @@ e Coletas).
 |----------|---------------------------------------------------------------------------|---------|--------|
 | **01**   | Schema cadastros + migration + seed de defaults por plataforma            | M       | ✅ feito |
 | **02**   | Parser TikTok CSV server-side + ingestão via Inngest (`ingestao_run` + Inngest setup compartilhado) | M | ✅ feito |
-| **03**   | Parser ML XLSX server-side + dedup multi-conta                            | M |
+| **03**   | Parser ML XLSX server-side + dedup intra-arquivo (reusa Inngest do RITM-02) | M       | ✅ feito |
 | **04**   | Pipeline de normalização cadastro-driven (alias, ambiguidade, parse)      | L |
 | **05**   | Pipeline de explosão (kit nominal + paramétrico + MIX cadastro-driven)    | M |
 | **06**   | Cálculo de prazo + tabela `canal_regra_prazo` + feriados                  | M |

@@ -7,5 +7,6 @@
 //   - Eventos: "<modulo>/<acao>.<estado>" (ex.: "central-envios/parsear-tiktok.solicitado")
 
 import { parsearTikTokFunction } from "./central-envios/parsear-tiktok";
+import { parsearMlFunction } from "./central-envios/parsear-ml";
 
-export const functions = [parsearTikTokFunction];
+export const functions = [parsearTikTokFunction, parsearMlFunction];
