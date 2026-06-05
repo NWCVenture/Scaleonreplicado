@@ -214,10 +214,13 @@ No cronograma, ATRASADO é **absorvido em HOJE** (indicador visual vermelho).
 
 ---
 
-## 4. Normalização cadastro-driven
+## 4. Normalização cadastro-driven (RITM-04, ✅ feito)
 
 Substitui as regras hardcoded da Central de Envios. Tudo em
-`src/lib/central-envios/normalizacao/`.
+`src/lib/central-envios/normalizacao/`. Função pública:
+`parsearSku(input, contextoCadastro)` — pura, sem DB. O loader
+`carregarContextoCadastro(tx)` monta o snapshot via 7 queries paralelas
+e é chamado uma única vez por upload.
 
 ### 4.1 Tabela de tradução
 
@@ -580,7 +583,7 @@ e Coletas).
 | **01**   | Schema cadastros + migration + seed de defaults por plataforma            | M       | ✅ feito |
 | **02**   | Parser TikTok CSV server-side + ingestão via Inngest (`ingestao_run` + Inngest setup compartilhado) | M | ✅ feito |
 | **03**   | Parser ML XLSX server-side + dedup intra-arquivo (reusa Inngest do RITM-02) | M       | ✅ feito |
-| **04**   | Pipeline de normalização cadastro-driven (alias, ambiguidade, parse)      | L |
+| **04**   | Pipeline de normalização cadastro-driven (parser puro `parsearSku`, snapshot + aliases) | L       | ✅ feito |
 | **05**   | Pipeline de explosão (kit nominal + paramétrico + MIX cadastro-driven)    | M |
 | **06**   | Cálculo de prazo + tabela `canal_regra_prazo` + feriados                  | M |
 | **07**   | Sessão server-side + auto-save + Blob para snapshots grandes              | M |
