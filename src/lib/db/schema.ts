@@ -2771,3 +2771,59 @@ export type IngestaoRun = InferSelectModel<typeof ingestaoRun>;
 export type IngestaoRunStatus =
   (typeof ingestaoRunStatusEnum.enumValues)[number];
 export type IngestaoRunTipo = (typeof ingestaoRunTipoEnum.enumValues)[number];
+
+// ============================================================
+// Módulo Central de Envios — Sessão de planejamento (RITM-07)
+// ============================================================
+//
+// 1 sessão ativa por usuário (uq_sessao_ce_ativa_por_usuario). Mesmo
+// padrão de sessao_coletas. dados é jsonb inline (< 2MB serializado)
+// OU offload pro Blob (dados_blob_url). estatisticas é pequeno e
+// sempre inline.
+
+export const sessaoCentralEnviosStatusEnum = pgEnum(
+  "sessao_central_envios_status",
+  ["ativa", "encerrada"],
+);
+
+export const sessaoCentralEnviosMotivoEncerroEnum = pgEnum(
+  "sessao_central_envios_motivo_encerro",
+  ["finalizada", "forcada", "expirada"],
+);
+
+export const sessaoCentralEnvios = pgTable(
+  "sessao_central_envios",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    usuarioId: text("usuario_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    status: sessaoCentralEnviosStatusEnum("status").notNull().default("ativa"),
+    arquivosIngeridos: jsonb("arquivos_ingeridos").notNull().default([]),
+    dados: jsonb("dados"),
+    dadosBlobUrl: text("dados_blob_url"),
+    estatisticas: jsonb("estatisticas").notNull().default({}),
+    filtrosExtrator: jsonb("filtros_extrator").notNull().default({}),
+    tipoVisualizacao: text("tipo_visualizacao").notNull().default("dashboard"),
+    iniciouEm: timestamp("iniciou_em").notNull().defaultNow(),
+    ultimaAtividadeEm: timestamp("ultima_atividade_em").notNull().defaultNow(),
+    encerrouEm: timestamp("encerrou_em"),
+    encerradaMotivo: sessaoCentralEnviosMotivoEncerroEnum("encerrada_motivo"),
+  },
+  (t) => [
+    index("idx_sessao_ce_conta").on(t.contaId),
+    index("idx_sessao_ce_usuario").on(t.usuarioId),
+    uniqueIndex("uq_sessao_ce_ativa_por_usuario")
+      .on(t.usuarioId)
+      .where(sql`status = 'ativa'`),
+  ],
+);
+
+export type SessaoCentralEnvios = InferSelectModel<typeof sessaoCentralEnvios>;
+export type SessaoCentralEnviosStatus =
+  (typeof sessaoCentralEnviosStatusEnum.enumValues)[number];
+export type SessaoCentralEnviosMotivoEncerro =
+  (typeof sessaoCentralEnviosMotivoEncerroEnum.enumValues)[number];

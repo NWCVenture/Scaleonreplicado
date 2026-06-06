@@ -348,7 +348,12 @@ mais estados de pedido).
 
 ---
 
-## 7. Sessão server-side (mesmo padrão de Coletas)
+## 7. Sessão server-side (mesmo padrão de Coletas) (RITM-07, ✅ feito)
+
+Tabela `sessao_central_envios` (1 ativa por usuário via unique partial),
+composer `processarSessao` que liga RITM-02..06 e produz
+`PedidoEnriquecido[]` + `EstatisticasSessao`. Snapshot inline até 2MB,
+offload pro Vercel Blob acima. TTL 8h lazy no GET.
 
 ```
 Mount → GET /api/central-envios/sessao
@@ -599,7 +604,7 @@ e Coletas).
 | **04**   | Pipeline de normalização cadastro-driven (parser puro `parsearSku`, snapshot + aliases) | L       | ✅ feito |
 | **05**   | Pipeline de explosão (kit nominal + paramétrico + MIX cadastro-driven)    | M       | ✅ feito |
 | **06**   | Cálculo de prazo (3 estratégias) + dias úteis + sync BrasilAPI            | M       | ✅ feito |
-| **07**   | Sessão server-side + auto-save + Blob para snapshots grandes              | M |
+| **07**   | Sessão server-side + composer (parser→explosão→prazo) + auto-save + Blob  | M       | ✅ feito |
 | **08**   | UI — Upload + Dashboard + Cronograma                                       | L |
 | **09**   | UI — SKU × Dia + Extrator + Pedidos + Ambíguos                            | L |
 | **10**   | UI — Configurações (regras prazo, aliases, feriados, categorias)          | M |
