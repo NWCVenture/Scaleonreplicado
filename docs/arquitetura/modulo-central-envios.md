@@ -605,7 +605,7 @@ e Coletas).
 | **05**   | Pipeline de explosão (kit nominal + paramétrico + MIX cadastro-driven)    | M       | ✅ feito |
 | **06**   | Cálculo de prazo (3 estratégias) + dias úteis + sync BrasilAPI            | M       | ✅ feito |
 | **07**   | Sessão server-side + composer (parser→explosão→prazo) + auto-save + Blob  | M       | ✅ feito |
-| **08**   | UI — Upload + Dashboard + Cronograma                                       | L |
+| **08**   | UI — Upload + Dashboard + Cronograma                                       | L       | ✅ feito |
 | **09**   | UI — SKU × Dia + Extrator + Pedidos + Ambíguos                            | L |
 | **10**   | UI — Configurações (regras prazo, aliases, feriados, categorias)          | M |
 | **11**   | Histórico/arquivamento (`planejamento_envios`) + email de resumo          | S |

@@ -37,6 +37,7 @@ import {
   Loader2,
   UserCog,
   Building2,
+  Send,
 } from "lucide-react";
 
 const expedicaoHrefs = [
@@ -48,6 +49,7 @@ const expedicaoHrefs = [
   "/produtos-avariados",
   "/pedidos-urgentes",
   "/expedicao-diaria",
+  "/central-envios",
   "/gerenciar-skus",
 ];
 
@@ -72,6 +74,7 @@ const expedicaoAllowedPaths = [
   "/coletas",
   "/pedidos-urgentes",
   "/expedicao-diaria",
+  "/central-envios",
   "/cadastro",
   "/estante-virtual",
   "/contagem",
@@ -107,6 +110,11 @@ const expedicaoItems = [
     href: "/expedicao-diaria",
     label: "Expedicao Diaria",
     icon: FileDown,
+  },
+  {
+    href: "/central-envios",
+    label: "Central de Envios",
+    icon: Send,
   },
   { href: "/gerenciar-skus", label: "Gerenciar SKUs", icon: Tag },
 ];
@@ -276,7 +284,7 @@ export default function DashboardLayout({
     );
   }
 
-  const expedicaoRoleAllowed = new Set(["/coletas", "/pedidos-urgentes", "/expedicao-diaria", "/cadastro", "/estante-virtual", "/contagem", "/gerenciar-skus"]);
+  const expedicaoRoleAllowed = new Set(["/coletas", "/pedidos-urgentes", "/expedicao-diaria", "/central-envios", "/cadastro", "/estante-virtual", "/contagem", "/gerenciar-skus"]);
   const filteredExpedicao = isExpedicao
     ? expedicaoItems.filter((item) => expedicaoRoleAllowed.has(item.href))
     : expedicaoItems;
