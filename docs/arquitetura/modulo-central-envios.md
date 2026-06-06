@@ -302,7 +302,15 @@ resolução:
 
 ---
 
-## 6. Cálculo de prazo (delegado por canal)
+## 6. Cálculo de prazo (delegado por canal) (RITM-06, ✅ feito)
+
+Função pública `calcularPrazo(entrada, ctx)` retorna `ResultadoCalculoPrazo`
+com status `CALCULADO | HOJE | SEM_DATA` + `prazoIso` (data civil SP).
+Loader `carregarContextoPrazo(tx)` snapshots regras + feriados de ano
+atual e seguinte. `adicionarDiasUteis` e `parsePrazoExplicito` são puros.
+Sync BrasilAPI (`sincronizarFeriadosNacionais`) preserva entries
+`fonte='manual'`; endpoint POST `/api/central-envios/configuracoes/feriado/sync-nacional`
+requer admin.
 
 Tabela `canal_regra_prazo` traduz as duas estratégias atuais:
 
@@ -590,7 +598,7 @@ e Coletas).
 | **03**   | Parser ML XLSX server-side + dedup intra-arquivo (reusa Inngest do RITM-02) | M       | ✅ feito |
 | **04**   | Pipeline de normalização cadastro-driven (parser puro `parsearSku`, snapshot + aliases) | L       | ✅ feito |
 | **05**   | Pipeline de explosão (kit nominal + paramétrico + MIX cadastro-driven)    | M       | ✅ feito |
-| **06**   | Cálculo de prazo + tabela `canal_regra_prazo` + feriados                  | M |
+| **06**   | Cálculo de prazo (3 estratégias) + dias úteis + sync BrasilAPI            | M       | ✅ feito |
 | **07**   | Sessão server-side + auto-save + Blob para snapshots grandes              | M |
 | **08**   | UI — Upload + Dashboard + Cronograma                                       | L |
 | **09**   | UI — SKU × Dia + Extrator + Pedidos + Ambíguos                            | L |
