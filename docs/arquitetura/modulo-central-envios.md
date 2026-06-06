@@ -437,7 +437,10 @@ Espelho da ferramenta original, com adaptações cadastro-driven.
 | 4 | Extrator      | `extrator-tab.tsx`        | 8 filtros (plataforma, prazo, status, **categoria — do cadastro**, modelo, cor, tamanho, busca). Copy Order IDs / Tracking IDs / TXT. |
 | 5 | Pedidos       | `pedidos-tab.tsx`         | Tabela completa com explosão legível. Limite UI 500 linhas. |
 | 6 | Ambíguos      | `ambiguos-tab.tsx`        | Lista + "tipo de ambiguidade" + botão "Editar manualmente" (V2: cria entry em `sku_kit_regra` direto) |
-| 7 | Configurações | `configuracoes-view.tsx`  | CRUD de regras de prazo, aliases, feriados, categorias |
+
+> **Configurações vivem em rota separada** (`/central-envios/configuracoes`),
+> não como tab — vide §15 RITM-10. Acesso via ícone gear no header da
+> página principal.
 
 **Mudanças visuais relevantes vs standalone:**
 
@@ -607,7 +610,7 @@ e Coletas).
 | **07**   | Sessão server-side + composer (parser→explosão→prazo) + auto-save + Blob  | M       | ✅ feito |
 | **08**   | UI — Upload + Dashboard + Cronograma                                       | L       | ✅ feito |
 | **09**   | UI — SKU × Dia + Extrator + Pedidos + Ambíguos                            | L       | ✅ feito |
-| **10**   | UI — Configurações (regras prazo, aliases, feriados, categorias)          | M |
+| **10**   | UI — Configurações (regras prazo, aliases, feriados, categorias)          | M       | ✅ feito |
 | **11**   | Histórico/arquivamento (`planejamento_envios`) + email de resumo          | S |
 | **V2-01** | Pull automático via `ICanalAdapter` (substituir upload onde houver adapter) | L |
 | **V2-02** | "Editar manualmente" em ambíguos → cria `sku_kit_regra`                  | S |

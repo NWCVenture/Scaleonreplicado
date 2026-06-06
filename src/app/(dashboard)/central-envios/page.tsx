@@ -1,6 +1,7 @@
 "use client";
 
-import { Loader2, Save, AlertCircle } from "lucide-react";
+import Link from "next/link";
+import { Loader2, Save, AlertCircle, Settings } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -99,6 +100,11 @@ export default function CentralEnviosPage() {
               </Button>
             </>
           )}
+          <Button size="sm" variant="ghost" asChild>
+            <Link href="/central-envios/configuracoes" title="Configurações">
+              <Settings className="h-4 w-4" />
+            </Link>
+          </Button>
         </div>
       </header>
 

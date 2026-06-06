@@ -78,3 +78,65 @@ export type FiltrosExtrator = {
   busca?: string;
   soAmbiguos?: boolean;
 };
+
+// ------------------------------------------------------------------
+// Tipos da UI de Configurações (RITM-10)
+// ------------------------------------------------------------------
+
+export type PapelClient =
+  | "owner"
+  | "admin"
+  | "gerente"
+  | "operador"
+  | "costureiro"
+  | "financeiro"
+  | "fiscal"
+  | "supervisor"
+  | "funcionario"
+  | "expedicao";
+
+export type PlataformaCanalClient = "tiktok_shop" | "shopee" | "mercado_livre";
+
+export type CanalEstrategiaPrazoClient =
+  | "DIAS_UTEIS_POS_VENDA"
+  | "CAMPO_EXPLICITO"
+  | "HIBRIDO";
+
+export type CanalVendaResumo = {
+  id: string;
+  nomeExibicao: string;
+  plataforma: PlataformaCanalClient;
+};
+
+export type RegraPrazoClient = {
+  id: string;
+  canalVendaId: string | null;
+  canalNomeExibicao: string | null;
+  plataforma: PlataformaCanalClient;
+  estrategia: CanalEstrategiaPrazoClient;
+  diasUteis: number | null;
+  campoPrazo: string | null;
+  regexPrazo: string | null;
+  fallbackHoje: boolean;
+  ativo: boolean;
+};
+
+export type ModeloResumo = {
+  id: string;
+  codigo: string;
+};
+
+export type AliasClient = {
+  id: string;
+  modeloId: string | null;
+  modeloCodigo: string | null;
+  codigoAlias: string;
+  codigoReal: string;
+};
+
+export type FeriadoClient = {
+  id: string;
+  data: string;
+  descricao: string;
+  fonte: string;
+};
