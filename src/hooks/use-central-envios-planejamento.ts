@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { nanoid } from "nanoid";
 import type {
   ArquivoIngerido,
+  CategoriaSkuClient,
   EstatisticasSessao,
   PedidoEnriquecido,
   SessaoCentralEnviosResumo,
@@ -65,6 +66,7 @@ export function useCentralEnviosPlanejamento() {
   const [filtrosExtrator, setFiltrosExtratorState] = useState<
     Record<string, unknown>
   >({});
+  const [categorias, setCategorias] = useState<CategoriaSkuClient[]>([]);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">(
     "idle",
   );
@@ -141,8 +143,24 @@ export function useCentralEnviosPlanejamento() {
     }
   }, []);
 
+  // Carrega categorias do extrator uma vez por mount.
+  const carregarCategorias = useCallback(async () => {
+    try {
+      const r = await fetch(
+        "/api/central-envios/configuracoes/categoria-sku",
+        { cache: "no-store" },
+      );
+      if (!r.ok) return;
+      const json = (await r.json()) as { categorias: CategoriaSkuClient[] };
+      setCategorias(json.categorias ?? []);
+    } catch {
+      /* silencioso — extrator funciona sem categorias */
+    }
+  }, []);
+
   useEffect(() => {
     carregarSessao();
+    carregarCategorias();
     const pollers = pollersRef.current;
     const saveTimer = saveTimerRef.current;
     return () => {
@@ -151,7 +169,7 @@ export function useCentralEnviosPlanejamento() {
       pollers.clear();
       if (saveTimer) clearTimeout(saveTimer);
     };
-  }, [carregarSessao]);
+  }, [carregarSessao, carregarCategorias]);
 
   // ---- auto-save filtros / aba ------------------------------------
   const agendarSave = useCallback(
@@ -441,6 +459,7 @@ export function useCentralEnviosPlanejamento() {
     setAbaAtiva,
     filtrosExtrator,
     setFiltrosExtrator,
+    categorias,
     saveState,
     subirArquivos,
     limparConcluidos,

@@ -8,6 +8,10 @@ import { UploadDropzone } from "@/components/central-envios/upload-dropzone";
 import { IngestaoStatus } from "@/components/central-envios/ingestao-status";
 import { DashboardTab } from "@/components/central-envios/dashboard-tab";
 import { CronogramaTab } from "@/components/central-envios/cronograma-tab";
+import { SkuDiaTab } from "@/components/central-envios/sku-dia-tab";
+import { ExtratorTab } from "@/components/central-envios/extrator-tab";
+import { PedidosTab } from "@/components/central-envios/pedidos-tab";
+import { AmbiguosTab } from "@/components/central-envios/ambiguos-tab";
 import { useCentralEnviosPlanejamento } from "@/hooks/use-central-envios-planejamento";
 
 export default function CentralEnviosPage() {
@@ -20,11 +24,17 @@ export default function CentralEnviosPage() {
     uploads,
     abaAtiva,
     setAbaAtiva,
+    filtrosExtrator,
+    setFiltrosExtrator,
+    categorias,
     saveState,
     subirArquivos,
     limparConcluidos,
     encerrarSessao,
   } = useCentralEnviosPlanejamento();
+
+  const hojeIso = estatisticas?.hojeIso ?? new Date().toISOString().slice(0, 10);
+  const ambiguosCount = dados.filter((p) => p.parsed.kind === "AMBIGUO").length;
 
   if (status === "loading") {
     return (
@@ -111,6 +121,20 @@ export default function CentralEnviosPage() {
             )}
           </TabsTrigger>
           <TabsTrigger value="cronograma">Cronograma</TabsTrigger>
+          <TabsTrigger value="sku-dia">SKU × Dia</TabsTrigger>
+          <TabsTrigger value="extrator">Extrator</TabsTrigger>
+          <TabsTrigger value="pedidos">Pedidos</TabsTrigger>
+          <TabsTrigger value="ambiguos">
+            Ambíguos
+            {ambiguosCount > 0 && (
+              <Badge
+                variant="secondary"
+                className="ml-2 bg-amber-100 text-amber-800"
+              >
+                {ambiguosCount}
+              </Badge>
+            )}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="upload" className="space-y-4">
@@ -155,6 +179,28 @@ export default function CentralEnviosPage() {
 
         <TabsContent value="cronograma">
           <CronogramaTab dados={dados} />
+        </TabsContent>
+
+        <TabsContent value="sku-dia">
+          <SkuDiaTab dados={dados} hojeIso={hojeIso} />
+        </TabsContent>
+
+        <TabsContent value="extrator">
+          <ExtratorTab
+            dados={dados}
+            hojeIso={hojeIso}
+            categorias={categorias}
+            filtros={filtrosExtrator}
+            setFiltros={setFiltrosExtrator}
+          />
+        </TabsContent>
+
+        <TabsContent value="pedidos">
+          <PedidosTab dados={dados} hojeIso={hojeIso} />
+        </TabsContent>
+
+        <TabsContent value="ambiguos">
+          <AmbiguosTab dados={dados} />
         </TabsContent>
       </Tabs>
     </div>

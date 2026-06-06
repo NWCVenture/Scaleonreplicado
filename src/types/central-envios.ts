@@ -47,3 +47,34 @@ export type UploadEmAndamento = {
   tipoIngestao: "tiktok_csv" | "ml_xlsx";
   estado: UploadEstado;
 };
+
+export type CategoriaRegra =
+  | { tipo: "regex"; pattern: string; flags?: string }
+  | {
+      tipo: "composicao";
+      modeloCodigo: string;
+      qtdMin?: number;
+      qtdMax?: number;
+    }
+  | { tipo: "tag"; tags: string[] };
+
+export type CategoriaSkuClient = {
+  id: string;
+  nome: string;
+  ordem: number;
+  ativo: boolean;
+  regras: CategoriaRegra[];
+};
+
+export type StatusPrazoUi = "ATRASADO" | "HOJE" | "NO_PRAZO" | "SEM_DATA";
+
+export type FiltrosExtrator = {
+  plataformas?: string[];
+  statusPrazo?: StatusPrazoUi[];
+  categoriaIds?: string[];
+  modelos?: string[];
+  cores?: string[];
+  tamanhos?: string[];
+  busca?: string;
+  soAmbiguos?: boolean;
+};
