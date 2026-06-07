@@ -42,7 +42,7 @@ function CardKpi({ label, valor, icone: Icone, tom }: CardKpiProps) {
               {label}
             </p>
             <p className={cn("text-3xl font-semibold mt-1", TOM_CLASSES[tom])}>
-              {valor.toLocaleString("pt-BR")}
+              {(valor ?? 0).toLocaleString("pt-BR")}
             </p>
           </div>
           <Icone className={cn("h-5 w-5", TOM_CLASSES[tom])} />
@@ -82,7 +82,7 @@ function ListaBreakdown({
             <li key={nome} className="flex justify-between items-baseline text-sm">
               <span className="truncate mr-2">{nome}</span>
               <span className="font-mono font-medium tabular-nums">
-                {count.toLocaleString("pt-BR")}
+                {(count ?? 0).toLocaleString("pt-BR")}
               </span>
             </li>
           ))}
@@ -93,7 +93,7 @@ function ListaBreakdown({
 }
 
 export function DashboardTab({ estatisticas }: Props) {
-  if (!estatisticas || estatisticas.totalPedidos === 0) {
+  if (!estatisticas || !estatisticas.totalPedidos) {
     return (
       <div className="rounded-lg border border-dashed py-12 px-4 text-center text-muted-foreground">
         <Package className="mx-auto h-10 w-10 opacity-40" />
