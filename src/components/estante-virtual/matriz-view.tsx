@@ -13,10 +13,8 @@ import {
   Boxes,
   CheckCircle2,
   Inbox,
-  Gauge,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import {
   Collapsible,
   CollapsibleContent,
@@ -86,8 +84,8 @@ export function MatrizView({ fardos, nomeEstante }: MatrizViewProps) {
         </Collapsible>
       )}
 
-      {/* ── KPIs estendidos ────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      {/* ── KPIs ───────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard
           icon={<Package className="h-4 w-4" />}
           label="Peças"
@@ -108,18 +106,6 @@ export function MatrizView({ fardos, nomeEstante }: MatrizViewProps) {
           label="Parciais"
           value={agregado.fardosParciais}
         />
-        <Card className="bg-slate-900 border-slate-700">
-          <CardContent className="p-3">
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1.5">
-              <Gauge className="h-4 w-4" />
-              <span>Ocupação</span>
-            </div>
-            <p className="text-2xl font-bold leading-none mb-2">
-              {agregado.ocupacaoPct}%
-            </p>
-            <Progress value={agregado.ocupacaoPct} className="h-1.5" />
-          </CardContent>
-        </Card>
       </div>
 
       {/* ── Matriz cor × tamanho ───────────────────────────────────────── */}

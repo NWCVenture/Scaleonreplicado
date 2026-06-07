@@ -96,10 +96,31 @@ test("tamanhos ordenados pela ordem canônica TAMANHO_ORDER", () => {
   assert.deepEqual(r.tamanhosOrdenados, ["P", "M", "G"]);
 });
 
-test("ocupacaoPct = round(totalPecas / (totalFardos * 60) * 100)", () => {
+test("matrizFardos conta fardos por cor × tamanho (não peças)", () => {
   const r = agregarFardos(FIXTURE_BASE);
-  // 245 / (5 * 60) * 100 = 81.666... → 82
-  assert.equal(r.ocupacaoPct, 82);
+  // PT G tem 3 fardos (60, 60, 40)
+  assert.equal(r.matrizFardos.PT.G, 3);
+  // AZ M tem 1 fardo
+  assert.equal(r.matrizFardos.AZ.M, 1);
+  // BR P tem 1 fardo
+  assert.equal(r.matrizFardos.BR.P, 1);
+  // Células não preenchidas devem ser 0
+  assert.equal(r.matrizFardos.PT.P, 0);
+  assert.equal(r.matrizFardos.AZ.G, 0);
+});
+
+test("fardosPorCor e fardosPorTamanho conferem com totalFardos", () => {
+  const r = agregarFardos(FIXTURE_BASE);
+  assert.equal(r.fardosPorCor.PT, 3);
+  assert.equal(r.fardosPorCor.AZ, 1);
+  assert.equal(r.fardosPorCor.BR, 1);
+  assert.equal(r.fardosPorTamanho.G, 3);
+  assert.equal(r.fardosPorTamanho.M, 1);
+  assert.equal(r.fardosPorTamanho.P, 1);
+  const somaCor = Object.values(r.fardosPorCor).reduce((s, v) => s + v, 0);
+  const somaTam = Object.values(r.fardosPorTamanho).reduce((s, v) => s + v, 0);
+  assert.equal(somaCor, r.totalFardos);
+  assert.equal(somaTam, r.totalFardos);
 });
 
 test("porSku ordenado por compareSKU e contagens corretas", () => {
@@ -123,13 +144,11 @@ test("fixture base não gera avisos", () => {
   assert.equal(r.avisos.length, 0);
 });
 
-test("caixa acima do padrão: conta como cheia + aviso, ocupação capada", () => {
-  // 1 fardo com 80 peças → ocupação real seria 80/60 = 133%, deve capar em 100
+test("caixa acima do padrão: conta como cheia + gera aviso", () => {
   const r = agregarFardos([fardo("1", "LUA PT G", "OP100", 80)]);
   assert.equal(r.totalPecas, 80);
   assert.equal(r.fardosCheios, 1);
   assert.equal(r.fardosParciais, 0);
-  assert.equal(r.ocupacaoPct, 100);
   const avisosAcima = r.avisos.filter((a) => a.tipo === "caixa_acima_padrao");
   assert.equal(avisosAcima.length, 1);
   assert.equal(avisosAcima[0].fardoId, "1");
@@ -176,7 +195,6 @@ test("fixture vazia: totais zerados, matriz vazia, sem avisos", () => {
   assert.equal(r.totalFardos, 0);
   assert.equal(r.fardosCheios, 0);
   assert.equal(r.fardosParciais, 0);
-  assert.equal(r.ocupacaoPct, 0);
   assert.deepEqual(r.lotes, []);
   assert.deepEqual(r.porSku, []);
   assert.deepEqual(r.coresOrdenadas, []);
@@ -185,7 +203,7 @@ test("fixture vazia: totais zerados, matriz vazia, sem avisos", () => {
   assert.equal(r.avisos.length, 0);
 });
 
-test("opts.caixaPadrao customizado afeta classificação e ocupação", () => {
+test("opts.caixaPadrao customizado afeta classificação de cheio/parcial", () => {
   // Com caixaPadrao=40: o fardo de 40 vira cheio, e o de 25 continua parcial (falta 15)
   const r = agregarFardos(
     [
@@ -197,6 +215,4 @@ test("opts.caixaPadrao customizado afeta classificação e ocupação", () => {
   assert.equal(r.fardosCheios, 1);
   assert.equal(r.fardosParciais, 1);
   assert.equal(r.caixasParciais[0].faltaParaCheia, 15);
-  // Ocupação: 65 / (2*40) = 81.25 → 81
-  assert.equal(r.ocupacaoPct, 81);
 });

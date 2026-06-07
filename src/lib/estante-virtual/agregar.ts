@@ -64,12 +64,14 @@ export interface EstanteAgregada {
   totalFardos: number;
   fardosCheios: number;
   fardosParciais: number;
-  ocupacaoPct: number;
   lotes: string[];
   porSku: ResumoSku[];
   matriz: Record<string, Record<string, number>>;
+  matrizFardos: Record<string, Record<string, number>>;
   totaisPorCor: Record<string, number>;
   totaisPorTamanho: Record<string, number>;
+  fardosPorCor: Record<string, number>;
+  fardosPorTamanho: Record<string, number>;
   coresOrdenadas: string[];
   tamanhosOrdenados: string[];
   caixasParciais: CaixaParcial[];
@@ -119,6 +121,8 @@ export function agregarFardos(
   const porSkuMap = new Map<string, ResumoSku>();
   // Matriz: cor → tamanho → peças
   const matriz: Record<string, Record<string, number>> = {};
+  // Matriz paralela: cor → tamanho → nº de fardos (independente da quantidade)
+  const matrizFardos: Record<string, Record<string, number>> = {};
   const caixasParciais: CaixaParcial[] = [];
 
   for (const fardo of fardos) {
@@ -181,9 +185,11 @@ export function agregarFardos(
     coresVistas.add(cor);
     tamanhosVistos.add(tamanho);
 
-    // Acumular matriz
+    // Acumular matriz (peças) e matrizFardos (contagem de fardos)
     if (!matriz[cor]) matriz[cor] = {};
     matriz[cor][tamanho] = (matriz[cor][tamanho] ?? 0) + fardo.quantidade;
+    if (!matrizFardos[cor]) matrizFardos[cor] = {};
+    matrizFardos[cor][tamanho] = (matrizFardos[cor][tamanho] ?? 0) + 1;
 
     // Acumular porSku
     const existente = porSkuMap.get(fardo.sku);
@@ -208,9 +214,6 @@ export function agregarFardos(
   }
 
   const totalFardos = fardos.length;
-  const ocupacaoBruta =
-    totalFardos === 0 ? 0 : (totalPecas / (totalFardos * caixaPadrao)) * 100;
-  const ocupacaoPct = Math.min(100, Math.round(ocupacaoBruta));
 
   const coresOrdenadas = ordenarPorCanonica([...coresVistas], COR_ORDER);
   const tamanhosOrdenados = ordenarPorCanonica(
@@ -218,24 +221,37 @@ export function agregarFardos(
     TAMANHO_ORDER,
   );
 
-  // Garantir células zeradas pra toda combinação cor × tamanho vista.
+  // Garantir células zeradas em ambas as matrizes pra toda combinação vista.
   for (const cor of coresOrdenadas) {
     if (!matriz[cor]) matriz[cor] = {};
+    if (!matrizFardos[cor]) matrizFardos[cor] = {};
     for (const tam of tamanhosOrdenados) {
       if (matriz[cor][tam] == null) matriz[cor][tam] = 0;
+      if (matrizFardos[cor][tam] == null) matrizFardos[cor][tam] = 0;
     }
   }
 
-  // Totais marginais
+  // Totais marginais — peças e fardos
   const totaisPorCor: Record<string, number> = {};
   const totaisPorTamanho: Record<string, number> = {};
-  for (const cor of coresOrdenadas) totaisPorCor[cor] = 0;
-  for (const tam of tamanhosOrdenados) totaisPorTamanho[tam] = 0;
+  const fardosPorCor: Record<string, number> = {};
+  const fardosPorTamanho: Record<string, number> = {};
+  for (const cor of coresOrdenadas) {
+    totaisPorCor[cor] = 0;
+    fardosPorCor[cor] = 0;
+  }
+  for (const tam of tamanhosOrdenados) {
+    totaisPorTamanho[tam] = 0;
+    fardosPorTamanho[tam] = 0;
+  }
   for (const cor of coresOrdenadas) {
     for (const tam of tamanhosOrdenados) {
-      const v = matriz[cor][tam] ?? 0;
-      totaisPorCor[cor] += v;
-      totaisPorTamanho[tam] += v;
+      const pecas = matriz[cor][tam] ?? 0;
+      const nfardos = matrizFardos[cor][tam] ?? 0;
+      totaisPorCor[cor] += pecas;
+      totaisPorTamanho[tam] += pecas;
+      fardosPorCor[cor] += nfardos;
+      fardosPorTamanho[tam] += nfardos;
     }
   }
 
@@ -252,12 +268,14 @@ export function agregarFardos(
     totalFardos,
     fardosCheios,
     fardosParciais,
-    ocupacaoPct,
     lotes,
     porSku,
     matriz,
+    matrizFardos,
     totaisPorCor,
     totaisPorTamanho,
+    fardosPorCor,
+    fardosPorTamanho,
     coresOrdenadas,
     tamanhosOrdenados,
     caixasParciais,

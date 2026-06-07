@@ -4,7 +4,6 @@
 // exceljs é carregado via dynamic import — evita ~800kB no bundle inicial.
 
 import type { EstanteAgregada, EstanteFardoItem } from "./agregar";
-import { CAIXA_PADRAO } from "./agregar";
 
 interface ExportContext {
   agregado: EstanteAgregada;
@@ -51,8 +50,6 @@ export async function exportarEstanteXlsx(ctx: ExportContext): Promise<void> {
     ["Total de fardos", agregado.totalFardos],
     ["Fardos cheios", agregado.fardosCheios],
     ["Fardos parciais", agregado.fardosParciais],
-    ["Ocupação (%)", agregado.ocupacaoPct],
-    ["Caixa padrão (peças)", CAIXA_PADRAO],
   ];
   for (const [k, v] of linhasResumo) {
     const row = resumo.addRow({ k, v });
@@ -67,9 +64,13 @@ export async function exportarEstanteXlsx(ctx: ExportContext): Promise<void> {
     }
   }
 
-  // ── Aba 2: Matriz cor × tamanho ──────────────────────────────────────────
+  // ── Aba 2: Matriz cor × tamanho (peças + fardos empilhados) ─────────────
   const matriz = wb.addWorksheet("Matriz");
   const headerMatriz = ["", ...agregado.tamanhosOrdenados, "Total"];
+
+  // Bloco 1: peças por cor × tamanho
+  const tituloPecas = matriz.addRow(["Peças por cor × tamanho"]);
+  tituloPecas.font = { bold: true, size: 12 };
   matriz.addRow(headerMatriz).font = { bold: true };
   for (const cor of agregado.coresOrdenadas) {
     const linha: Array<string | number> = [cor];
@@ -81,15 +82,42 @@ export async function exportarEstanteXlsx(ctx: ExportContext): Promise<void> {
     row.getCell(1).font = { bold: true };
     row.getCell(headerMatriz.length).font = { bold: true };
   }
-  const linhaTotal: Array<string | number> = ["Total"];
-  for (const tam of agregado.tamanhosOrdenados) {
-    linhaTotal.push(agregado.totaisPorTamanho[tam] ?? 0);
+  const totalPecasRow = matriz.addRow([
+    "Total",
+    ...agregado.tamanhosOrdenados.map((t) => agregado.totaisPorTamanho[t] ?? 0),
+    agregado.totalPecas,
+  ]);
+  totalPecasRow.font = { bold: true };
+
+  // Separador visual entre as duas matrizes
+  matriz.addRow([]);
+  matriz.addRow([]);
+
+  // Bloco 2: fardos por cor × tamanho
+  const tituloFardos = matriz.addRow(["Fardos por cor × tamanho"]);
+  tituloFardos.font = { bold: true, size: 12 };
+  matriz.addRow(headerMatriz).font = { bold: true };
+  for (const cor of agregado.coresOrdenadas) {
+    const linha: Array<string | number> = [cor];
+    for (const tam of agregado.tamanhosOrdenados) {
+      linha.push(agregado.matrizFardos[cor]?.[tam] ?? 0);
+    }
+    linha.push(agregado.fardosPorCor[cor] ?? 0);
+    const row = matriz.addRow(linha);
+    row.getCell(1).font = { bold: true };
+    row.getCell(headerMatriz.length).font = { bold: true };
   }
-  linhaTotal.push(agregado.totalPecas);
-  const totalRow = matriz.addRow(linhaTotal);
-  totalRow.font = { bold: true };
-  matriz.views = [{ state: "frozen", xSplit: 1, ySplit: 1 }];
-  matriz.getColumn(1).width = 10;
+  const totalFardosRow = matriz.addRow([
+    "Total",
+    ...agregado.tamanhosOrdenados.map(
+      (t) => agregado.fardosPorTamanho[t] ?? 0,
+    ),
+    agregado.totalFardos,
+  ]);
+  totalFardosRow.font = { bold: true };
+
+  matriz.views = [{ state: "frozen", xSplit: 1 }];
+  matriz.getColumn(1).width = 12;
   for (let i = 2; i <= headerMatriz.length; i++) {
     matriz.getColumn(i).width = 10;
   }
