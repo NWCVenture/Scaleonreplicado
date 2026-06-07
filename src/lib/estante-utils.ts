@@ -106,9 +106,9 @@ export function parseImportText(
   return results;
 }
 
-const PRODUTO_ORDER = ["CJ", "LUA", "NBA", "SOL", "PUFFER"];
-const COR_ORDER = ["AZ", "BR", "CZ", "PT", "VM", "VD", "AM", "RS"];
-const TAMANHO_ORDER = ["P", "M", "G", "GG", "EGG"];
+export const PRODUTO_ORDER = ["CJ", "LUA", "NBA", "SOL", "PUFFER"];
+export const COR_ORDER = ["AZ", "BR", "CZ", "PT", "VM", "VD", "AM", "RS"];
+export const TAMANHO_ORDER = ["P", "M", "G", "GG", "EGG"];
 
 export function parseSKUParts(sku: string): {
   produto: string;

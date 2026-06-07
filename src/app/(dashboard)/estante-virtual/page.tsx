@@ -11,6 +11,7 @@ import {
   Warehouse,
   Plus,
   ChevronLeft,
+  ChevronDown,
   Package,
   Trash2,
   History,
@@ -23,12 +24,16 @@ import {
   FileDown,
   Loader2,
   RefreshCw,
+  List,
+  Grid3x3,
 } from "lucide-react";
 import {
   isThisWeek,
   compareSKU,
   type ParsedQR,
 } from "@/lib/estante-utils";
+import { agregarFardos } from "@/lib/estante-virtual/agregar";
+import { exportarEstanteXlsx } from "@/lib/estante-virtual/exportar-xlsx";
 import { ModalCriar } from "@/components/estante-virtual/modal-criar";
 import { ModalImportar } from "@/components/estante-virtual/modal-importar";
 import {
@@ -37,7 +42,14 @@ import {
   type SessionLogEntry,
 } from "@/components/estante-virtual/modal-scanner";
 import { FardosAgrupados } from "@/components/estante-virtual/fardos-agrupados";
+import { MatrizView } from "@/components/estante-virtual/matriz-view";
 import { HistoricoView } from "@/components/estante-virtual/historico-view";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 type EstanteListItem = {
   id: string;
@@ -64,6 +76,9 @@ export default function EstanteVirtualPage() {
   const { data: session } = useSession();
 
   const [view, setView] = useState<"lista" | "detalhe" | "historico">("lista");
+  const [viewModoDetalhe, setViewModoDetalhe] = useState<"lista" | "matriz">(
+    "lista",
+  );
   const [estantes, setEstantes] = useState<EstanteListItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEstante, setSelectedEstante] = useState<{
@@ -457,6 +472,21 @@ export default function EstanteVirtualPage() {
     URL.revokeObjectURL(url);
   }, [selectedEstante, fardos]);
 
+  const handleExportXlsx = useCallback(async () => {
+    if (!selectedEstante || fardos.length === 0) return;
+    try {
+      const agregado = agregarFardos(fardos);
+      await exportarEstanteXlsx({
+        agregado,
+        fardosBrutos: fardos,
+        nomeEstante: selectedEstante.nome,
+      });
+    } catch (error) {
+      console.error("Erro ao exportar XLSX:", error);
+      toast.error("Erro ao gerar XLSX");
+    }
+  }, [selectedEstante, fardos]);
+
   const openScanner = (mode: "retirar" | "adicionar" | "bipagem") => {
     setScannerMode(mode);
     setPendingFardos([]);
@@ -592,31 +622,83 @@ export default function EstanteVirtualPage() {
           </Button>
         </div>
 
-        {/* Fardos section */}
+        {/* Fardos / Matriz section */}
         <div>
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Fardos por SKU ({fardos.length})
-            </h2>
+          <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+            <div className="flex items-center gap-3">
+              <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                {viewModoDetalhe === "lista"
+                  ? `Fardos por SKU (${fardos.length})`
+                  : "Visualização matriz"}
+              </h2>
+              <div className="flex items-center border border-slate-700 rounded-md overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setViewModoDetalhe("lista")}
+                  aria-pressed={viewModoDetalhe === "lista"}
+                  className={cn(
+                    "px-2.5 py-1 text-xs flex items-center gap-1 transition-colors",
+                    viewModoDetalhe === "lista"
+                      ? "bg-slate-700 text-foreground"
+                      : "text-muted-foreground hover:bg-slate-800",
+                  )}
+                >
+                  <List className="h-3.5 w-3.5" /> Lista
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewModoDetalhe("matriz")}
+                  aria-pressed={viewModoDetalhe === "matriz"}
+                  className={cn(
+                    "px-2.5 py-1 text-xs flex items-center gap-1 transition-colors border-l border-slate-700",
+                    viewModoDetalhe === "matriz"
+                      ? "bg-slate-700 text-foreground"
+                      : "text-muted-foreground hover:bg-slate-800",
+                  )}
+                >
+                  <Grid3x3 className="h-3.5 w-3.5" /> Matriz
+                </button>
+              </div>
+            </div>
             {fardos.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs gap-1.5"
-                onClick={downloadCSV}
-              >
-                <FileDown className="h-3.5 w-3.5" /> Baixar Relatorio
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1.5"
+                  >
+                    <FileDown className="h-3.5 w-3.5" /> Baixar Relatório
+                    <ChevronDown className="h-3 w-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={downloadCSV}>
+                    CSV (cru)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleExportXlsx}>
+                    XLSX (pivotado)
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
           </div>
-          <FardosAgrupados
-            fardos={fardos}
-            expandedGroups={expandedGroups}
-            toggleGroup={toggleGroup}
-            onRemove={handleRemoveFardo}
-            onAddFirst={() => openScanner("adicionar")}
-            removingId={removingId}
-          />
+          {viewModoDetalhe === "lista" ? (
+            <FardosAgrupados
+              fardos={fardos}
+              expandedGroups={expandedGroups}
+              toggleGroup={toggleGroup}
+              onRemove={handleRemoveFardo}
+              onAddFirst={() => openScanner("adicionar")}
+              removingId={removingId}
+            />
+          ) : (
+            <MatrizView
+              fardos={fardos}
+              nomeEstante={selectedEstante.nome}
+              ultimaBipagem={selectedEstante.ultimaBipagem}
+            />
+          )}
         </div>
 
         {/* Modals */}
