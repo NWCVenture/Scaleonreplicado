@@ -186,13 +186,17 @@ sessao_central_envios (NOVO — espelho de sessao_coletas)
 ├── iniciouEm, ultimaAtividadeEm, encerrouEm
 └── encerradaMotivo : 'finalizada'|'forcada'|'expirada'
 
-planejamento_envios (NOVO — snapshot persistido)
-├── id, contaId, usuarioId
+planejamento_envios (RITM-11 ✅)
+├── id, contaId, usuarioId, sessaoId (nullable, sem FK)
 ├── geradoEm : timestamp
 ├── dataReferencia : date              ← qual "hoje" foi usado
-├── totalPedidos, totalAtrasados, totalHoje, totalAmbiguos
+├── totalPedidos, totalAtrasados, totalHoje, totalAmbiguos, totalArquivos
 ├── arquivosIngeridos : jsonb          ← cópia dos arquivos consolidados
-├── dados : jsonb                      ← snapshot completo (somente leitura após gerar)
+├── estatisticas : jsonb               ← EstatisticasSessao serializado
+├── dados : jsonb                      ← snapshot inline < 2MB
+├── dadosBlobUrl : text?               ← offload pro Vercel Blob acima de 2MB
+├── emailEnviadoPara : jsonb?          ← log de destinatários se email opt-in
+├── emailEnviadoEm : timestamp?
 └── INDEX (contaId, geradoEm desc)
 ```
 
@@ -398,16 +402,15 @@ Diferenças vs sessão de Coletas:
 
 | Método | Path                                              | Função                                                |
 |--------|---------------------------------------------------|--------------------------------------------------------|
-| GET    | `/api/central-envios`                             | Lista histórico de planejamentos arquivados            |
-| POST   | `/api/central-envios`                             | **Arquiva planejamento** (snapshot da sessão atual)    |
-| GET    | `/api/central-envios/[id]`                        | Detalhe de planejamento arquivado                      |
+| GET    | `/api/central-envios`                             | Lista histórico de planejamentos arquivados (paginada) |
+| GET    | `/api/central-envios/[id]`                        | Detalhe de planejamento arquivado (RITM-11)            |
 | POST   | `/api/central-envios/ingestao`                    | Upload multipart → enfileira parse                     |
 | GET    | `/api/central-envios/ingestao/[runId]`            | Status do parse (Inngest run)                          |
 | POST   | `/api/central-envios/pull` (V2)                   | Trigger manual de pull via `ICanalAdapter`             |
 | GET    | `/api/central-envios/sessao`                      | Sessão ativa (ou null + TTL check)                     |
 | POST   | `/api/central-envios/sessao`                      | Cria sessão (idempotente)                              |
 | PATCH  | `/api/central-envios/sessao/[id]`                 | Auto-save                                              |
-| POST   | `/api/central-envios/sessao/[id]/encerrar`        | Encerra (finalizada/forcada/expirada)                  |
+| POST   | `/api/central-envios/sessao/[id]/encerrar`        | Encerra. Quando `motivo='finalizada' && arquivar=true`, persiste em `planejamento_envios` + envia email opt-in (RITM-11) |
 | POST   | `/api/central-envios/extrator/[id]`               | Aplica filtros → retorna Order IDs / Tracking IDs      |
 | GET    | `/api/central-envios/configuracoes/regras-prazo`  | Lista regras por canal                                 |
 | POST   | `/api/central-envios/configuracoes/regras-prazo`  | Upsert                                                 |
@@ -611,7 +614,7 @@ e Coletas).
 | **08**   | UI — Upload + Dashboard + Cronograma                                       | L       | ✅ feito |
 | **09**   | UI — SKU × Dia + Extrator + Pedidos + Ambíguos                            | L       | ✅ feito |
 | **10**   | UI — Configurações (regras prazo, aliases, feriados, categorias)          | M       | ✅ feito |
-| **11**   | Histórico/arquivamento (`planejamento_envios`) + email de resumo          | S |
+| **11**   | Histórico/arquivamento (`planejamento_envios`) + email de resumo          | S       | ✅ feito |
 | **V2-01** | Pull automático via `ICanalAdapter` (substituir upload onde houver adapter) | L |
 | **V2-02** | "Editar manualmente" em ambíguos → cria `sku_kit_regra`                  | S |
 | **V2-03** | Sync de feriados nacionais via API externa                                | S |

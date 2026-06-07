@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { Loader2, Save, AlertCircle, Settings } from "lucide-react";
+import { Loader2, Save, AlertCircle, History, Settings } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +14,7 @@ import { SkuDiaTab } from "@/components/central-envios/sku-dia-tab";
 import { ExtratorTab } from "@/components/central-envios/extrator-tab";
 import { PedidosTab } from "@/components/central-envios/pedidos-tab";
 import { AmbiguosTab } from "@/components/central-envios/ambiguos-tab";
+import { ArquivarDialog } from "@/components/central-envios/arquivar-dialog";
 import { useCentralEnviosPlanejamento } from "@/hooks/use-central-envios-planejamento";
 
 export default function CentralEnviosPage() {
@@ -36,6 +38,7 @@ export default function CentralEnviosPage() {
 
   const hojeIso = estatisticas?.hojeIso ?? new Date().toISOString().slice(0, 10);
   const ambiguosCount = dados.filter((p) => p.parsed.kind === "AMBIGUO").length;
+  const [arquivarOpen, setArquivarOpen] = useState(false);
 
   if (status === "loading") {
     return (
@@ -92,14 +95,16 @@ export default function CentralEnviosPage() {
               >
                 Descartar
               </Button>
-              <Button
-                size="sm"
-                onClick={() => encerrarSessao("finalizada")}
-              >
+              <Button size="sm" onClick={() => setArquivarOpen(true)}>
                 Arquivar
               </Button>
             </>
           )}
+          <Button size="sm" variant="ghost" asChild>
+            <Link href="/central-envios/historico" title="Histórico">
+              <History className="h-4 w-4" />
+            </Link>
+          </Button>
           <Button size="sm" variant="ghost" asChild>
             <Link href="/central-envios/configuracoes" title="Configurações">
               <Settings className="h-4 w-4" />
@@ -209,6 +214,16 @@ export default function CentralEnviosPage() {
           <AmbiguosTab dados={dados} />
         </TabsContent>
       </Tabs>
+
+      <ArquivarDialog
+        open={arquivarOpen}
+        onOpenChange={setArquivarOpen}
+        onConfirmar={async (emails) =>
+          encerrarSessao("finalizada", {
+            enviarEmailPara: emails.length > 0 ? emails : undefined,
+          })
+        }
+      />
     </div>
   );
 }

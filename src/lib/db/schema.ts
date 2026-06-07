@@ -2827,3 +2827,50 @@ export type SessaoCentralEnviosStatus =
   (typeof sessaoCentralEnviosStatusEnum.enumValues)[number];
 export type SessaoCentralEnviosMotivoEncerro =
   (typeof sessaoCentralEnviosMotivoEncerroEnum.enumValues)[number];
+
+// ============================================================
+// MÓDULO CENTRAL DE ENVIOS — RITM-11 (histórico/arquivamento)
+// ============================================================
+// Snapshot append-only do planejamento operacional do dia. Tudo o que o
+// operador viu no momento de arquivar (dados normalizados, estatísticas,
+// arquivos consolidados) — mudanças posteriores em regras de prazo ou
+// aliases não retroagem.
+//
+// `sessaoId` nullable + sem FK: a sessão pode ser purgada no futuro sem
+// cascade aqui. `dados` segue regra de `sessao_central_envios.dados`:
+// inline se < 2MB, blob URL acima.
+export const planejamentoEnvios = pgTable(
+  "planejamento_envios",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    usuarioId: text("usuario_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    sessaoId: text("sessao_id"),
+    geradoEm: timestamp("gerado_em").notNull().defaultNow(),
+    dataReferencia: date("data_referencia", { mode: "string" }).notNull(),
+    totalPedidos: integer("total_pedidos").notNull(),
+    totalAtrasados: integer("total_atrasados").notNull(),
+    totalHoje: integer("total_hoje").notNull(),
+    totalAmbiguos: integer("total_ambiguos").notNull(),
+    totalArquivos: integer("total_arquivos").notNull(),
+    arquivosIngeridos: jsonb("arquivos_ingeridos").notNull(),
+    estatisticas: jsonb("estatisticas").notNull(),
+    dados: jsonb("dados"),
+    dadosBlobUrl: text("dados_blob_url"),
+    emailEnviadoPara: jsonb("email_enviado_para").$type<string[]>(),
+    emailEnviadoEm: timestamp("email_enviado_em"),
+  },
+  (t) => [
+    index("idx_planejamento_envios_conta_gerado").on(
+      t.contaId,
+      t.geradoEm.desc(),
+    ),
+    index("idx_planejamento_envios_usuario").on(t.usuarioId),
+  ],
+);
+
+export type PlanejamentoEnvios = InferSelectModel<typeof planejamentoEnvios>;

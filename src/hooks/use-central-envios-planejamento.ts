@@ -414,22 +414,50 @@ export function useCentralEnviosPlanejamento() {
   }, []);
 
   const encerrarSessao = useCallback(
-    async (motivo: "finalizada" | "forcada") => {
+    async (
+      motivo: "finalizada" | "forcada",
+      opts?: { enviarEmailPara?: string[] },
+    ) => {
       const sessaoId = sessionIdRef.current;
       if (!sessaoId) return;
       try {
+        const body: Record<string, unknown> = { motivo };
+        if (motivo === "finalizada") {
+          body.arquivar = true;
+          if (opts?.enviarEmailPara?.length) {
+            body.enviarEmailPara = opts.enviarEmailPara;
+          }
+        }
         const r = await fetch(
           `/api/central-envios/sessao/${sessaoId}/encerrar`,
           {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ motivo }),
+            body: JSON.stringify(body),
           },
         );
-        if (!r.ok) throw new Error(`Encerrar ${r.status}`);
-        toast.success(
-          motivo === "finalizada" ? "Planejamento arquivado" : "Sessão descartada",
-        );
+        if (!r.ok) {
+          const data = (await r.json().catch(() => ({}))) as { error?: string };
+          throw new Error(data.error ?? `Encerrar ${r.status}`);
+        }
+        const data = (await r.json()) as {
+          ok: boolean;
+          emailEnviado?: boolean;
+          emailSimulado?: boolean;
+        };
+        if (motivo === "finalizada") {
+          if (data.emailEnviado) {
+            toast.success("Planejamento arquivado · email enviado");
+          } else if (data.emailSimulado) {
+            toast.success(
+              "Planejamento arquivado · email não enviado (Resend não configurado)",
+            );
+          } else {
+            toast.success("Planejamento arquivado");
+          }
+        } else {
+          toast.success("Sessão descartada");
+        }
         // Recria sessão vazia
         sessionIdRef.current = null;
         setSessao(null);
@@ -442,7 +470,7 @@ export function useCentralEnviosPlanejamento() {
         await carregarSessao();
       } catch (err) {
         console.error("encerrar:", err);
-        toast.error("Falha ao encerrar sessão");
+        toast.error((err as Error).message ?? "Falha ao encerrar sessão");
       }
     },
     [carregarSessao],

@@ -140,3 +140,12 @@ export type FeriadoClient = {
   descricao: string;
   fonte: string;
 };
+
+// ------------------------------------------------------------------
+// Histórico/arquivamento (RITM-11)
+// ------------------------------------------------------------------
+
+export type {
+  PlanejamentoListItem,
+  PlanejamentoSnapshotCliente,
+} from "@/lib/central-envios/relatorio/types";

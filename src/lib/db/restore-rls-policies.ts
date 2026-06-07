@@ -88,6 +88,8 @@ const TABELAS_PADRAO = [
   "ingestao_run",
   // Módulo Central de Envios — Sessão (RITM-07)
   "sessao_central_envios",
+  // Módulo Central de Envios — Histórico/arquivamento (RITM-11)
+  "planejamento_envios",
 ] as const;
 
 // Tabelas com variante "conta_id IS NULL": receiver insere antes de

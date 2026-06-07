@@ -225,6 +225,13 @@
       "when": 1780705577682,
       "tag": "0031_tearful_roughhouse",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780787776560,
+      "tag": "0032_fearless_obadiah_stane",
+      "breakpoints": true
     }
   ]
 }
