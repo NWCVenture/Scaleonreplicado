@@ -104,10 +104,10 @@ export function DashboardTab({ estatisticas }: Props) {
     );
   }
 
-  const porCanalItems = Object.entries(estatisticas.porCanal).sort(
+  const porCanalItems = Object.entries(estatisticas.porCanal ?? {}).sort(
     (a, b) => b[1] - a[1],
   );
-  const topModelos = Object.entries(estatisticas.porModelo)
+  const topModelos = Object.entries(estatisticas.porModelo ?? {})
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10);
 

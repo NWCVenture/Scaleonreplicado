@@ -59,8 +59,8 @@ export function buildResumoHtml({
   const data = formatarData(planejamento.dataReferencia);
   const totalNoPrazo = stats.totalNoPrazo;
   const totalSemData = stats.totalSemData;
-  const topModelos = topN(stats.porModelo, 5);
-  const porCanal = (Object.entries(stats.porCanal) as Array<[string, number]>)
+  const topModelos = topN(stats.porModelo ?? {}, 5);
+  const porCanal = (Object.entries(stats.porCanal ?? {}) as Array<[string, number]>)
     .sort((a, b) => b[1] - a[1]);
 
   const linhasArquivos = planejamento.arquivosIngeridos
