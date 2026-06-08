@@ -11,6 +11,7 @@ import { MobileHeader } from "@/components/layout/header";
 import { ContaSelector } from "@/components/layout/conta-selector";
 import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import {
+  BarChart3,
   ClipboardList,
   Truck,
   Barcode,
@@ -60,6 +61,7 @@ const outrosHrefs = [
   "/criar-qr-code",
   "/kit-organizer",
   "/processador-anuncios",
+  "/analise-pedidos",
   "/recuperar-dados",
 ];
 
@@ -153,6 +155,11 @@ const outrosItems = [
     href: "/processador-anuncios",
     label: "Editar Estoque ML",
     icon: FileSpreadsheet,
+  },
+  {
+    href: "/analise-pedidos",
+    label: "Análise de Pedidos",
+    icon: BarChart3,
   },
   {
     href: "/recuperar-dados",
