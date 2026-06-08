@@ -45,6 +45,7 @@ type SkuRow = {
   codigo: string;
   contaId: string;
   ativo: boolean;
+  pausadoUpseller: boolean;
   createdAt: string;
 };
 
@@ -325,6 +326,34 @@ export default function GerenciarSkusPage() {
     }
   }
 
+  async function handleTogglePausadoUpseller(sku: SkuRow) {
+    const novo = !sku.pausadoUpseller;
+    try {
+      const res = await fetch(`/api/sku-catalogo/${sku.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pausadoUpseller: novo }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Erro ao atualizar SKU");
+        return;
+      }
+      toast.success(
+        novo
+          ? `${sku.codigo} pausado no export Upseller`
+          : `${sku.codigo} voltou pro export Upseller`,
+      );
+      setSkus((prev) =>
+        prev.map((s) =>
+          s.id === sku.id ? { ...s, pausadoUpseller: novo } : s,
+        ),
+      );
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
   async function handleDelete() {
     if (!deleteTarget) return;
     setDeleteLoading(true);
@@ -419,6 +448,12 @@ export default function GerenciarSkusPage() {
             <tr className="border-b bg-muted/50">
               <th className="px-4 py-3 text-left font-medium">SKU</th>
               <th className="px-4 py-3 text-left font-medium">Status</th>
+              <th
+                className="px-4 py-3 text-left font-medium"
+                title="Quando ligado, este SKU é excluído do Update_warehouse.xlsx pra Upseller"
+              >
+                Upseller
+              </th>
               <th className="px-4 py-3 text-left font-medium">Cadastrado em</th>
               <th className="px-4 py-3 text-right font-medium">Ações</th>
             </tr>
@@ -438,6 +473,18 @@ export default function GerenciarSkusPage() {
                       Inativo
                     </Badge>
                   )}
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={sku.pausadoUpseller}
+                      onCheckedChange={() => handleTogglePausadoUpseller(sku)}
+                      disabled={!sku.ativo}
+                    />
+                    {sku.pausadoUpseller && (
+                      <span className="text-xs text-amber-500">Pausado</span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground text-xs">
                   {new Date(sku.createdAt).toLocaleDateString("pt-BR")}
@@ -476,7 +523,7 @@ export default function GerenciarSkusPage() {
             {skusFiltrados.length === 0 && (
               <tr>
                 <td
-                  colSpan={4}
+                  colSpan={5}
                   className="px-4 py-8 text-center text-muted-foreground"
                 >
                   {busca

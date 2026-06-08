@@ -34,6 +34,7 @@ import {
 } from "@/lib/estante-utils";
 import { agregarFardos } from "@/lib/estante-virtual/agregar";
 import { exportarEstanteXlsx } from "@/lib/estante-virtual/exportar-xlsx";
+import { exportarUpseller } from "@/lib/estante-virtual/exportar-upseller";
 import { ModalCriar } from "@/components/estante-virtual/modal-criar";
 import { ModalImportar } from "@/components/estante-virtual/modal-importar";
 import {
@@ -44,6 +45,13 @@ import {
 import { FardosAgrupados } from "@/components/estante-virtual/fardos-agrupados";
 import { MatrizView } from "@/components/estante-virtual/matriz-view";
 import { HistoricoView } from "@/components/estante-virtual/historico-view";
+import { ConsolidadoView } from "@/components/estante-virtual/consolidado-view";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -487,6 +495,45 @@ export default function EstanteVirtualPage() {
     }
   }, [selectedEstante, fardos]);
 
+  const handleExportUpseller = useCallback(async () => {
+    if (!selectedEstante || fardos.length === 0) return;
+    try {
+      const r = await fetch("/api/estantes/consolidado", {
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const ctx = (await r.json()) as {
+        modelos: Array<{ codigo: string; custoUpseller: number | null }>;
+        skus: Array<{ codigo: string; pausadoUpseller: boolean }>;
+      };
+      const resultado = await exportarUpseller({
+        fardos,
+        skusCatalogo: ctx.skus.map((s) => ({
+          codigo: s.codigo,
+          pausado: s.pausadoUpseller,
+        })),
+        modelos: ctx.modelos,
+        escopo: "estante",
+        nomeEstante: selectedEstante.nome,
+      });
+      const alertSummary =
+        resultado.alertas.length > 0
+          ? ` · ${resultado.alertas.length} alerta(s)`
+          : "";
+      toast.success(
+        `Update_warehouse gerado · ${resultado.linhasExportadas} SKU(s)${alertSummary}`,
+      );
+      if (resultado.alertas.length > 0) {
+        for (const a of resultado.alertas.slice(0, 5)) {
+          console.warn("[upseller alerta]", a);
+        }
+      }
+    } catch (error) {
+      console.error("upseller estante:", error);
+      toast.error("Erro ao gerar XLSX da Upseller");
+    }
+  }, [selectedEstante, fardos]);
+
   const openScanner = (mode: "retirar" | "adicionar" | "bipagem") => {
     setScannerMode(mode);
     setPendingFardos([]);
@@ -679,6 +726,9 @@ export default function EstanteVirtualPage() {
                   <DropdownMenuItem onClick={handleExportXlsx}>
                     XLSX (pivotado)
                   </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleExportUpseller}>
+                    Upseller (.xlsx)
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -760,6 +810,13 @@ export default function EstanteVirtualPage() {
         </div>
       </div>
 
+      <Tabs defaultValue="por-estante" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="por-estante">Por Estante</TabsTrigger>
+          <TabsTrigger value="consolidado">Consolidado</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="por-estante" className="space-y-4">
       {isLoading ? (
         <div className="flex justify-center py-16">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -872,6 +929,12 @@ export default function EstanteVirtualPage() {
           })}
         </div>
       )}
+        </TabsContent>
+
+        <TabsContent value="consolidado" className="space-y-4">
+          <ConsolidadoView />
+        </TabsContent>
+      </Tabs>
 
       <ModalCriar
         open={showCriar}

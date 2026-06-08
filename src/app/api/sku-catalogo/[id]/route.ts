@@ -12,6 +12,7 @@ async function requireSession(request: NextRequest) {
 
 const patchSchema = z.object({
   ativo: z.boolean().optional(),
+  pausadoUpseller: z.boolean().optional(),
 });
 
 export async function PATCH(
@@ -33,8 +34,12 @@ export async function PATCH(
     );
   }
 
-  const { ativo } = parsed.data;
-  if (ativo === undefined) {
+  const updates: Partial<typeof skuCatalogo.$inferInsert> = {};
+  if (parsed.data.ativo !== undefined) updates.ativo = parsed.data.ativo;
+  if (parsed.data.pausadoUpseller !== undefined) {
+    updates.pausadoUpseller = parsed.data.pausadoUpseller;
+  }
+  if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: "Nada para atualizar" }, { status: 400 });
   }
 
@@ -42,7 +47,7 @@ export async function PATCH(
     const updated = await withContaAtiva(async (tx, contaId) => {
       const [row] = await tx
         .update(skuCatalogo)
-        .set({ ativo })
+        .set(updates)
         .where(and(eq(skuCatalogo.id, id), eq(skuCatalogo.contaId, contaId)))
         .returning();
       return row;

@@ -154,6 +154,9 @@ export const skuCatalogo = pgTable(
       .default("nwc-root")
       .references(() => conta.id, { onDelete: "cascade" }),
     ativo: boolean("ativo").notNull().default(true),
+    // SKU permanece ativo no ERP mas é excluído do export pra Upseller
+    // (ex.: variação pausada no marketplace).
+    pausadoUpseller: boolean("pausado_upseller").notNull().default(false),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
@@ -1236,6 +1239,9 @@ export const modeloPrincipal = pgTable(
     corPadrao: text("cor_padrao"),
     exigeTamanho: boolean("exige_tamanho").notNull().default(true),
     corMixDefault: jsonb("cor_mix_default").$type<Record<string, string[]>>(),
+    // Custo unitário usado no export pra Upseller (Update_warehouse.xlsx).
+    // Null = ainda não cadastrado; export gera alerta "sem custo" pro modelo.
+    custoUpseller: real("custo_upseller"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => [

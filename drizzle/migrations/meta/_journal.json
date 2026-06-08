@@ -232,6 +232,13 @@
       "when": 1780787776560,
       "tag": "0032_fearless_obadiah_stane",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1780884025319,
+      "tag": "0033_eager_arclight",
+      "breakpoints": true
     }
   ]
 }

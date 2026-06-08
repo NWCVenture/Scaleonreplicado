@@ -58,6 +58,7 @@ type ModeloDetalhe = {
     ativo: boolean;
     etiquetaImagemUrl: string | null;
     etiquetaImagemAtualizadaEm: string | null;
+    custoUpseller: number | null;
   };
   cores: VariacaoRow[];
   tamanhos: VariacaoRow[];
@@ -588,6 +589,22 @@ function ModeloDetalheDialog({
               />
             </div>
 
+            {/* Custo Upseller */}
+            <CustoUpsellerInput
+              modeloId={modeloId}
+              custoAtual={detalhe.modelo.custoUpseller}
+              onChange={(novo) =>
+                setDetalhe((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        modelo: { ...prev.modelo, custoUpseller: novo },
+                      }
+                    : prev,
+                )
+              }
+            />
+
             {/* Tamanhos */}
             <section className="space-y-3">
               <div className="flex items-center gap-2">
@@ -725,6 +742,88 @@ function ModeloDetalheDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ============================================================
+// Editor do custo unitário usado no export pra Upseller
+// ============================================================
+
+function CustoUpsellerInput({
+  modeloId,
+  custoAtual,
+  onChange,
+}: {
+  modeloId: string;
+  custoAtual: number | null;
+  onChange: (novo: number | null) => void;
+}) {
+  const [valor, setValor] = useState<string>(
+    custoAtual == null ? "" : String(custoAtual).replace(".", ","),
+  );
+  const [saving, setSaving] = useState(false);
+
+  async function persistir() {
+    const limpo = valor.replace(",", ".").trim();
+    let novo: number | null;
+    if (limpo === "") {
+      novo = null;
+    } else {
+      const parsed = Number(limpo);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        toast.error("Custo inválido — use número não-negativo (ex: 5,76)");
+        setValor(
+          custoAtual == null ? "" : String(custoAtual).replace(".", ","),
+        );
+        return;
+      }
+      novo = parsed;
+    }
+    if (novo === custoAtual) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/modelo-principal/${modeloId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ custoUpseller: novo }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onChange(novo);
+      toast.success(
+        novo == null ? "Custo Upseller removido" : `Custo salvo: R$ ${novo}`,
+      );
+    } catch (e) {
+      toast.error(`Erro ao salvar custo: ${(e as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-2 rounded-md border p-3">
+      <div className="flex items-center gap-2">
+        <Label htmlFor="custo-upseller" className="text-sm font-medium">
+          Custo Upseller (R$)
+        </Label>
+        {saving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Custo unitário usado no export Update_warehouse.xlsx. Deixe vazio se
+        ainda não cadastrado — SKUs do modelo alertam &quot;sem custo&quot; no
+        export.
+      </p>
+      <Input
+        id="custo-upseller"
+        type="text"
+        inputMode="decimal"
+        value={valor}
+        onChange={(e) => setValor(e.target.value.replace(/[^0-9.,]/g, ""))}
+        onBlur={persistir}
+        placeholder="Ex: 5,76"
+        className="font-mono max-w-[160px]"
+        disabled={saving}
+      />
+    </section>
   );
 }
 

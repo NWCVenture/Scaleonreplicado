@@ -72,6 +72,9 @@ export async function GET(
 
 const patchSchema = z.object({
   ativo: z.boolean().optional(),
+  // Custo unitário pro export Upseller (Update_warehouse.xlsx).
+  // null explícito = "limpar custo" (volta a alertar no export).
+  custoUpseller: z.number().nonnegative().nullable().optional(),
 });
 
 export async function PATCH(
