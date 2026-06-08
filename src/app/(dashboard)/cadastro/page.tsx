@@ -976,12 +976,13 @@ export default function CadastroEstoque() {
             <div className="space-y-3">
               <Label>Quantidade de Unidades</Label>
               <Input
-                type="number"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 placeholder="Ex: 50"
                 value={qtd}
-                onChange={(e) => setQtd(e.target.value)}
+                onChange={(e) => setQtd(e.target.value.replace(/[^0-9]/g, ""))}
                 className="h-12 text-lg font-mono"
-                min="1"
               />
             </div>
 
@@ -989,12 +990,15 @@ export default function CadastroEstoque() {
             <div className="space-y-3">
               <Label>Quantidade de Fardos</Label>
               <Input
-                type="number"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 placeholder="Ex: 10"
                 value={quantidadeFardos}
-                onChange={(e) => setQuantidadeFardos(e.target.value)}
+                onChange={(e) =>
+                  setQuantidadeFardos(e.target.value.replace(/[^0-9]/g, ""))
+                }
                 className="h-12 text-lg font-mono"
-                min="1"
               />
               <p className="text-xs text-muted-foreground">
                 {quantidadeFardos &&
