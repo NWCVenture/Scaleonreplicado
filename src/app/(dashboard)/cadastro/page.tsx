@@ -29,7 +29,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Switch } from "@/components/ui/switch";
 import { QRCodeSVG } from "qrcode.react";
 import {
   Package,
@@ -143,7 +142,6 @@ export default function CadastroEstoque() {
   // Quantity state
   const [qtd, setQtd] = useState("");
   const [quantidadeFardos, setQuantidadeFardos] = useState("1");
-  const [isFardoAgrupado, setIsFardoAgrupado] = useState(false);
 
   // Print queue
   const [printQueue, setPrintQueue] = useState<PrintQueueItem[]>([]);
@@ -504,7 +502,7 @@ export default function CadastroEstoque() {
   const getQrPayload = (item: PrintQueueItem) =>
     `${item.sku}}${item.lote}}${item.qtd}}${item.codigoFardo}}${item.criadoEm}}${item.criadoPor}}${item.id}`;
 
-  const itemsPerPage = isFardoAgrupado ? 1 : 4;
+  const itemsPerPage = 1;
   const pages: PrintQueueItem[][] = [];
   for (let i = 0; i < printQueue.length; i += itemsPerPage) {
     pages.push(printQueue.slice(i, i + itemsPerPage));
@@ -530,30 +528,18 @@ export default function CadastroEstoque() {
               ? new XMLSerializer().serializeToString(svgEl)
               : "";
 
-            if (isFardoAgrupado) {
-              return `<div class="item-agrupado">
-                <div class="qr-container">${svgData}</div>
-                <div class="info-agrupado">
-                  <div class="sku-agrupado">${item.sku}</div>
-                  <div class="qtd-agrupado">${item.qtd}</div>
-                  <div class="lote-agrupado">${item.lote}</div>
-                </div>
-              </div>`;
-            }
-
-            return `<div class="item-normal">
-              <div class="qr-container-small">${svgData}</div>
-              <div class="info-normal">
-                <div class="qtd-normal">${item.qtd}</div>
-                <div class="sku-normal">${item.sku}</div>
-                <div class="lote-normal">${item.lote}</div>
+            return `<div class="item-agrupado">
+              <div class="qr-container">${svgData}</div>
+              <div class="info-agrupado">
+                <div class="sku-agrupado">${item.sku}</div>
+                <div class="qtd-agrupado">${item.qtd}</div>
+                <div class="lote-agrupado">${item.lote}</div>
               </div>
             </div>`;
           })
           .join("");
 
-        const pageClass = isFardoAgrupado ? "page-agrupado" : "page-normal";
-        return `<div class="${pageClass}">${itemsHtml}</div>`;
+        return `<div class="page-agrupado">${itemsHtml}</div>`;
       })
       .join("");
 
@@ -565,23 +551,6 @@ export default function CadastroEstoque() {
     @page { size: 10cm 15cm; margin: 0; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: Arial, sans-serif; background: white; color: black; }
-
-    .page-normal {
-      width: 10cm; height: 15cm; margin: 0 auto;
-      display: grid; grid-template-rows: repeat(4, 1fr);
-      page-break-after: always;
-    }
-    .item-normal {
-      display: flex; align-items: center; justify-content: space-between;
-      border-bottom: 1px dashed #ccc; padding: 4px 8px; height: 100%;
-    }
-    .item-normal:last-child { border-bottom: none; }
-    .qr-container-small { flex-shrink: 0; }
-    .qr-container-small svg { width: 90px; height: 90px; }
-    .info-normal { flex: 1; text-align: right; padding-left: 12px; display: flex; flex-direction: column; justify-content: center; }
-    .qtd-normal { font-size: 32px; font-weight: 900; line-height: 1; margin-bottom: 2px; }
-    .sku-normal { font-size: 18px; font-weight: 700; font-family: monospace; }
-    .lote-normal { font-size: 8px; color: #888; font-family: monospace; margin-top: 2px; }
 
     .page-agrupado {
       width: 10cm; height: 15cm; margin: 0 auto;
@@ -679,30 +648,8 @@ export default function CadastroEstoque() {
         {/* Selection Panel */}
         <Card className="h-fit">
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Novo Fardo</CardTitle>
-              <div className="flex items-center gap-3">
-                <Package className="h-5 w-5 text-muted-foreground" />
-                <div className="flex items-center gap-2">
-                  <Label
-                    htmlFor="fardo-agrupado"
-                    className="text-sm font-normal cursor-pointer"
-                  >
-                    Fardo Agrupado
-                  </Label>
-                  <Switch
-                    id="fardo-agrupado"
-                    checked={isFardoAgrupado}
-                    onCheckedChange={setIsFardoAgrupado}
-                  />
-                </div>
-              </div>
-            </div>
-            {isFardoAgrupado && (
-              <CardDescription className="text-amber-600 dark:text-amber-400">
-                Modo Fardo Agrupado: 1 QR Code grande por pagina
-              </CardDescription>
-            )}
+            <CardTitle>Novo Fardo</CardTitle>
+            <CardDescription>1 QR Code grande por pagina</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             {/* SKU input + autocomplete */}
@@ -1192,9 +1139,7 @@ export default function CadastroEstoque() {
                 </span>
               </CardTitle>
               <CardDescription>
-                {isFardoAgrupado
-                  ? "Modo Fardo Agrupado: 1 QR Code grande por pagina"
-                  : "Cada folha contera ate 4 etiquetas diferentes."}
+                1 QR Code grande por pagina.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex-1 overflow-hidden flex flex-col">
@@ -1244,14 +1189,14 @@ export default function CadastroEstoque() {
                     key={item.id}
                     id={`qr-print-${item.id}`}
                     value={getQrPayload(item)}
-                    size={isFardoAgrupado ? 360 : 90}
+                    size={360}
                     level="H"
                     imageSettings={{
                       src: "/logo.svg",
                       x: undefined,
                       y: undefined,
-                      height: isFardoAgrupado ? 54 : 20,
-                      width: isFardoAgrupado ? 54 : 20,
+                      height: 54,
+                      width: 54,
                       excavate: true,
                     }}
                   />
