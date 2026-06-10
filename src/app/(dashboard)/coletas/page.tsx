@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSession } from "@/lib/auth-client";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/layout/page-header";
@@ -62,6 +62,10 @@ import {
   FUNCTION_DISPLAY,
   OPERATION_DISPLAY,
 } from "@/types/coletas";
+
+// Throttle entre tentativas automáticas de criar sessão depois de uma falha.
+// Sem isso, cada bipe seguinte refaz POST → spam de toast.
+const INIT_RETRY_THROTTLE_MS = 5000;
 
 type ViewMode = "bipagem" | "historico" | "configuracoes";
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -132,6 +136,28 @@ export default function ColetasPage() {
   // do handleFinalize causa re-render → handleFinalize muda de identidade →
   // useEffect roda de novo). Esse ref garante que só uma execução acontece.
   const finalizingFromRestoreRef = useRef(false);
+  // Throttle de auto-retry do init de sessão. Sem isso, cada bipe seguinte a
+  // uma falha de POST refaz a tentativa imediatamente — gera spam de toast.
+  const lastInitErrorAtRef = useRef<number>(0);
+
+  // Cache de detectCarrier por código. Em cada render da lista, cada item
+  // chamava detectCarrier (regex + loop em carrierPatterns). Pra 500 pacotes
+  // isso é 500 regex tests por re-render. O Map é resetado se carrierPatterns
+  // mudar (o usuário alterou configuração).
+  const carrierCache = useMemo(
+    () => new Map<string, TransportadoraLabel>(),
+    [bipagem.carrierPatterns],
+  );
+  const getCarrier = useCallback(
+    (id: string): TransportadoraLabel => {
+      const cached = carrierCache.get(id);
+      if (cached !== undefined) return cached;
+      const result = detectCarrier(id, bipagem.carrierPatterns);
+      carrierCache.set(id, result);
+      return result;
+    },
+    [carrierCache, bipagem.carrierPatterns],
+  );
 
   // Restore sessão ativa do servidor ao montar
   useEffect(() => {
@@ -220,7 +246,8 @@ export default function ColetasPage() {
 
   // 1ª gravação: cria sessão e faz o primeiro PATCH em sequência, sem
   // debounce. Em falha do POST, libera o lock pra próxima bipagem tentar
-  // de novo (caso a rede volte).
+  // de novo (caso a rede volte) — mas o useEffect respeita um throttle de
+  // INIT_RETRY_THROTTLE_MS pra não spammar toast a cada bipe.
   const initSessaoAndFlush = useCallback(
     async (body: string) => {
       setSaveState("saving");
@@ -233,7 +260,11 @@ export default function ColetasPage() {
       } catch {
         setSaveState("error");
         initLockRef.current = false;
-        toast.error("Falha ao iniciar sessão — bipe novamente para tentar");
+        lastInitErrorAtRef.current = Date.now();
+        toast.error(
+          "Falha ao iniciar sessão — clique no badge para tentar novamente",
+          { id: "coletas-sessao-init-error" },
+        );
         return;
       }
       setSessaoId(id);
@@ -243,13 +274,22 @@ export default function ColetasPage() {
     [patchSessaoWithRetry],
   );
 
-  // Retry manual quando o badge mostrar 'error'
+  // Retry manual quando o badge mostrar 'error'. Cobre dois cenários:
+  //  - Sessão já existe e o PATCH falhou → reenvia o último body.
+  //  - Sessão nunca foi criada (POST falhou) → refaz init+flush e libera o
+  //    throttle pra próxima auto-tentativa.
   const handleRetrySave = useCallback(() => {
-    const id = sessaoIdRef.current;
     const body = lastSaveBodyRef.current;
-    if (!id || !body) return;
+    if (!body) return;
+    const id = sessaoIdRef.current;
+    if (!id) {
+      lastInitErrorAtRef.current = 0;
+      initLockRef.current = true;
+      void initSessaoAndFlush(body);
+      return;
+    }
     void patchSessaoWithRetry(id, body);
-  }, [patchSessaoWithRetry]);
+  }, [patchSessaoWithRetry, initSessaoAndFlush]);
 
   // Auto-save sessão no servidor.
   //
@@ -283,8 +323,13 @@ export default function ColetasPage() {
     });
     lastSaveBodyRef.current = body;
 
-    // 1ª gravação: cria sessão + PATCH imediatos (sem debounce)
+    // 1ª gravação: cria sessão + PATCH imediatos (sem debounce).
+    // Se o último POST falhou há menos de INIT_RETRY_THROTTLE_MS, não tenta
+    // de novo automaticamente — evita o loop "bipa → POST falha → toast"
+    // a cada keystroke. O usuário pode forçar via badge "clique para tentar".
     if (!sessaoIdRef.current && hasData && !initLockRef.current) {
+      const desdeUltimoErro = Date.now() - lastInitErrorAtRef.current;
+      if (desdeUltimoErro < INIT_RETRY_THROTTLE_MS) return;
       initLockRef.current = true;
       void initSessaoAndFlush(body);
       return;
@@ -389,16 +434,25 @@ export default function ColetasPage() {
   }, [session?.user?.id]);
 
   // ── Auto-focus textarea ───────────────────────────────────────────────────
+  // Não rouba foco de outros campos interativos — antes o polling pisava no
+  // botão "Copiar" no meio do clique, invalidando user activation do
+  // clipboard.writeText e fazendo a cópia falhar intermitentemente.
   useEffect(() => {
     if (viewMode !== "bipagem") return;
     const interval = setInterval(() => {
+      if (devolucaoModalOpen || pendingRestore) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (active === inputRef.current) return;
+      const tag = active?.tagName;
       if (
-        !devolucaoModalOpen &&
-        !pendingRestore &&
-        document.activeElement !== inputRef.current
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "BUTTON" ||
+        tag === "SELECT"
       ) {
-        inputRef.current?.focus();
+        return;
       }
+      inputRef.current?.focus();
     }, 500);
     return () => clearInterval(interval);
   }, [viewMode, devolucaoModalOpen, pendingRestore]);
@@ -453,16 +507,6 @@ export default function ColetasPage() {
     [playSound],
   );
 
-  // ── Handle input change → process scanned text ────────────────────────────
-  const handleInputChange = useCallback(
-    (value: string) => {
-      bipagem.handleInput(value);
-      // processText is called inside handleInput with debounce;
-      // we need to observe new IDs for overlay
-    },
-    [bipagem],
-  );
-
   // We wrap processText to trigger overlay after processing
   const handleTextareaChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -474,7 +518,7 @@ export default function ColetasPage() {
         const result = bipagem.processText(value);
         if (result.newIds.length > 0) {
           const lastId = result.newIds[result.newIds.length - 1];
-          const carrier = detectCarrier(lastId, bipagem.carrierPatterns);
+          const carrier = getCarrier(lastId);
           showOverlay(lastId, false, carrier);
           if (
             bipagem.currentFunction === "DEVOLUCAO" ||
@@ -492,7 +536,7 @@ export default function ColetasPage() {
         }
       }, 5);
     },
-    [bipagem, showOverlay, setDevolucaoPacketId, setDevolucaoModalOpen],
+    [bipagem, showOverlay, getCarrier, setDevolucaoPacketId, setDevolucaoModalOpen],
   );
 
   // ── Remove package by search ──────────────────────────────────────────────
@@ -555,8 +599,10 @@ export default function ColetasPage() {
       sessaoIdRef.current = null;
       initLockRef.current = false;
       lastSaveBodyRef.current = null;
+      lastInitErrorAtRef.current = 0;
       setSaveState("idle");
       setIsForcingStop(false);
+      toast.dismiss("coletas-sessao-init-error");
       toast.info("Sessão encerrada");
     }
   }, [bipagem]);
@@ -679,7 +725,7 @@ export default function ColetasPage() {
     try {
       const pacotes = bipagem.ids.map((id) => ({
         codigo: id,
-        transportadora: detectCarrier(id, bipagem.carrierPatterns),
+        transportadora: getCarrier(id),
       }));
 
       // Build devolucoes record for API
@@ -779,7 +825,9 @@ export default function ColetasPage() {
       bipagem.clear();
       initLockRef.current = false;
       lastSaveBodyRef.current = null;
+      lastInitErrorAtRef.current = 0;
       setSaveState("idle");
+      toast.dismiss("coletas-sessao-init-error");
       toast.success("Bipagem finalizada!");
       return true;
     } catch {
@@ -858,9 +906,9 @@ export default function ColetasPage() {
   // ── Devolucao Modal ───────────────────────────────────────────────────────
   const handleOpenDevolucao = useCallback((pacoteId: string) => {
     setDevolucaoPacketId(pacoteId);
-    setDevolucaoCarrier(detectCarrier(pacoteId, bipagem.carrierPatterns));
+    setDevolucaoCarrier(getCarrier(pacoteId));
     setDevolucaoModalOpen(true);
-  }, [bipagem.carrierPatterns]);
+  }, [getCarrier]);
 
   // Callback estável para PacoteListItem — sem isso, ref nova a cada render
   // quebraria o React.memo do item e re-renderizaria a lista inteira por bipe.
@@ -1448,10 +1496,10 @@ export default function ColetasPage() {
                 >
                   {bipagem.ids.map((id, index) => (
                     <PacoteListItem
-                      key={`${id}-${index}`}
+                      key={id}
                       codigo={id}
                       index={index}
-                      carrier={detectCarrier(id, bipagem.carrierPatterns)}
+                      carrier={getCarrier(id)}
                       hasDevolucao={!!bipagem.devolucoesData[id]}
                       onRemove={handleRemovePacote}
                       onEditDevolucao={handleOpenDevolucao}
