@@ -90,6 +90,11 @@ const TABELAS_PADRAO = [
   "sessao_central_envios",
   // Módulo Central de Envios — Histórico/arquivamento (RITM-11)
   "planejamento_envios",
+  // Módulo Central de Envios — Bipagem (RITM-15)
+  "central_envios_bipagem_pacote",
+  "central_envios_notificacao",
+  // Módulo Análise de Pedidos — último import por conta
+  "analise_pedidos_import",
 ] as const;
 
 // Tabelas com variante "conta_id IS NULL": receiver insere antes de

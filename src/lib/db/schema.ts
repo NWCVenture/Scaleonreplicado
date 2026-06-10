@@ -2822,9 +2822,16 @@ export const sessaoCentralEnvios = pgTable(
   (t) => [
     index("idx_sessao_ce_conta").on(t.contaId),
     index("idx_sessao_ce_usuario").on(t.usuarioId),
-    uniqueIndex("uq_sessao_ce_ativa_por_usuario")
-      .on(t.usuarioId)
-      .where(sql`status = 'ativa'`),
+    // RITM-15: concorrência relaxada. Substitui o unique parcial
+    // `uq_sessao_ce_ativa_por_usuario` por um índice de busca: ao montar
+    // /central-envios precisamos listar sessões `ativa` da conta pra
+    // avisar o usuário ("outras sessões em andamento"). Múltiplas
+    // sessões ativas por usuário ou por conta agora são legais.
+    index("idx_sessao_ce_ativas_conta").on(
+      t.contaId,
+      t.status,
+      t.iniciouEm.desc(),
+    ),
   ],
 );
 
@@ -2833,6 +2840,121 @@ export type SessaoCentralEnviosStatus =
   (typeof sessaoCentralEnviosStatusEnum.enumValues)[number];
 export type SessaoCentralEnviosMotivoEncerro =
   (typeof sessaoCentralEnviosMotivoEncerroEnum.enumValues)[number];
+
+// ============================================================
+// Módulo Central de Envios — Bipagem (RITM-15)
+// ============================================================
+//
+// Cada bipe vira uma linha auditável em `central_envios_bipagem_pacote`.
+// O JSON live em `sessao_central_envios.dados.bipagem` é cache de UI —
+// a verdade é a tabela. Categoria é decidida pelo classificador (RITM-16).
+//
+// Notificações cross-session ficam em `central_envios_notificacao` e são
+// consumidas via poll do cliente (RITM-21). `lida_em` marca a entrega.
+
+export const centralEnviosBipagemCategoriaEnum = pgEnum(
+  "central_envios_bipagem_categoria",
+  [
+    "OK",
+    "DUPLICADO",
+    "CANCELADO_RETIRADO",
+    "CANCELADO_ENVIADO_MESMO_ASSIM",
+    "FORA_LOTE",
+    "DESCONHECIDA",
+    "LOCALIZADOR_ACHADO",
+    "LOCALIZADOR_LIVRE",
+  ],
+);
+
+export const centralEnviosNotificacaoTipoEnum = pgEnum(
+  "central_envios_notificacao_tipo",
+  ["DUPLICACAO_CROSS_SESSAO", "CANCELAMENTO_RETROATIVO"],
+);
+
+export const centralEnviosBipagemPacote = pgTable(
+  "central_envios_bipagem_pacote",
+  {
+    id: text("id").primaryKey(),
+    sessaoId: text("sessao_id")
+      .notNull()
+      .references(() => sessaoCentralEnvios.id, { onDelete: "cascade" }),
+    bipadoEm: timestamp("bipado_em", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    codigoBipado: text("codigo_bipado").notNull(),
+    // null quando o código bipado não casou com nenhum pedido do CSV
+    // (categoria FORA_LOTE ou DESCONHECIDA).
+    trackingId: text("tracking_id"),
+    orderId: text("order_id"),
+    // 'tiktok_shop' | 'mercado_livre' | 'shopee' — texto livre pra evitar
+    // acoplamento com `plataforma_canal` (que pode crescer).
+    canal: text("canal"),
+    // FK lógica pra canais_venda.id. Não força FK no banco porque o canal
+    // pode ser de marketplace externo que ainda não tem registro.
+    canalVendaId: text("canal_venda_id"),
+    categoria: centralEnviosBipagemCategoriaEnum("categoria").notNull(),
+    transportadora: transportadoraLabelEnum("transportadora"),
+    // 'RETIRADO' | 'ENVIADO_MESMO_ASSIM' — preenchido quando categoria
+    // está no grupo cancelado. Auditoria da decisão do operador.
+    acaoCancelado: text("acao_cancelado"),
+    usuarioId: text("usuario_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    index("idx_ce_bipagem_sessao").on(t.sessaoId),
+    index("idx_ce_bipagem_categoria").on(t.sessaoId, t.categoria),
+    // Detecção de duplicação cross-session (RITM-21). Parcial pra evitar
+    // entradas com tracking null (FORA_LOTE/DESCONHECIDA) sujando o índice.
+    index("idx_ce_bipagem_dedup_global")
+      .on(t.contaId, t.trackingId, t.bipadoEm.desc())
+      .where(sql`tracking_id IS NOT NULL`),
+    index("idx_ce_bipagem_conta").on(t.contaId),
+  ],
+);
+
+export const centralEnviosNotificacao = pgTable(
+  "central_envios_notificacao",
+  {
+    id: text("id").primaryKey(),
+    sessaoDestinoId: text("sessao_destino_id")
+      .notNull()
+      .references(() => sessaoCentralEnvios.id, { onDelete: "cascade" }),
+    tipo: centralEnviosNotificacaoTipoEnum("tipo").notNull(),
+    // Schema livre por tipo — ver RITM-15 spec pra shapes esperados.
+    payload: jsonb("payload").notNull(),
+    criadaEm: timestamp("criada_em", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lidaEm: timestamp("lida_em", { withTimezone: true }),
+    contaId: text("conta_id")
+      .notNull()
+      .default("nwc-root")
+      .references(() => conta.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    // Poll do cliente: WHERE sessao_destino_id=? AND lida_em IS NULL.
+    index("idx_ce_notif_sessao_pendentes")
+      .on(t.sessaoDestinoId, t.criadaEm.desc())
+      .where(sql`lida_em IS NULL`),
+    index("idx_ce_notif_conta").on(t.contaId),
+  ],
+);
+
+export type CentralEnviosBipagemPacote = InferSelectModel<
+  typeof centralEnviosBipagemPacote
+>;
+export type CentralEnviosBipagemCategoria =
+  (typeof centralEnviosBipagemCategoriaEnum.enumValues)[number];
+export type CentralEnviosNotificacao = InferSelectModel<
+  typeof centralEnviosNotificacao
+>;
+export type CentralEnviosNotificacaoTipo =
+  (typeof centralEnviosNotificacaoTipoEnum.enumValues)[number];
 
 // ============================================================
 // MÓDULO CENTRAL DE ENVIOS — RITM-11 (histórico/arquivamento)
@@ -2880,3 +3002,45 @@ export const planejamentoEnvios = pgTable(
 );
 
 export type PlanejamentoEnvios = InferSelectModel<typeof planejamentoEnvios>;
+
+// ============================================================
+// Análise de Pedidos — último import por conta
+// ============================================================
+//
+// Singleton por conta: cada upload substitui o anterior. `linhas` guarda o
+// payload serializado (datas como ISO string) pra o cliente re-hidratar e
+// refiltrar sem precisar re-subir o xlsx. unique(contaId) garante 1 row/conta;
+// o upsert usa ON CONFLICT (conta_id).
+
+export const analisePedidosImport = pgTable(
+  "analise_pedidos_import",
+  {
+    id: text("id").primaryKey(),
+    contaId: text("conta_id")
+      .notNull()
+      .references(() => conta.id, { onDelete: "cascade" }),
+    importadoPor: text("importado_por")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    nomeArquivo: text("nome_arquivo").notNull(),
+    tamanhoArquivo: integer("tamanho_arquivo").notNull().default(0),
+    periodoMin: timestamp("periodo_min", { withTimezone: true }).notNull(),
+    periodoMax: timestamp("periodo_max", { withTimezone: true }).notNull(),
+    totalLinhas: integer("total_linhas").notNull(),
+    estadosDistintos: jsonb("estados_distintos")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    avisos: jsonb("avisos").$type<string[]>().notNull().default([]),
+    // LinhaPedido serializada — datas vão como ISO string. O cliente re-hidrata.
+    linhas: jsonb("linhas").$type<unknown[]>().notNull().default([]),
+    importadoEm: timestamp("importado_em", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("uq_analise_pedidos_import_conta").on(t.contaId),
+  ],
+);
+
+export type AnalisePedidosImport = InferSelectModel<typeof analisePedidosImport>;

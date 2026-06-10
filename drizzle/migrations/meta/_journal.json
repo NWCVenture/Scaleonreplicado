@@ -239,6 +239,20 @@
       "when": 1780884025319,
       "tag": "0033_eager_arclight",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1781036720677,
+      "tag": "0034_small_wolverine",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1781121040515,
+      "tag": "0035_serious_quasimodo",
+      "breakpoints": true
     }
   ]
 }
