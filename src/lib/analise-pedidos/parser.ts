@@ -81,6 +81,18 @@ export interface LinhaFiltrada {
   qtd: number;
 }
 
+export interface PedidosPorDiaSemana {
+  // 0 = Domingo, 6 = Sábado (alinhado com Date.getDay()).
+  diaSemana: number;
+  // Pedidos únicos (por numeroPedido) que caem nesse dia da semana no período.
+  total: number;
+  // Quantos dias do calendário daquele dia da semana caem no período filtrado.
+  // Usado pra calcular média e expor no tooltip.
+  ocorrencias: number;
+  // total / ocorrencias (0 quando não há ocorrências no período).
+  media: number;
+}
+
 export interface Resultado {
   matriz: ResultadoMatriz;
   topCores: RankingItem[];
@@ -90,6 +102,8 @@ export interface Resultado {
   totalPedidos: number;
   totalItens: number;
   totalSkus: number;
+  // Sempre 7 entradas, na ordem 0..6 (Dom..Sáb).
+  pedidosPorDiaSemana: PedidosPorDiaSemana[];
 }
 
 const TAMANHOS_CANONICOS = ["P", "M", "G", "GG", "EGG", "XGG"] as const;
@@ -371,6 +385,9 @@ export function agrupar(linhas: LinhaPedido[], filtro: FiltroAgrupamento): Resul
   >();
   const linhasFiltradas: LinhaFiltrada[] = [];
   const pedidosUnicos = new Set<string>();
+  // Pedidos únicos por dia da semana (0=Dom..6=Sáb). Dedup por número de
+  // pedido — uma venda com várias linhas conta uma única vez no seu dow.
+  const pedidosPorDow: Array<Set<string>> = Array.from({ length: 7 }, () => new Set());
   let totalItens = 0;
 
   for (const linha of linhas) {
@@ -380,6 +397,9 @@ export function agrupar(linhas: LinhaPedido[], filtro: FiltroAgrupamento): Resul
 
     const tamanho = linha.tamanho ?? "—";
     pedidosUnicos.add(linha.numeroPedido);
+    if (linha.numeroPedido) {
+      pedidosPorDow[linha.dataPedido.getDay()].add(linha.numeroPedido);
+    }
 
     const skuKey = linha.sku || "(sem SKU)";
     let skuEntry = porSkuMap.get(skuKey);
@@ -470,6 +490,30 @@ export function agrupar(linhas: LinhaPedido[], filtro: FiltroAgrupamento): Resul
     }))
     .sort((a, b) => b.qtdItens - a.qtdItens);
 
+  // Ocorrências de cada dia da semana no intervalo filtrado. O loop usa
+  // setDate(+1) — atravessa horário de verão sem desalinhar porque a
+  // comparação é só por data civil (toDateOnly).
+  const ocorrenciasDow = [0, 0, 0, 0, 0, 0, 0];
+  if (deTs <= ateTs) {
+    const cursor = new Date(filtro.de.getFullYear(), filtro.de.getMonth(), filtro.de.getDate());
+    while (toDateOnly(cursor) <= ateTs) {
+      ocorrenciasDow[cursor.getDay()]++;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  }
+
+  const pedidosPorDiaSemana: PedidosPorDiaSemana[] = ocorrenciasDow.map(
+    (ocorrencias, dow) => {
+      const total = pedidosPorDow[dow].size;
+      return {
+        diaSemana: dow,
+        total,
+        ocorrencias,
+        media: ocorrencias > 0 ? total / ocorrencias : 0,
+      };
+    },
+  );
+
   return {
     matriz: {
       tamanhos,
@@ -486,5 +530,6 @@ export function agrupar(linhas: LinhaPedido[], filtro: FiltroAgrupamento): Resul
     totalPedidos: pedidosUnicos.size,
     totalItens,
     totalSkus: porSkuMap.size,
+    pedidosPorDiaSemana,
   };
 }

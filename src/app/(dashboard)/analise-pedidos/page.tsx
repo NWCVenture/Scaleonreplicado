@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   BarChart3,
@@ -14,6 +14,15 @@ import {
   X,
 } from "lucide-react";
 import type { DateRange } from "react-day-picker";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -44,7 +53,9 @@ import { cn } from "@/lib/utils";
 import {
   parseUpsellerWorkbook,
   agrupar,
+  type LinhaPedido,
   type ParseResult,
+  type PedidosPorDiaSemana,
   type Resultado,
 } from "@/lib/analise-pedidos/parser";
 import { gerarXlsxExportacao } from "@/lib/analise-pedidos/export";
@@ -55,6 +66,45 @@ const PRESETS: { label: string; dias: number }[] = [
   { label: "15d", dias: 15 },
   { label: "30d", dias: 30 },
 ];
+// Ordem visual do gráfico — começa em segunda (padrão BR), termina no domingo.
+// O backend mantém 0=Dom..6=Sáb pra alinhar com Date.getDay(); aqui só reordenamos.
+const DOW_LABELS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0];
+
+// Rehidrata uma LinhaPedido vinda do banco (datas em ISO string) de volta pro
+// formato in-memory que o agrupar() espera.
+function rehidratarLinhas(raw: unknown[]): LinhaPedido[] {
+  const linhas: LinhaPedido[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const r = item as Record<string, unknown>;
+    const dataStr = r.dataPedido;
+    const data =
+      dataStr instanceof Date
+        ? dataStr
+        : typeof dataStr === "string"
+          ? new Date(dataStr)
+          : null;
+    if (!data || isNaN(data.getTime())) continue;
+    linhas.push({
+      numeroPedido: String(r.numeroPedido ?? ""),
+      plataforma: (r.plataforma as string | null) ?? null,
+      loja: (r.loja as string | null) ?? null,
+      estado: String(r.estado ?? ""),
+      dataPedido: data,
+      sku: String(r.sku ?? ""),
+      nomeAnuncio: String(r.nomeAnuncio ?? ""),
+      variacaoOriginal: String(r.variacaoOriginal ?? ""),
+      tamanho: (r.tamanho as string | null) ?? null,
+      cores: Array.isArray(r.cores)
+        ? (r.cores as { nome: string; qtd: number }[])
+        : [],
+      qtdProduto: Number(r.qtdProduto ?? 1),
+      precoProduto: (r.precoProduto as number | null) ?? null,
+    });
+  }
+  return linhas;
+}
 
 function diaInicio(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
@@ -91,7 +141,103 @@ export default function AnalisePedidosPage() {
   const [estados, setEstados] = useState<Set<string>>(new Set());
   const [rangeDialogAberto, setRangeDialogAberto] = useState(false);
   const [rangeTemp, setRangeTemp] = useState<DateRange | undefined>(undefined);
+  // Nome do último arquivo importado pela conta, restaurado do banco. Usado
+  // pra mostrar no chip "fileName" quando não há `file` (upload local).
+  const [nomeArquivoRestaurado, setNomeArquivoRestaurado] = useState<string | null>(
+    null,
+  );
+  const [restoring, setRestoring] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Carrega último import persistido (singleton por conta). Em falha, segue
+  // com a UI vazia — usuário pode subir um xlsx normalmente.
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/analise-pedidos/import");
+        if (!res.ok) return;
+        const data = await res.json();
+        const reg = data.import as {
+          nomeArquivo: string;
+          periodoMin: string;
+          periodoMax: string;
+          estadosDistintos: string[];
+          avisos: string[];
+          linhas: unknown[];
+        } | null;
+        if (cancelado || !reg) return;
+        const linhas = rehidratarLinhas(reg.linhas);
+        if (linhas.length === 0) return;
+        const periodoDisponivel = {
+          min: new Date(reg.periodoMin),
+          max: new Date(reg.periodoMax),
+        };
+        setParsed({
+          linhas,
+          periodoDisponivel,
+          estadosDistintos: reg.estadosDistintos,
+          avisos: reg.avisos,
+        });
+        setNomeArquivoRestaurado(reg.nomeArquivo);
+        const estadosIniciais = new Set(
+          ESTADOS_DEFAULT.filter((s) => reg.estadosDistintos.includes(s)),
+        );
+        if (estadosIniciais.size === 0) {
+          reg.estadosDistintos.forEach((s) => estadosIniciais.add(s));
+        }
+        setEstados(estadosIniciais);
+        const ate = diaFim(periodoDisponivel.max);
+        const baseInicio = new Date(periodoDisponivel.max);
+        baseInicio.setDate(baseInicio.getDate() - 6);
+        const min = diaInicio(periodoDisponivel.min);
+        const de = diaInicio(baseInicio) < min ? min : diaInicio(baseInicio);
+        setIntervalo({ de, ate });
+      } catch {
+        // segue com UI vazia
+      } finally {
+        if (!cancelado) setRestoring(false);
+      }
+    })();
+    return () => {
+      cancelado = true;
+    };
+  }, []);
+
+  async function persistirImport(
+    result: ParseResult,
+    file: File,
+  ): Promise<void> {
+    if (!result.periodoDisponivel) return;
+    try {
+      // Linhas serializadas: Date → ISO. O resto é JSON-safe.
+      const linhasSerializadas = result.linhas.map((l) => ({
+        ...l,
+        dataPedido: l.dataPedido.toISOString(),
+      }));
+      const res = await fetch("/api/analise-pedidos/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nomeArquivo: file.name,
+          tamanhoArquivo: file.size,
+          periodoMin: result.periodoDisponivel.min.toISOString(),
+          periodoMax: result.periodoDisponivel.max.toISOString(),
+          totalLinhas: result.linhas.length,
+          estadosDistintos: result.estadosDistintos,
+          avisos: result.avisos,
+          linhas: linhasSerializadas,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      // Falha de persistência não bloqueia o uso local — só avisa.
+      console.error("[analise-pedidos] persistir:", err);
+      toast.warning(
+        "Não foi possível salvar o import no servidor — análise local segue funcionando.",
+      );
+    }
+  }
 
   function aplicarPreset(dias: number) {
     if (!parsed?.periodoDisponivel) return;
@@ -116,7 +262,12 @@ export default function AnalisePedidosPage() {
     setParsed(null);
     setIntervalo(null);
     setEstados(new Set());
+    setNomeArquivoRestaurado(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    // Limpa o singleton da conta no servidor — próximo mount não restaura.
+    void fetch("/api/analise-pedidos/import", { method: "DELETE" }).catch(
+      () => {},
+    );
   }
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -134,6 +285,7 @@ export default function AnalisePedidosPage() {
         return;
       }
       setParsed(result);
+      setNomeArquivoRestaurado(null);
       const estadosIniciais = new Set(
         ESTADOS_DEFAULT.filter((s) => result.estadosDistintos.includes(s))
       );
@@ -153,6 +305,7 @@ export default function AnalisePedidosPage() {
       if (result.avisos.length > 0) {
         toast.warning(result.avisos.join(" / "));
       }
+      void persistirImport(result, f);
     } catch (err) {
       console.error(err);
       const msg = err instanceof Error ? err.message : String(err);
@@ -239,7 +392,14 @@ export default function AnalisePedidosPage() {
         icon={<BarChart3 className="h-8 w-8 text-primary" />}
       />
 
-      {!parsed ? (
+      {restoring && !parsed ? (
+        <Card>
+          <CardContent className="p-10 flex flex-col items-center gap-2 text-muted-foreground">
+            <RefreshCw className="h-10 w-10 animate-spin" />
+            <span className="text-sm">Carregando último import…</span>
+          </CardContent>
+        </Card>
+      ) : !parsed ? (
         <Card>
           <CardContent className="p-6">
             <div
@@ -286,7 +446,7 @@ export default function AnalisePedidosPage() {
                 <FileSpreadsheet className="h-4 w-4 text-primary shrink-0" />
                 <div className="min-w-0">
                   <div className="text-xs font-medium truncate max-w-[220px]">
-                    {file?.name ?? "planilha.xlsx"}
+                    {file?.name ?? nomeArquivoRestaurado ?? "planilha.xlsx"}
                   </div>
                   <div className="text-[11px] text-muted-foreground tabular-nums">
                     {fmt(parsed.periodoDisponivel!.min)} →{" "}
@@ -481,6 +641,8 @@ export default function AnalisePedidosPage() {
               detalhe={[...estados].sort().join(", ") || "—"}
             />
           </div>
+
+          <PedidosPorDiaSemanaCard dados={resultado.pedidosPorDiaSemana} />
 
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
             <Card className="xl:col-span-2">
@@ -683,6 +845,94 @@ function RankingCard({
               </li>
             ))}
           </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PedidosPorDiaSemanaCard({
+  dados,
+}: {
+  dados: PedidosPorDiaSemana[];
+}) {
+  // Reordena pra Seg→Dom (padrão BR) e arredonda a média pra 1 casa só pra
+  // o eixo Y não ficar com dízimas longas. O tooltip mostra o número cheio.
+  const dadosGrafico = DOW_ORDER.map((dow, i) => {
+    const entry = dados.find((d) => d.diaSemana === dow);
+    return {
+      dia: DOW_LABELS[i],
+      diaSemana: dow,
+      media: entry ? Math.round(entry.media * 10) / 10 : 0,
+      total: entry?.total ?? 0,
+      ocorrencias: entry?.ocorrencias ?? 0,
+    };
+  });
+  const semDados = dadosGrafico.every((d) => d.ocorrencias === 0);
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Média de pedidos por dia</CardTitle>
+        <CardDescription>
+          Média de pedidos únicos por dia da semana no período filtrado.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {semDados ? (
+          <EmptyState />
+        ) : (
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={dadosGrafico}
+                margin={{ top: 8, right: 12, left: 0, bottom: 4 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis
+                  dataKey="dia"
+                  tick={{ fontSize: 12 }}
+                  className="fill-muted-foreground"
+                />
+                <YAxis
+                  allowDecimals
+                  tick={{ fontSize: 12 }}
+                  className="fill-muted-foreground"
+                />
+                <Tooltip
+                  cursor={{ className: "fill-muted/40" }}
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const d = payload[0].payload as (typeof dadosGrafico)[number];
+                    return (
+                      <div className="rounded-md border bg-popover px-3 py-2 text-xs shadow-md">
+                        <div className="font-semibold mb-1">{d.dia}</div>
+                        <div className="tabular-nums">
+                          Média:{" "}
+                          <span className="font-medium">
+                            {d.media.toLocaleString("pt-BR", {
+                              minimumFractionDigits: 1,
+                              maximumFractionDigits: 1,
+                            })}
+                          </span>{" "}
+                          pedidos/dia
+                        </div>
+                        <div className="tabular-nums text-muted-foreground">
+                          Total: {d.total.toLocaleString("pt-BR")} em{" "}
+                          {d.ocorrencias}{" "}
+                          {d.ocorrencias === 1 ? "ocorrência" : "ocorrências"}
+                        </div>
+                      </div>
+                    );
+                  }}
+                />
+                <Bar
+                  dataKey="media"
+                  className="fill-primary"
+                  radius={[4, 4, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         )}
       </CardContent>
     </Card>

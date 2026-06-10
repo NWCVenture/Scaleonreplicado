@@ -236,3 +236,95 @@ test("agrupar: estados vazio nao filtra (libera tudo)", () => {
   });
   assert.equal(r.totalItens, 2);
 });
+
+test("agrupar: pedidosPorDiaSemana — dedup por pedido e ocorrencias do dow", () => {
+  // 2024-01-01 cai numa segunda. Período de 14 dias → 2 ocorrências de cada DOW.
+  const seg1 = new Date(2024, 0, 1);
+  const ter1 = new Date(2024, 0, 2);
+  const seg2 = new Date(2024, 0, 8);
+  const dom2 = new Date(2024, 0, 14);
+  const linhas: LinhaPedido[] = [
+    linha({
+      numeroPedido: "P1",
+      dataPedido: seg1,
+      cores: [{ nome: "Azul", qtd: 1 }],
+    }),
+    // Segunda linha do mesmo pedido — não pode contar 2× na segunda.
+    linha({
+      numeroPedido: "P1",
+      dataPedido: seg1,
+      cores: [{ nome: "Preto", qtd: 1 }],
+    }),
+    linha({
+      numeroPedido: "P2",
+      dataPedido: seg2,
+      cores: [{ nome: "Azul", qtd: 1 }],
+    }),
+    linha({
+      numeroPedido: "P3",
+      dataPedido: ter1,
+      cores: [{ nome: "Verde", qtd: 1 }],
+    }),
+    linha({
+      numeroPedido: "P4",
+      dataPedido: dom2,
+      cores: [{ nome: "Branco", qtd: 1 }],
+    }),
+  ];
+  const r = agrupar(linhas, {
+    de: seg1,
+    ate: dom2,
+    estados: new Set(),
+  });
+
+  assert.equal(r.pedidosPorDiaSemana.length, 7);
+  const porDow = Object.fromEntries(
+    r.pedidosPorDiaSemana.map((d) => [d.diaSemana, d]),
+  );
+  // Segunda (1): P1 + P2 = 2 pedidos únicos, 2 ocorrências, média 1.
+  assert.equal(porDow[1].total, 2);
+  assert.equal(porDow[1].ocorrencias, 2);
+  assert.equal(porDow[1].media, 1);
+  // Terça (2): só P3, 2 ocorrências → média 0,5.
+  assert.equal(porDow[2].total, 1);
+  assert.equal(porDow[2].ocorrencias, 2);
+  assert.equal(porDow[2].media, 0.5);
+  // Domingo (0): só P4, 2 ocorrências → média 0,5.
+  assert.equal(porDow[0].total, 1);
+  assert.equal(porDow[0].ocorrencias, 2);
+  assert.equal(porDow[0].media, 0.5);
+  // Quarta (3) sem pedidos no período, mas ainda tem 2 ocorrências.
+  assert.equal(porDow[3].total, 0);
+  assert.equal(porDow[3].ocorrencias, 2);
+  assert.equal(porDow[3].media, 0);
+});
+
+test("agrupar: pedidosPorDiaSemana respeita filtro de estado", () => {
+  const seg = new Date(2024, 0, 1);
+  const linhas: LinhaPedido[] = [
+    linha({
+      numeroPedido: "P1",
+      dataPedido: seg,
+      estado: "Enviado",
+      cores: [{ nome: "Azul", qtd: 1 }],
+    }),
+    linha({
+      numeroPedido: "P2",
+      dataPedido: seg,
+      estado: "Cancelado",
+      cores: [{ nome: "Verde", qtd: 1 }],
+    }),
+  ];
+  const r = agrupar(linhas, {
+    de: seg,
+    ate: seg,
+    estados: new Set(["Enviado"]),
+  });
+  const porDow = Object.fromEntries(
+    r.pedidosPorDiaSemana.map((d) => [d.diaSemana, d]),
+  );
+  // Só P1 (Enviado) entra. 1 ocorrência no período (1 dia).
+  assert.equal(porDow[1].total, 1);
+  assert.equal(porDow[1].ocorrencias, 1);
+  assert.equal(porDow[1].media, 1);
+});
