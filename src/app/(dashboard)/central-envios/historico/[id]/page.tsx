@@ -195,7 +195,11 @@ export default function HistoricoDetalhePage({ params }: PageProps) {
         </TabsList>
 
         <TabsContent value="dashboard">
-          <DashboardTab estatisticas={planejamento.estatisticas} />
+          <DashboardTab
+            estatisticas={planejamento.estatisticas}
+            dados={dados}
+            hojeIso={hojeIso}
+          />
         </TabsContent>
 
         <TabsContent value="cronograma">

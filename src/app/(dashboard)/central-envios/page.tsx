@@ -185,7 +185,7 @@ export default function CentralEnviosPage() {
         </TabsContent>
 
         <TabsContent value="dashboard">
-          <DashboardTab estatisticas={estatisticas} />
+          <DashboardTab estatisticas={estatisticas} dados={dados} hojeIso={hojeIso} />
         </TabsContent>
 
         <TabsContent value="cronograma">
