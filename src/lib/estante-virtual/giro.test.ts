@@ -5,6 +5,7 @@ import {
   calcularMediaPorDiaSemana,
   calcularMediaVendas,
   coberturaDias,
+  gerarOrdemDow,
   PLATAFORMA_TIKTOK,
   simularEstoqueSemanal,
 } from "./giro";
@@ -193,7 +194,16 @@ test("calcularMediaPorDiaSemana: filtro plataforma e prazo +2 úteis", () => {
   assert.equal(porDow[1].media, 0);
 });
 
-test("simularEstoqueSemanal: subtrai média do dia anterior em ordem Seg→Dom", () => {
+test("gerarOrdemDow: 7 entradas em ciclo a partir do dow inicial", () => {
+  // Sex (5) → sex, sáb, dom, seg, ter, qua, qui
+  assert.deepEqual(gerarOrdemDow(5), [5, 6, 0, 1, 2, 3, 4]);
+  // Dom (0) → dom..sáb
+  assert.deepEqual(gerarOrdemDow(0), [0, 1, 2, 3, 4, 5, 6]);
+  // Seg (1) → seg..dom
+  assert.deepEqual(gerarOrdemDow(1), [1, 2, 3, 4, 5, 6, 0]);
+});
+
+test("simularEstoqueSemanal: começa em dowInicial, subtrai dia a dia", () => {
   // Médias: seg=10, ter=5, demais=0
   const medias = [
     { diaSemana: 0, totalItens: 0, ocorrencias: 1, media: 0 },
@@ -204,15 +214,23 @@ test("simularEstoqueSemanal: subtrai média do dia anterior em ordem Seg→Dom",
     { diaSemana: 5, totalItens: 0, ocorrencias: 1, media: 0 },
     { diaSemana: 6, totalItens: 0, ocorrencias: 1, media: 0 },
   ];
-  const sim = simularEstoqueSemanal(100, medias);
-  // Ordem visual: Seg, Ter, Qua, Qui, Sex, Sáb, Dom
+  // Começa na seg (1): seg, ter, qua, qui, sex, sáb, dom
+  const segOrigem = simularEstoqueSemanal(100, medias, 1);
   assert.deepEqual(
-    sim.map((d) => d.estoqueInicial),
+    segOrigem.map((d) => d.estoqueInicial),
     [100, 90, 85, 85, 85, 85, 85],
   );
-  // Cada dia carrega a média esperada
-  assert.equal(sim[0].mediaEntregar, 10);
-  assert.equal(sim[1].mediaEntregar, 5);
+  // Começa na sex (5): sex, sáb, dom, seg, ter, qua, qui
+  // Sex consome 0, sáb consome 0, dom consome 0, seg consome 10, ter consome 5
+  const sexOrigem = simularEstoqueSemanal(100, medias, 5);
+  assert.deepEqual(
+    sexOrigem.map((d) => d.diaSemana),
+    [5, 6, 0, 1, 2, 3, 4],
+  );
+  assert.deepEqual(
+    sexOrigem.map((d) => d.estoqueInicial),
+    [100, 100, 100, 100, 90, 85, 85],
+  );
 });
 
 test("simularEstoqueSemanal: clampa em 0 quando consumo passa do estoque", () => {
@@ -225,7 +243,8 @@ test("simularEstoqueSemanal: clampa em 0 quando consumo passa do estoque", () =>
     { diaSemana: 5, totalItens: 0, ocorrencias: 1, media: 0 },
     { diaSemana: 6, totalItens: 0, ocorrencias: 1, media: 0 },
   ];
-  const sim = simularEstoqueSemanal(100, medias);
+  // Começa na seg (1): seg, ter, qua, ...
+  const sim = simularEstoqueSemanal(100, medias, 1);
   // Seg: 100, Ter: 20 (100-80), Qua: 0 (20-50 → clampa em 0)
   assert.equal(sim[0].estoqueInicial, 100);
   assert.equal(sim[1].estoqueInicial, 20);

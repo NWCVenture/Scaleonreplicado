@@ -28,8 +28,8 @@ import { rehidratarLinhas } from "@/lib/analise-pedidos/rehidratar";
 import type { LinhaPedido } from "@/lib/analise-pedidos/parser";
 import {
   calcularMediaPorDiaSemana,
-  DOW_VISUAL_LABELS,
-  DOW_VISUAL_ORDER,
+  DOW_NOMES_CURTOS,
+  gerarOrdemDow,
   PLATAFORMA_TIKTOK,
   simularEstoqueSemanal,
   type PresetGiro,
@@ -119,9 +119,14 @@ export function EstoqueVsVendasCard({ totalPecasEstante }: EstoqueVsVendasProps)
       estados: estadosFiltro,
       plataforma: PLATAFORMA_TIKTOK,
     });
-    const semana = simularEstoqueSemanal(totalPecasEstante, medias);
+    // A projeção começa em "hoje" (DOW do cliente). new Date() é OK aqui porque
+    // o componente roda no client e só queremos a data civil pra escolher o
+    // ponto de partida — não há risco de hidratação porque o cálculo só roda
+    // depois do useEffect que setou importMeta.
+    const dowHoje = new Date().getDay();
+    const semana = simularEstoqueSemanal(totalPecasEstante, medias, dowHoje);
     const totalSemana = medias.reduce((acc, m) => acc + m.media, 0);
-    return { medias, semana, totalSemana };
+    return { medias, semana, totalSemana, dowHoje };
   }, [importMeta, linhas, preset, estadosFiltro, totalPecasEstante]);
 
   return (
@@ -203,15 +208,15 @@ function GiroSemanalGrafico({
   totalSemana: number;
   semana: ReturnType<typeof simularEstoqueSemanal>;
 }) {
-  const data = DOW_VISUAL_ORDER.map((dow, i) => {
-    const sim = semana.find((s) => s.diaSemana === dow);
-    return {
-      dia: DOW_VISUAL_LABELS[i],
-      diaSemana: dow,
-      estoque: Math.round(sim?.estoqueInicial ?? 0),
-      mediaEntregar: Math.round((sim?.mediaEntregar ?? 0) * 10) / 10,
-    };
-  });
+  // `semana` já vem em ordem cronológica a partir do dowInicial (= hoje).
+  // Primeiro dia recebe label "Hoje"; demais usam o nome curto do DOW.
+  const data = semana.map((sim, i) => ({
+    dia: i === 0 ? "Hoje" : DOW_NOMES_CURTOS[sim.diaSemana],
+    diaSemana: sim.diaSemana,
+    nomeDia: DOW_NOMES_CURTOS[sim.diaSemana],
+    estoque: Math.round(sim.estoqueInicial),
+    mediaEntregar: Math.round(sim.mediaEntregar * 10) / 10,
+  }));
 
   // Cobertura semanal: estoque atual ÷ média total da semana (peças/semana).
   // 7 dias → quantas semanas o estoque dura.
@@ -249,12 +254,13 @@ function GiroSemanalGrafico({
             />
             <Tooltip
               cursor={{ className: "fill-muted/40" }}
-              content={({ active, payload, label }) => {
+              content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0].payload as (typeof data)[number];
+                const titulo = d.dia === "Hoje" ? `Hoje (${d.nomeDia})` : d.nomeDia;
                 return (
                   <div className="rounded-md border bg-popover px-3 py-2 text-xs shadow-md space-y-0.5">
-                    <div className="font-semibold mb-1">{label}</div>
+                    <div className="font-semibold mb-1">{titulo}</div>
                     <div className="tabular-nums">
                       <span className="text-primary">■</span> Estoque no início:{" "}
                       <span className="font-medium">

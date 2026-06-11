@@ -17,9 +17,17 @@
 import type { LinhaPedido } from "@/lib/analise-pedidos/parser";
 
 export const PLATAFORMA_TIKTOK = "TikTok Shop";
-// Ordem visual padrão BR: Seg→Dom. O backend mantém 0=Dom..6=Sáb.
-export const DOW_VISUAL_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
-export const DOW_VISUAL_LABELS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+// Indexado por DOW (0=Dom..6=Sáb, alinhado com Date.getDay()).
+export const DOW_NOMES_CURTOS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+// Retorna 7 DOWs em ordem cronológica a partir de `dowInicial`.
+// Ex: dowInicial=5 (sex) → [5, 6, 0, 1, 2, 3, 4] (sex, sáb, dom, seg, ter, qua, qui).
+export function gerarOrdemDow(dowInicial: number): number[] {
+  const ordem: number[] = [];
+  const base = ((dowInicial % 7) + 7) % 7;
+  for (let i = 0; i < 7; i++) ordem.push((base + i) % 7);
+  return ordem;
+}
 
 export interface PeriodoGiro {
   de: Date;
@@ -194,17 +202,19 @@ export interface DiaSimulado {
   mediaEntregar: number;
 }
 
-// Projeta o consumo do estoque ao longo da semana Seg→Dom. O estoque inicial
-// da segunda = estoque atual; pra cada dia seguinte subtrai a média do dia
-// anterior. Permite ver visualmente a "queda" do estoque ao longo da semana.
+// Projeta o consumo do estoque ao longo de 7 dias a partir de `dowInicial`
+// (default = hoje). O estoque inicial do 1º dia = estoque atual; cada dia
+// seguinte subtrai a média do dia anterior. Permite visualizar a "queda" do
+// estoque na semana que se desenrola a partir de hoje.
 export function simularEstoqueSemanal(
   estoqueAtual: number,
   medias: MediaPorDiaSemana[],
+  dowInicial: number,
 ): DiaSimulado[] {
   const mediasPorDow = new Map(medias.map((m) => [m.diaSemana, m.media]));
   let saldo = estoqueAtual;
   const resultado: DiaSimulado[] = [];
-  for (const dow of DOW_VISUAL_ORDER) {
+  for (const dow of gerarOrdemDow(dowInicial)) {
     const mediaEntregar = mediasPorDow.get(dow) ?? 0;
     resultado.push({
       diaSemana: dow,
