@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { calcularMediaVendas, coberturaDias } from "./giro";
+import {
+  adicionarDiasUteis,
+  calcularMediaPorDiaSemana,
+  calcularMediaVendas,
+  coberturaDias,
+  PLATAFORMA_TIKTOK,
+  simularEstoqueSemanal,
+} from "./giro";
 import type { LinhaPedido } from "@/lib/analise-pedidos/parser";
 
 function linha(partial: Partial<LinhaPedido>): LinhaPedido {
@@ -125,4 +132,102 @@ test("coberturaDias: estoque ÷ média; Infinity quando média 0", () => {
   assert.equal(coberturaDias(0, 5), 0);
   assert.equal(coberturaDias(100, 0), Infinity);
   assert.equal(coberturaDias(100, -1), Infinity);
+});
+
+test("adicionarDiasUteis: pula sáb/dom", () => {
+  // Seg 2024-01-01 + 2 úteis = Qua 2024-01-03
+  const seg = new Date(2024, 0, 1);
+  assert.deepEqual(adicionarDiasUteis(seg, 2), new Date(2024, 0, 3));
+  // Sex 2024-01-05 + 2 úteis = Ter 2024-01-09
+  const sex = new Date(2024, 0, 5);
+  assert.deepEqual(adicionarDiasUteis(sex, 2), new Date(2024, 0, 9));
+  // Sáb 2024-01-06 + 2 úteis = Ter 2024-01-09 (pula dom, conta seg+ter)
+  const sab = new Date(2024, 0, 6);
+  assert.deepEqual(adicionarDiasUteis(sab, 2), new Date(2024, 0, 9));
+  // Dom 2024-01-07 + 2 úteis = Ter 2024-01-09
+  const dom = new Date(2024, 0, 7);
+  assert.deepEqual(adicionarDiasUteis(dom, 2), new Date(2024, 0, 9));
+});
+
+test("calcularMediaPorDiaSemana: filtro plataforma e prazo +2 úteis", () => {
+  const min = new Date(2024, 0, 1); // seg
+  const ate = new Date(2024, 0, 14); // dom — 14 dias = 2 de cada DOW.
+  const linhas: LinhaPedido[] = [
+    // TikTok Shop, pedido seg 1/jan → entrega qua 3/jan (DOW=3). 3 peças.
+    linha({
+      dataPedido: new Date(2024, 0, 1),
+      plataforma: PLATAFORMA_TIKTOK,
+      cores: [{ nome: "Preto", qtd: 3 }],
+    }),
+    // TikTok Shop, pedido sex 5/jan → entrega ter 9/jan (DOW=2). 2 peças.
+    linha({
+      dataPedido: new Date(2024, 0, 5),
+      plataforma: PLATAFORMA_TIKTOK,
+      cores: [{ nome: "Azul", qtd: 2 }],
+    }),
+    // Mercado Livre — descartado pelo filtro.
+    linha({
+      dataPedido: new Date(2024, 0, 1),
+      plataforma: "Mercado Livre",
+      cores: [{ nome: "Preto", qtd: 100 }],
+    }),
+  ];
+  const r = calcularMediaPorDiaSemana(linhas, {
+    periodoMin: min,
+    periodoMax: ate,
+    preset: 14,
+    estados: new Set(),
+    plataforma: PLATAFORMA_TIKTOK,
+  });
+  assert.equal(r.length, 7);
+  const porDow = Object.fromEntries(r.map((d) => [d.diaSemana, d]));
+  // Qua: 3 peças, 2 ocorrências → 1,5
+  assert.equal(porDow[3].totalItens, 3);
+  assert.equal(porDow[3].ocorrencias, 2);
+  assert.equal(porDow[3].media, 1.5);
+  // Ter: 2 peças, 2 ocorrências → 1
+  assert.equal(porDow[2].totalItens, 2);
+  assert.equal(porDow[2].media, 1);
+  // Seg: nada
+  assert.equal(porDow[1].totalItens, 0);
+  assert.equal(porDow[1].media, 0);
+});
+
+test("simularEstoqueSemanal: subtrai média do dia anterior em ordem Seg→Dom", () => {
+  // Médias: seg=10, ter=5, demais=0
+  const medias = [
+    { diaSemana: 0, totalItens: 0, ocorrencias: 1, media: 0 },
+    { diaSemana: 1, totalItens: 0, ocorrencias: 1, media: 10 },
+    { diaSemana: 2, totalItens: 0, ocorrencias: 1, media: 5 },
+    { diaSemana: 3, totalItens: 0, ocorrencias: 1, media: 0 },
+    { diaSemana: 4, totalItens: 0, ocorrencias: 1, media: 0 },
+    { diaSemana: 5, totalItens: 0, ocorrencias: 1, media: 0 },
+    { diaSemana: 6, totalItens: 0, ocorrencias: 1, media: 0 },
+  ];
+  const sim = simularEstoqueSemanal(100, medias);
+  // Ordem visual: Seg, Ter, Qua, Qui, Sex, Sáb, Dom
+  assert.deepEqual(
+    sim.map((d) => d.estoqueInicial),
+    [100, 90, 85, 85, 85, 85, 85],
+  );
+  // Cada dia carrega a média esperada
+  assert.equal(sim[0].mediaEntregar, 10);
+  assert.equal(sim[1].mediaEntregar, 5);
+});
+
+test("simularEstoqueSemanal: clampa em 0 quando consumo passa do estoque", () => {
+  const medias = [
+    { diaSemana: 0, totalItens: 0, ocorrencias: 1, media: 0 },
+    { diaSemana: 1, totalItens: 0, ocorrencias: 1, media: 80 },
+    { diaSemana: 2, totalItens: 0, ocorrencias: 1, media: 50 },
+    { diaSemana: 3, totalItens: 0, ocorrencias: 1, media: 0 },
+    { diaSemana: 4, totalItens: 0, ocorrencias: 1, media: 0 },
+    { diaSemana: 5, totalItens: 0, ocorrencias: 1, media: 0 },
+    { diaSemana: 6, totalItens: 0, ocorrencias: 1, media: 0 },
+  ];
+  const sim = simularEstoqueSemanal(100, medias);
+  // Seg: 100, Ter: 20 (100-80), Qua: 0 (20-50 → clampa em 0)
+  assert.equal(sim[0].estoqueInicial, 100);
+  assert.equal(sim[1].estoqueInicial, 20);
+  assert.equal(sim[2].estoqueInicial, 0);
 });
