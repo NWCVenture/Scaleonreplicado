@@ -151,7 +151,11 @@ export async function analyzePDFPages(
     let carrierFromPDF = "Outro";
     if (/imile/i.test(text)) carrierFromPDF = "iMile";
     else if (/jadlog/i.test(text)) carrierFromPDF = "JadLog";
-    else if (/j&t|j\s*&\s*t express|999880/i.test(text)) carrierFromPDF = "J&T";
+    // Detecção do J&T: prefixos 99988X já vistos em prod foram 999880 (legado)
+    // e 999881 (atual, 06/2026). \d no último dígito cobre os dois e
+    // qualquer próximo da família, sem comprometer especificidade — outros
+    // prefixos 99988X são improváveis fora do J&T.
+    else if (/j&t|j\s*&\s*t express|99988\d/i.test(text)) carrierFromPDF = "J&T";
 
     let jadlogBarcode = "";
     if (carrierFromPDF === "JadLog") {
@@ -161,7 +165,7 @@ export async function analyzePDFPages(
 
     let jtBarcode = "";
     if (carrierFromPDF === "J&T") {
-      const jt = text.match(/\b(999880\d{6,}?)(?:\$|\b)/);
+      const jt = text.match(/\b(99988\d\d{6,}?)(?:\$|\b)/);
       if (jt) jtBarcode = jt[1];
     }
 
