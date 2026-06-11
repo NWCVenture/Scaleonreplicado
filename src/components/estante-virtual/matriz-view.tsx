@@ -25,6 +25,7 @@ import {
   agregarFardos,
   type EstanteFardoItem,
 } from "@/lib/estante-virtual/agregar";
+import { EstoqueVsVendasCard } from "@/components/estante-virtual/estoque-vs-vendas";
 
 interface MatrizViewProps {
   fardos: EstanteFardoItem[];
@@ -179,63 +180,8 @@ export function MatrizView({ fardos, nomeEstante }: MatrizViewProps) {
         </div>
       </div>
 
-      {/* ── Caixas a consolidar (parciais) ─────────────────────────────── */}
-      <div>
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-          Caixas a consolidar ({agregado.caixasParciais.length})
-        </h2>
-        {agregado.caixasParciais.length === 0 ? (
-          <div className="flex items-center gap-2 px-4 py-3 text-sm text-green-300/80 border border-green-800/60 bg-green-950/20 rounded-lg">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            Sem caixas parciais — todos os fardos estão cheios.
-          </div>
-        ) : (
-          <div className="border border-slate-700 rounded-lg overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-800/60">
-                <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-xs text-muted-foreground uppercase tracking-wider">
-                    SKU
-                  </th>
-                  <th className="px-3 py-2 text-left font-semibold text-xs text-muted-foreground uppercase tracking-wider">
-                    Cor
-                  </th>
-                  <th className="px-3 py-2 text-left font-semibold text-xs text-muted-foreground uppercase tracking-wider">
-                    Tam
-                  </th>
-                  <th className="px-3 py-2 text-left font-semibold text-xs text-muted-foreground uppercase tracking-wider">
-                    Lote
-                  </th>
-                  <th className="px-3 py-2 text-right font-semibold text-xs text-muted-foreground uppercase tracking-wider">
-                    Qtd
-                  </th>
-                  <th className="px-3 py-2 text-right font-semibold text-xs text-muted-foreground uppercase tracking-wider">
-                    Falta
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {agregado.caixasParciais.map((p) => (
-                  <tr key={p.fardoId} className="border-t border-slate-700">
-                    <td className="px-3 py-2 font-mono">{p.sku}</td>
-                    <td className="px-3 py-2 font-mono">{p.cor}</td>
-                    <td className="px-3 py-2 font-mono">{p.tamanho}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
-                      {p.lote}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums">
-                      {p.quantidade}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono tabular-nums font-bold text-amber-400">
-                      {p.faltaParaCheia}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      {/* ── Estoque × média de vendas (giro) ───────────────────────────── */}
+      <EstoqueVsVendasCard totalPecasEstante={agregado.totalPecas} />
     </div>
   );
 }
