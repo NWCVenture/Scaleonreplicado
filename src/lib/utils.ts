@@ -5,25 +5,17 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export async function copyToClipboard(text: string): Promise<void> {
-  // Caminho preferencial: Clipboard API. Pode rejeitar se o documento perdeu
-  // foco, se o contexto não for seguro (HTTP) ou se a permissão foi negada —
-  // nesses casos caímos no fallback em vez de propagar o erro pra UI.
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch {
-      // segue pro fallback
-    }
-  }
-  if (typeof document === "undefined") {
-    throw new Error("Clipboard indisponível");
-  }
-  // Fallback: textarea oculto + execCommand. O execCommand("copy") retorna
-  // false silenciosamente se não houver seleção válida — antes o código
-  // descartava esse retorno e resolvia a Promise como se tivesse copiado.
+function syncCopyViaExecCommand(text: string): boolean {
+  if (typeof document === "undefined") return false;
+  // Synchronous copy via hidden textarea + execCommand("copy"). Funciona em
+  // todos os navegadores modernos e — diferente de navigator.clipboard —
+  // não depende de document.hasFocus() nem é sensível a focus thrashing
+  // (ex.: polling de auto-focus do scanner Coletas roubando foco no meio
+  // do clique). Ficar com o caminho síncrono primeiro evita a intermitência.
   const prevActive = document.activeElement as HTMLElement | null;
+  const prevSelection = document.getSelection()?.rangeCount
+    ? document.getSelection()?.getRangeAt(0).cloneRange()
+    : null;
   const el = document.createElement("textarea");
   el.value = text;
   el.setAttribute("readonly", "");
@@ -31,19 +23,45 @@ export async function copyToClipboard(text: string): Promise<void> {
   el.style.top = "0";
   el.style.left = "0";
   el.style.opacity = "0";
+  el.style.pointerEvents = "none";
   document.body.appendChild(el);
   el.focus();
   el.select();
+  el.setSelectionRange(0, text.length);
   let ok = false;
   try {
     ok = document.execCommand("copy");
+  } catch {
+    ok = false;
   } finally {
     document.body.removeChild(el);
+    if (prevSelection) {
+      const sel = document.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(prevSelection);
+    }
     prevActive?.focus?.();
   }
-  if (!ok) {
-    throw new Error("Falha ao copiar para a área de transferência");
+  return ok;
+}
+
+export async function copyToClipboard(text: string): Promise<void> {
+  // Estratégia: caminho síncrono via execCommand PRIMEIRO. É mais confiável
+  // dentro de um gesto do usuário, não depende de document.hasFocus() e não
+  // sofre com auto-focus polling do scanner do módulo Coletas — que estava
+  // causando intermitência no botão Copiar. Async Clipboard API fica como
+  // fallback caso execCommand seja bloqueado (alguns iframes/sandboxes).
+  if (syncCopyViaExecCommand(text)) return;
+
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // segue
+    }
   }
+  throw new Error("Falha ao copiar para a área de transferência");
 }
 
 export function generateId(): string {

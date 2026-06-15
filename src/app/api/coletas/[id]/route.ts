@@ -6,7 +6,7 @@ import {
   coletaDevolucaoSku,
   user,
 } from "@/lib/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { withContaAtiva } from "@/lib/tenancy";
 
@@ -64,31 +64,64 @@ export async function GET(
           )
         );
 
-      // 3. For each pacote, get devolucao + sku lines
-      const pacotesComDevolucao = await Promise.all(
-        pacotes.map(async (p) => {
-          const [dev] = await tx
-            .select()
-            .from(coletaDevolucao)
-            .where(
-              and(
-                eq(coletaDevolucao.pacoteId, p.id),
-                eq(coletaDevolucao.contaId, contaId)
-              )
-            );
-          if (!dev) return { ...p, devolucao: null };
-          const skuLines = await tx
-            .select()
-            .from(coletaDevolucaoSku)
-            .where(
-              and(
-                eq(coletaDevolucaoSku.devolucaoId, dev.id),
-                eq(coletaDevolucaoSku.contaId, contaId)
-              )
-            );
-          return { ...p, devolucao: { ...dev, skuLines } };
-        })
+      if (pacotes.length === 0) {
+        return { bipagem, pacotes: [] };
+      }
+
+      // 3. Batch-fetch devolucoes e sku lines de todos os pacotes em 2 queries
+      // (em vez de 2N queries) — evitava o N+1 que travava o endpoint pra
+      // bipagens grandes (chamado pelos botões Copiar e Bipar Mais do histórico).
+      const pacoteIds = pacotes.map((p) => p.id);
+      const devolucoes = await tx
+        .select()
+        .from(coletaDevolucao)
+        .where(
+          and(
+            inArray(coletaDevolucao.pacoteId, pacoteIds),
+            eq(coletaDevolucao.contaId, contaId)
+          )
+        );
+
+      const devolucoesById = new Map(devolucoes.map((d) => [d.id, d]));
+      const devolucaoPorPacote = new Map(
+        devolucoes.map((d) => [d.pacoteId, d])
       );
+
+      const skuLinesByDevolucao = new Map<
+        string,
+        Array<typeof coletaDevolucaoSku.$inferSelect>
+      >();
+      if (devolucoes.length > 0) {
+        const skuLines = await tx
+          .select()
+          .from(coletaDevolucaoSku)
+          .where(
+            and(
+              inArray(
+                coletaDevolucaoSku.devolucaoId,
+                Array.from(devolucoesById.keys())
+              ),
+              eq(coletaDevolucaoSku.contaId, contaId)
+            )
+          );
+        for (const line of skuLines) {
+          const arr = skuLinesByDevolucao.get(line.devolucaoId) ?? [];
+          arr.push(line);
+          skuLinesByDevolucao.set(line.devolucaoId, arr);
+        }
+      }
+
+      const pacotesComDevolucao = pacotes.map((p) => {
+        const dev = devolucaoPorPacote.get(p.id);
+        if (!dev) return { ...p, devolucao: null };
+        return {
+          ...p,
+          devolucao: {
+            ...dev,
+            skuLines: skuLinesByDevolucao.get(dev.id) ?? [],
+          },
+        };
+      });
 
       return { bipagem, pacotes: pacotesComDevolucao };
     });

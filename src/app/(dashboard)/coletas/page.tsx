@@ -105,6 +105,15 @@ export default function ColetasPage() {
   const [hydrated, setHydrated] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
 
+  // Modo "Bipar Mais": quando o usuário clica em "Bipar Mais" no histórico,
+  // continuamos a bipagem original em vez de criar um clone. O finalize usa
+  // PUT /api/coletas/[id]/continuar (substitui pacotes do registro original).
+  const [continuandoBipagemId, setContinuandoBipagemId] = useState<string | null>(
+    null,
+  );
+  const continuandoBipagemIdRef = useRef<string | null>(null);
+  continuandoBipagemIdRef.current = continuandoBipagemId;
+
   // Sessão ativa achada no GET inicial — abre modal "Continuar / Finalizar agora".
   // Não carregamos no estado client antes do usuário decidir.
   const [pendingRestore, setPendingRestore] = useState<{
@@ -131,6 +140,10 @@ export default function ColetasPage() {
   // Snapshot do último body que tentamos salvar — usado pelo botão de retry
   // manual quando saveState === 'error'.
   const lastSaveBodyRef = useRef<string | null>(null);
+  // Snapshot do último body confirmadamente salvo no servidor. Se o body atual
+  // for igual, pulamos o PATCH (evita ida ao servidor quando o estado oscilou
+  // mas voltou ao mesmo, e reduz tráfego em sessões grandes).
+  const lastSentBodyRef = useRef<string | null>(null);
   // Re-entrância: o useEffect que dispara handleFinalize pelo modal de
   // restauração roda múltiplas vezes durante a execução (cada setState dentro
   // do handleFinalize causa re-render → handleFinalize muda de identidade →
@@ -232,6 +245,7 @@ export default function ColetasPage() {
           });
           if (res.ok) {
             setSaveState("saved");
+            lastSentBodyRef.current = body;
             return true;
           }
         } catch {
@@ -322,6 +336,10 @@ export default function ColetasPage() {
       devolucoesData: bipagem.devolucoesData,
     });
     lastSaveBodyRef.current = body;
+
+    // Estado não mudou desde o último save bem-sucedido — não faz sentido bater
+    // no servidor de novo. Reduz tráfego e CPU em sessões grandes.
+    if (body === lastSentBodyRef.current) return;
 
     // 1ª gravação: cria sessão + PATCH imediatos (sem debounce).
     // Se o último POST falhou há menos de INIT_RETRY_THROTTLE_MS, não tenta
@@ -507,14 +525,20 @@ export default function ColetasPage() {
     [playSound],
   );
 
-  // We wrap processText to trigger overlay after processing
+  // Debounce o processText em vez de empilhar um setTimeout por keystroke.
+  // Scanner manda burst de 10-20 chars em ~50ms — antes a gente rodava o
+  // extrator de IDs N vezes (uma por keystroke), agora roda 1 vez com o
+  // texto completo. Isso reduz drasticamente CPU em sessões longas.
+  const processTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleTextareaChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const value = e.target.value;
       bipagem.setInputValue(value);
 
-      // Use a small debounce to process
-      setTimeout(() => {
+      if (processTimerRef.current) {
+        clearTimeout(processTimerRef.current);
+      }
+      processTimerRef.current = setTimeout(() => {
         const result = bipagem.processText(value);
         if (result.newIds.length > 0) {
           const lastId = result.newIds[result.newIds.length - 1];
@@ -534,7 +558,7 @@ export default function ColetasPage() {
         if (bipagem.autoClear) {
           bipagem.setInputValue("");
         }
-      }, 5);
+      }, 30);
     },
     [bipagem, showOverlay, getCarrier, setDevolucaoPacketId, setDevolucaoModalOpen],
   );
@@ -568,6 +592,13 @@ export default function ColetasPage() {
   // ── Limpar lista (NÃO encerra a sessão — só limpa o estado local) ────────
   const handleClear = useCallback(() => {
     bipagem.clear();
+    // Sai do modo "continuação" — se o usuário limpou a tela, não quer mais
+    // sobrescrever a bipagem original.
+    if (continuandoBipagemIdRef.current) {
+      setContinuandoBipagemId(null);
+      continuandoBipagemIdRef.current = null;
+      initLockRef.current = false;
+    }
     toast.info("Lista zerada");
   }, [bipagem]);
 
@@ -599,8 +630,11 @@ export default function ColetasPage() {
       sessaoIdRef.current = null;
       initLockRef.current = false;
       lastSaveBodyRef.current = null;
+      lastSentBodyRef.current = null;
       lastInitErrorAtRef.current = 0;
       setSaveState("idle");
+      setContinuandoBipagemId(null);
+      continuandoBipagemIdRef.current = null;
       setIsForcingStop(false);
       toast.dismiss("coletas-sessao-init-error");
       toast.info("Sessão encerrada");
@@ -742,16 +776,22 @@ export default function ColetasPage() {
         };
       }
 
-      const res = await fetch("/api/coletas", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tipo: bipagem.currentFunction,
-          conta: bipagem.currentAccount,
-          pacotes,
-          devolucoes,
-        }),
-      });
+      const continuandoId = continuandoBipagemIdRef.current;
+      const res = await fetch(
+        continuandoId
+          ? `/api/coletas/${continuandoId}/continuar`
+          : "/api/coletas",
+        {
+          method: continuandoId ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tipo: bipagem.currentFunction,
+            conta: bipagem.currentAccount,
+            pacotes,
+            devolucoes,
+          }),
+        },
+      );
 
       if (!res.ok) throw new Error();
 
@@ -825,10 +865,15 @@ export default function ColetasPage() {
       bipagem.clear();
       initLockRef.current = false;
       lastSaveBodyRef.current = null;
+      lastSentBodyRef.current = null;
       lastInitErrorAtRef.current = 0;
       setSaveState("idle");
+      setContinuandoBipagemId(null);
+      continuandoBipagemIdRef.current = null;
       toast.dismiss("coletas-sessao-init-error");
-      toast.success("Bipagem finalizada!");
+      toast.success(
+        continuandoId ? "Bipagem atualizada!" : "Bipagem finalizada!",
+      );
       return true;
     } catch {
       toast.error("Erro ao finalizar bipagem");
@@ -984,18 +1029,66 @@ export default function ColetasPage() {
 
   const handleResumeBipagem = useCallback(
     async (bipagemId: string) => {
+      // Bloqueia se o usuário já está em uma sessão ativa — senão sobrescreve
+      // pacotes sem que ele perceba.
+      if (bipagem.ids.length > 0) {
+        toast.error(
+          "Finalize ou pare a bipagem atual antes de continuar outra",
+        );
+        return;
+      }
       try {
         const res = await fetch(`/api/coletas/${bipagemId}`);
         if (!res.ok) throw new Error();
         const data = await res.json();
-        const pacoteCodes = data.pacotes.map(
-          (p: { codigo: string }) => p.codigo,
+        const pacotes = data.pacotes as Array<{
+          codigo: string;
+          devolucao: {
+            operacao: "TIKTOK_SHOP" | "MERCADO_LIVRE" | "SHOPEE";
+            avaria: boolean;
+            observacao: string | null;
+            tipo: TipoColeta;
+            skuLines: Array<{ sku: string; quantidade: number }>;
+          } | null;
+        }>;
+
+        // Reconstrói devoluções para a UI poder editar
+        const devolucoes: Record<string, unknown> = {};
+        for (const p of pacotes) {
+          if (!p.devolucao) continue;
+          devolucoes[p.codigo] = {
+            skuLines: p.devolucao.skuLines.map((l) => ({
+              sku: l.sku,
+              qtd: l.quantidade,
+            })),
+            operacao: p.devolucao.operacao,
+            avaria: p.devolucao.avaria,
+            obs: p.devolucao.observacao ?? "",
+            tipo: p.devolucao.tipo,
+          };
+        }
+
+        bipagem.loadFromTemp(
+          {
+            pacotes: pacotes.map((p) => ({ codigo: p.codigo })),
+            devolucoes: devolucoes as Record<string, Record<string, unknown>>,
+          },
+          data.tipo,
+          data.conta,
         );
-        pacoteCodes.forEach((code: string) => bipagem.addId(code));
-        bipagem.setCurrentFunction(data.tipo);
-        bipagem.setCurrentAccount(data.conta);
+
+        // Marca o modo "continuação" — o finalize vai usar PUT no registro
+        // original em vez de POST (clone).
+        setContinuandoBipagemId(bipagemId);
+        continuandoBipagemIdRef.current = bipagemId;
+        // Evita o auto-save criar uma nova sessão por cima — a continuação
+        // mantém o estado puramente local até o finalize.
+        initLockRef.current = true;
+
         setViewMode("bipagem");
-        toast.success(`Bipagem de ${pacoteCodes.length} pacotes carregada!`);
+        toast.success(
+          `Continuando bipagem (${pacotes.length} pacote(s)) — bipe mais e finalize para atualizar o registro`,
+        );
         setTimeout(() => inputRef.current?.focus(), 100);
       } catch {
         toast.error("Erro ao carregar bipagem");
@@ -1349,6 +1442,30 @@ export default function ColetasPage() {
       {/* ── BIPAGEM VIEW ─────────────────────────────────────────────── */}
       {viewMode === "bipagem" && (
         <div className="space-y-4">
+          {/* Banner: modo continuação (Bipar Mais) */}
+          {continuandoBipagemId && (
+            <div className="rounded-lg border border-blue-700 bg-blue-950/40 px-3 py-2 flex items-center justify-between gap-3">
+              <p className="text-sm text-blue-200">
+                <strong>Continuando bipagem</strong> — ao finalizar, os pacotes
+                serão adicionados ao registro original (sem criar um novo).
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setContinuandoBipagemId(null);
+                  continuandoBipagemIdRef.current = null;
+                  initLockRef.current = false;
+                  toast.info(
+                    "Modo continuação cancelado — finalize para criar nova bipagem",
+                  );
+                }}
+                className="text-xs text-blue-300 hover:text-blue-100 underline whitespace-nowrap"
+              >
+                Cancelar continuação
+              </button>
+            </div>
+          )}
+
           {/* Function type selector */}
           <Card className="bg-zinc-950 border-zinc-800">
             <CardContent className="p-4 space-y-4">
