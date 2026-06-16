@@ -3,7 +3,7 @@
 // /confeccao/nova — formulário de criar nova OP.
 // Admin only. Ao salvar, redireciona pra /confeccao/ops/{numero}.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -43,17 +43,33 @@ export default function NovaOPPage() {
     observacoes: "",
   });
   const [saving, setSaving] = useState(false);
+  // Marca quando a auth+papel já foram validados uma vez. Depois disso, a UI
+  // não volta a piscar "Carregando…" se as hooks (useSession / usePapelAtivo)
+  // momentaneamente re-emitirem estado intermediário (revalidate em foco da
+  // janela, StrictMode, troca de papel em outra aba). Sem esse latch, qualquer
+  // re-emissão fazia a tela piscar entre o form e "Carregando…".
+  const [verified, setVerified] = useState(false);
+  // Garante que o toast/redirect de "não-admin" rode no máximo uma vez —
+  // independentemente de quantas vezes o useEffect re-execute por mudança de
+  // referência de session.
+  const redirecionouRef = useRef(false);
 
   useEffect(() => {
     if (isPending || papelLoading) return;
     if (!session) {
+      if (redirecionouRef.current) return;
+      redirecionouRef.current = true;
       router.replace("/login");
       return;
     }
     if (!isAdmin) {
+      if (redirecionouRef.current) return;
+      redirecionouRef.current = true;
       toast.error("Apenas admins podem criar OPs");
       router.replace("/confeccao");
+      return;
     }
+    setVerified(true);
   }, [isPending, papelLoading, session, isAdmin, router]);
 
   async function salvar(e: React.FormEvent) {
@@ -86,7 +102,7 @@ export default function NovaOPPage() {
     }
   }
 
-  if (isPending || !session || papelLoading || !isAdmin) {
+  if (!verified) {
     return (
       <div className="p-6 text-sm text-muted-foreground">Carregando…</div>
     );
