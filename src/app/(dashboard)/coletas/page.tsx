@@ -1474,28 +1474,37 @@ export default function ColetasPage() {
                   Tipo
                 </label>
                 <div className="flex gap-2 flex-wrap">
-                  {FUNCTION_TYPES.map((fn) => (
-                    <Button
-                      key={fn}
-                      variant="outline"
-                      size="sm"
-                      onClick={() => bipagem.setCurrentFunction(fn)}
-                      className={cn(
-                        "flex-1",
-                        bipagem.currentFunction === fn
-                          ? fn === "FLEX"
-                            ? "bg-teal-600 text-white border-teal-600"
-                            : fn === "COLETA"
-                              ? "bg-blue-500 text-white border-blue-500"
-                              : fn === "DEVOLUCAO"
-                                ? "bg-green-600 text-white border-green-600"
-                                : "bg-amber-500 text-white border-amber-500"
-                          : "border-zinc-500 text-zinc-200 hover:bg-zinc-700 hover:text-white",
-                      )}
-                    >
-                      {FUNCTION_DISPLAY[fn]}
-                    </Button>
-                  ))}
+                  {FUNCTION_TYPES.map((fn) => {
+                    const selected = bipagem.currentFunction === fn;
+                    return (
+                      <Button
+                        key={fn}
+                        variant={selected ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => bipagem.setCurrentFunction(fn)}
+                        aria-pressed={selected}
+                        className={cn(
+                          "flex-1 transition-all",
+                          selected
+                            ? cn(
+                                "text-white font-bold ring-2 ring-offset-2 ring-offset-zinc-950 shadow-lg",
+                                fn === "FLEX" &&
+                                  "bg-teal-600 hover:bg-teal-700 ring-teal-400",
+                                fn === "COLETA" &&
+                                  "bg-blue-500 hover:bg-blue-600 ring-blue-400",
+                                fn === "DEVOLUCAO" &&
+                                  "bg-green-600 hover:bg-green-700 ring-green-400",
+                                fn === "CANCELADO" &&
+                                  "bg-amber-500 hover:bg-amber-600 ring-amber-400",
+                              )
+                            : "border-zinc-500 text-zinc-200 hover:bg-zinc-700 hover:text-white",
+                        )}
+                      >
+                        {selected && <Check className="h-3.5 w-3.5" />}
+                        {FUNCTION_DISPLAY[fn]}
+                      </Button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1506,22 +1515,27 @@ export default function ColetasPage() {
                     Conta
                   </label>
                   <div className="flex gap-2 flex-wrap">
-                    {OPERATIONS.map((op) => (
-                      <Button
-                        key={op}
-                        variant="outline"
-                        size="sm"
-                        onClick={() => bipagem.setCurrentAccount(op)}
-                        className={cn(
-                          "flex-1",
-                          bipagem.currentAccount === op
-                            ? "bg-primary text-primary-foreground border-primary"
-                            : "border-zinc-500 text-zinc-200 hover:bg-zinc-700 hover:text-white",
-                        )}
-                      >
-                        {OPERATION_DISPLAY[op]}
-                      </Button>
-                    ))}
+                    {OPERATIONS.map((op) => {
+                      const selected = bipagem.currentAccount === op;
+                      return (
+                        <Button
+                          key={op}
+                          variant={selected ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => bipagem.setCurrentAccount(op)}
+                          aria-pressed={selected}
+                          className={cn(
+                            "flex-1 transition-all",
+                            selected
+                              ? "bg-green-700 hover:bg-green-800 text-white font-bold ring-2 ring-green-400 ring-offset-2 ring-offset-zinc-950 shadow-lg"
+                              : "border-zinc-500 text-zinc-200 hover:bg-zinc-700 hover:text-white",
+                          )}
+                        >
+                          {selected && <Check className="h-3.5 w-3.5" />}
+                          {OPERATION_DISPLAY[op]}
+                        </Button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
