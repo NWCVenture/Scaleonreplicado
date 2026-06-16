@@ -20,7 +20,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
+import { FormFornecedorRapido } from "@/components/confeccao/form-fornecedor-rapido";
 import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
 import {
@@ -50,6 +52,7 @@ export function SubtaskVies({
   onAlterado,
 }: SubtaskViesProps) {
   const router = useRouter();
+  const { isAdmin } = usePapelAtivo();
   const payload = (subtask.payload ?? {}) as SubtaskViesPayload;
 
   const podeEditar =
@@ -292,7 +295,18 @@ export function SubtaskVies({
               value={fornecedorViesId}
               onChange={(id) => setFornecedorViesId(id)}
               entidadeLabel="fábrica de viés"
-              permiteCadastrar={false}
+              permiteCadastrar={isAdmin}
+              cadastroInlineRender={
+                isAdmin
+                  ? ({ onCreated, onCancel }) => (
+                      <FormFornecedorRapido
+                        categoriaInicial="vies"
+                        onCreated={onCreated}
+                        onCancel={onCancel}
+                      />
+                    )
+                  : undefined
+              }
               disabled={!podeEditar}
               className="w-full"
             />

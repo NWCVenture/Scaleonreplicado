@@ -34,18 +34,31 @@ export type AtualizarProdutoInput = z.infer<typeof AtualizarProdutoSchema>;
 
 // -------------------- Fornecedor --------------------
 
+// Endereço é opcional no cadastro inicial — o cadastro "rápido" inline da
+// tela de OP só pede nome + WhatsApp, e o usuário completa o restante depois
+// em Cadastros > Fornecedores. Geocoding e integração Lalamove só funcionam
+// quando os campos estiverem preenchidos.
 export const CriarFornecedorSchema = z.object({
   nome: z.string().min(2).max(120).trim(),
   categorias: z.array(ConfeccaoFornecedorCategoriaSchema).min(1),
   whatsapp: z.string().min(8).max(40).trim(),
   telefoneE164: z.string().regex(e164Regex).optional().nullable(),
-  enderecoRua: z.string().min(2).max(200).trim(),
-  enderecoNumero: z.string().min(1).max(20).trim(),
+  enderecoRua: z.string().max(200).trim().default(""),
+  enderecoNumero: z.string().max(20).trim().default(""),
   enderecoComplemento: z.string().max(120).trim().optional().nullable(),
-  enderecoBairro: z.string().min(2).max(120).trim(),
-  enderecoCep: z.string().regex(cepRegex),
-  enderecoCidade: z.string().min(2).max(120).trim(),
-  enderecoEstado: z.string().length(2).toUpperCase(),
+  enderecoBairro: z.string().max(120).trim().default(""),
+  enderecoCep: z
+    .string()
+    .trim()
+    .refine((v) => v === "" || cepRegex.test(v), "CEP inválido")
+    .default(""),
+  enderecoCidade: z.string().max(120).trim().default(""),
+  enderecoEstado: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .refine((v) => v === "" || v.length === 2, "UF deve ter 2 letras")
+    .default(""),
   contatoNome: z.string().max(120).trim().optional().nullable(),
   observacoes: z.string().max(1000).trim().optional().nullable(),
 });

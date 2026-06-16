@@ -43,7 +43,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
+import { FormFornecedorRapido } from "@/components/confeccao/form-fornecedor-rapido";
 import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
 import type {
@@ -165,6 +167,7 @@ export function SubtaskCostura({
   onAlterado,
 }: SubtaskCosturaProps) {
   const router = useRouter();
+  const { isAdmin } = usePapelAtivo();
   const payload = (subtask.payload ?? {}) as SubtaskCosturaPayload;
 
   const podeEditar =
@@ -591,7 +594,18 @@ export function SubtaskCostura({
                     }
                   }}
                   entidadeLabel="oficina de costura"
-                  permiteCadastrar={false}
+                  permiteCadastrar={isAdmin}
+                  cadastroInlineRender={
+                    isAdmin
+                      ? ({ onCreated, onCancel }) => (
+                          <FormFornecedorRapido
+                            categoriaInicial="costura"
+                            onCreated={onCreated}
+                            onCancel={onCancel}
+                          />
+                        )
+                      : undefined
+                  }
                   disabled={!podeEditar || o.statusInterno !== "enviado"}
                   className="w-full"
                 />

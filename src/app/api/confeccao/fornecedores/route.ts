@@ -123,15 +123,23 @@ export async function POST(request: NextRequest) {
       return row;
     });
 
-    // Geocoding background (fire-and-forget)
-    agendarGeocoding(created.id, created.contaId, {
-      rua: created.enderecoRua,
-      numero: created.enderecoNumero,
-      bairro: created.enderecoBairro,
-      cidade: created.enderecoCidade,
-      estado: created.enderecoEstado,
-      cep: created.enderecoCep,
-    });
+    // Geocoding background (fire-and-forget) — só dispara quando o endereço
+    // mínimo está preenchido. Cadastro rápido (só nome + WhatsApp) pula essa
+    // etapa; o usuário roda geocoding manual depois ao completar o endereço.
+    if (
+      created.enderecoRua &&
+      created.enderecoCidade &&
+      created.enderecoEstado
+    ) {
+      agendarGeocoding(created.id, created.contaId, {
+        rua: created.enderecoRua,
+        numero: created.enderecoNumero,
+        bairro: created.enderecoBairro,
+        cidade: created.enderecoCidade,
+        estado: created.enderecoEstado,
+        cep: created.enderecoCep,
+      });
+    }
 
     return NextResponse.json({ item: created }, { status: 201 });
   } catch (err) {

@@ -25,6 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useSession } from "@/lib/auth-client";
 import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
+import { FormFornecedorRapido } from "@/components/confeccao/form-fornecedor-rapido";
 import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
 import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
@@ -395,7 +396,18 @@ export function SubtaskCompra({
                 value={fornecedorId}
                 onChange={(id) => setFornecedorId(id)}
                 entidadeLabel="fornecedor"
-                permiteCadastrar={false}
+                permiteCadastrar={isAdmin}
+                cadastroInlineRender={
+                  isAdmin
+                    ? ({ onCreated, onCancel }) => (
+                        <FormFornecedorRapido
+                          categoriaInicial="tecido"
+                          onCreated={onCreated}
+                          onCancel={onCancel}
+                        />
+                      )
+                    : undefined
+                }
                 disabled={!podeEditar}
                 className="w-full"
               />
@@ -446,7 +458,18 @@ export function SubtaskCompra({
               value={destinatarioCorteId}
               onChange={(id) => setDestinatarioCorteId(id)}
               entidadeLabel="oficina de corte"
-              permiteCadastrar={false}
+              permiteCadastrar={isAdmin}
+              cadastroInlineRender={
+                isAdmin
+                  ? ({ onCreated, onCancel }) => (
+                      <FormFornecedorRapido
+                        categoriaInicial="corte"
+                        onCreated={onCreated}
+                        onCancel={onCancel}
+                      />
+                    )
+                  : undefined
+              }
               disabled={!podeEditar}
               className="w-full"
             />

@@ -36,7 +36,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
+import { FormFornecedorRapido } from "@/components/confeccao/form-fornecedor-rapido";
 import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
 import type {
@@ -99,6 +101,7 @@ export function SubtaskCorte({
   onAlterado,
 }: SubtaskCorteProps) {
   const router = useRouter();
+  const { isAdmin } = usePapelAtivo();
   const payload = (subtask.payload ?? {}) as SubtaskCortePayload;
 
   const podeEditar =
@@ -559,7 +562,18 @@ export function SubtaskCorte({
                     setOficinaCampo(idx, "oficinaNome", item.nome);
                   }}
                   entidadeLabel="oficina de corte"
-                  permiteCadastrar={false}
+                  permiteCadastrar={isAdmin}
+                  cadastroInlineRender={
+                    isAdmin
+                      ? ({ onCreated, onCancel }) => (
+                          <FormFornecedorRapido
+                            categoriaInicial="corte"
+                            onCreated={onCreated}
+                            onCancel={onCancel}
+                          />
+                        )
+                      : undefined
+                  }
                   disabled={!podeEditar}
                   className="w-full"
                 />

@@ -22,7 +22,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadastro-inline";
+import { FormFornecedorRapido } from "@/components/confeccao/form-fornecedor-rapido";
 import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
 import {
@@ -53,6 +55,7 @@ export function SubtaskRisco({
   onAlterado,
 }: SubtaskRiscoProps) {
   const router = useRouter();
+  const { isAdmin } = usePapelAtivo();
   const payload = (subtask.payload ?? {}) as SubtaskRiscoPayload;
 
   const podeEditar =
@@ -312,7 +315,18 @@ export function SubtaskRisco({
               value={fornecedorRiscoId}
               onChange={(id) => setFornecedorRiscoId(id)}
               entidadeLabel="fornecedor de risco"
-              permiteCadastrar={false}
+              permiteCadastrar={isAdmin}
+              cadastroInlineRender={
+                isAdmin
+                  ? ({ onCreated, onCancel }) => (
+                      <FormFornecedorRapido
+                        categoriaInicial="risco"
+                        onCreated={onCreated}
+                        onCancel={onCancel}
+                      />
+                    )
+                  : undefined
+              }
               disabled={!podeEditar}
               className="w-full"
             />
