@@ -115,7 +115,7 @@ const expedicaoItems = [
   },
   {
     href: "/central-envios",
-    label: "Central de Envios",
+    label: "Central de Envios (BETA)",
     icon: Send,
   },
   { href: "/gerenciar-skus", label: "Gerenciar SKUs", icon: Tag },

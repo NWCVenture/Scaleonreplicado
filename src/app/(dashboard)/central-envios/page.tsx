@@ -63,8 +63,11 @@ export default function CentralEnviosPage() {
     <div className="space-y-6">
       <header className="flex items-baseline justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="text-2xl font-semibold tracking-tight flex items-baseline gap-2">
             Central de Envios
+            <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+              BETA
+            </span>
           </h1>
           <p className="text-sm text-muted-foreground">
             Planejamento operacional diário a partir das vendas dos canais.
