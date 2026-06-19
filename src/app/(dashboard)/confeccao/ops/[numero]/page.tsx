@@ -3,7 +3,7 @@
 // Tela da OP com header fixo + stepper vertical das 5/6 subtasks.
 // URLs próprias por subtask via /confeccao/ops/[numero]/subtasks/[prefixo].
 
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useSession } from "@/lib/auth-client";
@@ -64,12 +64,18 @@ export default function OPDetailPage({
   const contaId = me?.contaAtivaId ?? "";
 
   const [data, setData] = useState<OPDetalhe | null>(null);
-  const [loading, setLoading] = useState(true);
   const [expandidas, setExpandidas] = useState<Set<string>>(new Set());
   const [historicoOpen, setHistoricoOpen] = useState(false);
+  // Garante que o fetch inicial e o redirect-de-login rodem no máximo uma
+  // vez por vida do componente. Sem esse latch, qualquer oscilação na
+  // referência de `session` vinda do useSession (revalidação em foco da
+  // janela, StrictMode, etc) re-disparava fetchOp(), que setava o flag de
+  // loading e re-renderizava "Carregando…" full-page — desmontando os
+  // formulários das subtasks e perdendo o que o usuário tinha digitado.
+  const fetchOnceRef = useRef(false);
+  const redirecionouRef = useRef(false);
 
   const fetchOp = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await fetch(`/api/confeccao/ops/${numero}`, {
         cache: "no-store",
@@ -93,17 +99,19 @@ export default function OPDetailPage({
       });
     } catch {
       toast.error("Erro ao carregar OP");
-    } finally {
-      setLoading(false);
     }
   }, [numero, router]);
 
   useEffect(() => {
     if (isPending) return;
     if (!session) {
+      if (redirecionouRef.current) return;
+      redirecionouRef.current = true;
       router.replace("/login");
       return;
     }
+    if (fetchOnceRef.current) return;
+    fetchOnceRef.current = true;
     void fetchOp();
   }, [isPending, session, router, fetchOp]);
 
@@ -116,7 +124,12 @@ export default function OPDetailPage({
     });
   }
 
-  if (isPending || !session || loading || !data) {
+  // Mostra "Carregando…" só enquanto ainda não temos dados pra renderizar.
+  // Refetches posteriores (via onAlterado) atualizam o estado in-place sem
+  // desmontar os formulários das subtasks. Também guarda contra `session`
+  // virar null por algum motivo (sign-out em outra aba) — nesse caso o
+  // useEffect já agendou o redirect pra /login.
+  if (!data || !session) {
     return (
       <div className="p-6 text-sm text-muted-foreground">Carregando…</div>
     );

@@ -4,7 +4,7 @@
 // botão "↗" no SubtaskCard. Mostra mini-header com link voltar + o
 // card da subtask expandido em modoFullPage.
 
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
@@ -44,7 +44,12 @@ export default function SubtaskFullPage({
   const contaId = me?.contaAtivaId ?? "";
 
   const [opData, setOpData] = useState<OPDetalhe | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Latches pra evitar que oscilações na referência de `session` re-disparem
+  // fetchOp ou redirect — o que antes desmontava o formulário in-place e
+  // fazia perder o que o usuário tinha digitado. Mesma lógica do Nova OP /
+  // OP detail.
+  const fetchOnceRef = useRef(false);
+  const redirecionouRef = useRef(false);
 
   const prefixoTyped =
     (PREFIXOS_VALIDOS as readonly string[]).includes(prefixo)
@@ -52,7 +57,6 @@ export default function SubtaskFullPage({
       : null;
 
   const fetchOp = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await fetch(`/api/confeccao/ops/${numero}`, {
         cache: "no-store",
@@ -66,26 +70,30 @@ export default function SubtaskFullPage({
       setOpData((await res.json()) as OPDetalhe);
     } catch {
       toast.error("Erro ao carregar");
-    } finally {
-      setLoading(false);
     }
   }, [numero, router]);
 
   useEffect(() => {
     if (isPending) return;
     if (!session) {
+      if (redirecionouRef.current) return;
+      redirecionouRef.current = true;
       router.replace("/login");
       return;
     }
     if (!prefixoTyped) {
+      if (redirecionouRef.current) return;
+      redirecionouRef.current = true;
       toast.error("Prefixo inválido");
       router.replace(`/confeccao/ops/${numero}`);
       return;
     }
+    if (fetchOnceRef.current) return;
+    fetchOnceRef.current = true;
     void fetchOp();
   }, [isPending, session, router, prefixoTyped, numero, fetchOp]);
 
-  if (isPending || !session || loading || !opData || !prefixoTyped) {
+  if (!opData || !prefixoTyped) {
     return (
       <div className="p-6 text-sm text-muted-foreground">Carregando…</div>
     );
