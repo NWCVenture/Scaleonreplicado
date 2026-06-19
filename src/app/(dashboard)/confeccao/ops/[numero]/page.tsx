@@ -16,9 +16,11 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { OPHeader } from "@/components/confeccao/op-header";
+import { OpDashboardStrip } from "@/components/confeccao/op-dashboard-strip";
 import { SubtaskCard } from "@/components/confeccao/subtask-card";
 import { NotasOP } from "@/components/confeccao/notas-op";
 import { FardosNoEstoque } from "@/components/confeccao/fardos-no-estoque";
+import { derivarKpisOp } from "@/lib/confeccao/dashboard-kpis";
 import type { ConfeccaoSubtask } from "@/lib/db/schema";
 
 interface OPDetalhe {
@@ -135,6 +137,14 @@ export default function OPDetailPage({
     );
   }
 
+  const kpis = derivarKpisOp(
+    data.subtasks.map((s) => ({
+      prefixo: s.prefixo,
+      status: s.status,
+      payload: s.payload,
+    })),
+  );
+
   return (
     <div className="p-6 pt-0 space-y-4">
       <OPHeader
@@ -151,6 +161,8 @@ export default function OPDetailPage({
         onAtualizado={() => void fetchOp()}
         onAbrirHistorico={() => setHistoricoOpen(true)}
       />
+
+      <OpDashboardStrip kpis={kpis} temVies={data.op.temVies} />
 
       {data.op.status === "cancelada" && (
         <div className="rounded border border-destructive/40 bg-destructive/5 p-3 text-sm">
