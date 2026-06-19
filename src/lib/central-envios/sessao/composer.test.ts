@@ -323,7 +323,7 @@ test("Pedido ML com campo Estado → prazo CAMPO_EXPLICITO", async () => {
   assert.equal(r.dados[0].prazo.origem, "campo_explicito");
 });
 
-test("Merge 2 runs: dedup por (canal, orderId) mantém primeiro", async () => {
+test("Merge 2 runs do mesmo orderId: dedup (canal, orderId) — campos mutáveis sobrescritos pelo último (RITM-15b)", async () => {
   const runId1 = nanoid();
   const runId2 = nanoid();
   await inserirRun({
@@ -370,7 +370,192 @@ test("Merge 2 runs: dedup por (canal, orderId) mantém primeiro", async () => {
     }),
   );
   assert.equal(r.dados.length, 1);
-  assert.equal(r.dados[0].trackingId, "T1"); // primeiro venceu
+  // Campo mutável: trackingId vem do último run.
+  assert.equal(r.dados[0].trackingId, "T2");
+  // origemRunId aponta pra rastrear quem produziu o snapshot atual.
+  assert.equal(r.dados[0].origemRunId, runId2);
+  // Imutáveis: parsed/linhasExplodidas/quantidadeRaw são da primeira
+  // ocorrência. quantidadeRaw=1 do run1, não 9 do run2.
+  assert.equal(r.dados[0].quantidadeRaw, 1);
+});
+
+test("Re-upload com status atualizado: orderStatus do último run vence", async () => {
+  const runId1 = nanoid();
+  const runId2 = nanoid();
+  await inserirRun({
+    id: runId1,
+    tipo: "tiktok_csv",
+    resultado: [
+      {
+        canal: "tiktok_shop",
+        orderId: "STATUS-CHANGE",
+        trackingId: "T-OLD",
+        sellerSku: "MOD1 COR1 TAM1",
+        quantidade: 1,
+        buyerUsername: "b",
+        criadoEm: "2026-06-03T13:00:00.000Z",
+        orderStatus: "A ser enviado",
+        orderSubstatus: "Aguardando coleta",
+      },
+    ],
+  });
+  await inserirRun({
+    id: runId2,
+    tipo: "tiktok_csv",
+    resultado: [
+      {
+        canal: "tiktok_shop",
+        orderId: "STATUS-CHANGE",
+        trackingId: "T-OLD",
+        sellerSku: "MOD1 COR1 TAM1",
+        quantidade: 1,
+        buyerUsername: "b",
+        criadoEm: "2026-06-03T13:00:00.000Z",
+        orderStatus: "Cancelado",
+        orderSubstatus: "Cancelado pelo comprador",
+      },
+    ],
+  });
+
+  const r = await runInConta((tx) =>
+    processarSessao({
+      tx,
+      runIds: [runId1, runId2],
+      sessaoAtual: { arquivosIngeridos: [], dados: [] },
+      ...ctxFixture(),
+    }),
+  );
+  assert.equal(r.dados.length, 1);
+  assert.equal(r.dados[0].camposExtras.orderStatus, "Cancelado");
+  assert.equal(
+    r.dados[0].camposExtras.orderSubstatus,
+    "Cancelado pelo comprador",
+  );
+  assert.equal(r.dados[0].origemRunId, runId2);
+});
+
+test("Re-upload com trackingId aparecendo: null → string preenche", async () => {
+  const runId1 = nanoid();
+  const runId2 = nanoid();
+  await inserirRun({
+    id: runId1,
+    tipo: "tiktok_csv",
+    resultado: [
+      {
+        canal: "tiktok_shop",
+        orderId: "RTS-LATE",
+        trackingId: null, // Aguardando RTS
+        sellerSku: "MOD1 COR1 TAM1",
+        quantidade: 1,
+        buyerUsername: "b",
+        criadoEm: "2026-06-03T13:00:00.000Z",
+        orderStatus: "A ser enviado",
+        orderSubstatus: "Aguardando envio",
+      },
+    ],
+  });
+  await inserirRun({
+    id: runId2,
+    tipo: "tiktok_csv",
+    resultado: [
+      {
+        canal: "tiktok_shop",
+        orderId: "RTS-LATE",
+        trackingId: "999881129267020", // TikTok emitiu
+        sellerSku: "MOD1 COR1 TAM1",
+        quantidade: 1,
+        buyerUsername: "b",
+        criadoEm: "2026-06-03T13:00:00.000Z",
+        orderStatus: "A ser enviado",
+        orderSubstatus: "Aguardando coleta",
+      },
+    ],
+  });
+
+  const r = await runInConta((tx) =>
+    processarSessao({
+      tx,
+      runIds: [runId1, runId2],
+      sessaoAtual: { arquivosIngeridos: [], dados: [] },
+      ...ctxFixture(),
+    }),
+  );
+  assert.equal(r.dados[0].trackingId, "999881129267020");
+  assert.equal(r.dados[0].camposExtras.orderSubstatus, "Aguardando coleta");
+});
+
+test("Determinismo: composer ordena runs por createdAt, ignora ordem do runIds[]", async () => {
+  // Insere runId2 com createdAt deliberadamente posterior a runId1
+  // (via timestamp explícito). Mesmo passando [runId2, runId1] na call,
+  // o composer ordena cronologicamente e o último vence.
+  const runId1 = nanoid();
+  const runId2 = nanoid();
+  await db.insert(ingestaoRun).values({
+    id: runId1,
+    contaId: CONTA_TEST,
+    usuarioId: USER_TEST,
+    tipo: "tiktok_csv",
+    arquivoNome: `${runId1}.csv`,
+    arquivoBlobUrl: `https://example.com/${runId1}`,
+    arquivoTamanhoBytes: 1,
+    status: "concluido",
+    totalLinhas: 1,
+    linhasValidas: 1,
+    linhasDescartadas: 0,
+    createdAt: new Date("2026-06-04T10:00:00Z"),
+    resultado: [
+      {
+        canal: "tiktok_shop",
+        orderId: "ORD-DETERM",
+        trackingId: "T-EARLY",
+        sellerSku: "MOD1 COR1 TAM1",
+        quantidade: 1,
+        buyerUsername: "b",
+        criadoEm: "2026-06-03T13:00:00.000Z",
+        orderStatus: "A ser enviado",
+        orderSubstatus: null,
+      },
+    ],
+  });
+  await db.insert(ingestaoRun).values({
+    id: runId2,
+    contaId: CONTA_TEST,
+    usuarioId: USER_TEST,
+    tipo: "tiktok_csv",
+    arquivoNome: `${runId2}.csv`,
+    arquivoBlobUrl: `https://example.com/${runId2}`,
+    arquivoTamanhoBytes: 1,
+    status: "concluido",
+    totalLinhas: 1,
+    linhasValidas: 1,
+    linhasDescartadas: 0,
+    createdAt: new Date("2026-06-04T14:00:00Z"),
+    resultado: [
+      {
+        canal: "tiktok_shop",
+        orderId: "ORD-DETERM",
+        trackingId: "T-LATE",
+        sellerSku: "MOD1 COR1 TAM1",
+        quantidade: 1,
+        buyerUsername: "b",
+        criadoEm: "2026-06-03T13:00:00.000Z",
+        orderStatus: "A ser enviado",
+        orderSubstatus: null,
+      },
+    ],
+  });
+
+  // Passa em ordem invertida — composer deve ordenar internamente.
+  const r = await runInConta((tx) =>
+    processarSessao({
+      tx,
+      runIds: [runId2, runId1],
+      sessaoAtual: { arquivosIngeridos: [], dados: [] },
+      ...ctxFixture(),
+    }),
+  );
+  assert.equal(r.dados[0].trackingId, "T-LATE");
+  assert.equal(r.dados[0].origemRunId, runId2);
 });
 
 test("Idempotência: runId já em arquivosIngeridos é pulado", async () => {

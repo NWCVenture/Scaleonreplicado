@@ -92,6 +92,10 @@ export async function processarSessao(
       .select()
       .from(ingestaoRun)
       .where(inArray(ingestaoRun.id, runIdsNovos));
+    // Ordenação cronológica é semanticamente importante: o merge usa
+    // "última ocorrência ganha" em campos mutáveis (RITM-15b).
+    // `inArray` não promete ordem, então ordenamos explicitamente.
+    runsRows.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
 
   const pedidosNovos: PedidoEnriquecido[] = [];
@@ -139,8 +143,9 @@ export async function processarSessao(
     });
   }
 
-  // Dedup por (canal, orderId) — primeira ocorrência ganha.
-  const dadosMerged = mergeComDedup(args.sessaoAtual.dados, pedidosNovos);
+  // Dedup por (canal, orderId) — "última ocorrência ganha" em campos
+  // mutáveis (status, substatus, trackingId). RITM-15b.
+  const dadosMerged = mergeUltimaOcorrencia(args.sessaoAtual.dados, pedidosNovos);
 
   const estatisticas = derivarEstatisticas(dadosMerged, args.ctxPrazo.hojeIso);
 
@@ -287,19 +292,45 @@ function enriquecerPedido(
   };
 }
 
-function mergeComDedup(
+// RITM-15b. Dedup por `(canal, orderId)` com semântica "última
+// ocorrência ganha" em campos mutáveis. Mantém campos imutáveis
+// (criadoEmIso, comprador, parsed, linhasExplodidas, prazo) da PRIMEIRA
+// ocorrência — eles derivam do ato de criação do pedido e não devem
+// mudar por re-upload.
+//
+// Campos sobrescritos pela ocorrência mais nova:
+//   - trackingId         (TikTok emite só após RTS)
+//   - camposExtras       (orderStatus, orderSubstatus, Estado — todos mudam)
+//   - origemRunId        (rastreabilidade da última atualização)
+//
+// Ordem de iteração: existentes primeiro (sessão anterior já está em
+// ordem), depois novos em ordem cronológica de `ingestao_run.createdAt`.
+// O caller (`processarSessao`) garante a ordem cronológica de `novos`.
+function mergeUltimaOcorrencia(
   existentes: PedidoEnriquecido[],
   novos: PedidoEnriquecido[],
 ): PedidoEnriquecido[] {
-  const vistos = new Set<string>();
-  const out: PedidoEnriquecido[] = [];
-  for (const p of [...existentes, ...novos]) {
-    const k = `${p.canal}::${p.orderId}`;
-    if (vistos.has(k)) continue;
-    vistos.add(k);
-    out.push(p);
+  const porChave = new Map<string, PedidoEnriquecido>();
+  // 1) Indexa existentes preservando ordem.
+  for (const p of existentes) {
+    porChave.set(`${p.canal}::${p.orderId}`, p);
   }
-  return out;
+  // 2) Para cada novo: insert direto ou merge in-place.
+  for (const novo of novos) {
+    const k = `${novo.canal}::${novo.orderId}`;
+    const antigo = porChave.get(k);
+    if (!antigo) {
+      porChave.set(k, novo);
+      continue;
+    }
+    porChave.set(k, {
+      ...antigo,
+      trackingId: novo.trackingId,
+      camposExtras: { ...antigo.camposExtras, ...novo.camposExtras },
+      origemRunId: novo.origemRunId,
+    });
+  }
+  return Array.from(porChave.values());
 }
 
 function derivarEstatisticas(
