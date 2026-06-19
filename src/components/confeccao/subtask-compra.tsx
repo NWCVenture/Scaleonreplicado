@@ -42,6 +42,7 @@ import type {
   FornecedorCompra,
   SubtaskCompraPayload,
 } from "@/lib/confeccao/schemas/payloads/compra";
+import { parsePesosColados } from "@/lib/confeccao/parse-pesos-colados";
 import { cn } from "@/lib/utils";
 
 interface SubtaskCompraProps {
@@ -78,6 +79,7 @@ function normalizarNumero(v: string): number {
   const n = Number(v.replace(",", "."));
   return Number.isFinite(n) ? n : 0;
 }
+
 
 function corVazia(corId: string, corNome: string): CorState {
   return {
@@ -379,6 +381,50 @@ export function SubtaskCompra({
     );
   }
 
+  // RITM-30: cola N pesos a partir de `idxRoloInicial`. Expande
+  // pesosRolos + qtdRolosContratados se a colagem passar do tamanho
+  // atual — comportamento Excel-like (copio coluna de 30, colo,
+  // sistema reconhece e abre 30 slots).
+  function colarPesos(
+    idxFornecedor: number,
+    idxCor: number,
+    idxRoloInicial: number,
+    valores: number[],
+  ) {
+    if (valores.length === 0) return;
+    setFornecedores((prev) =>
+      prev.map((f, i) => {
+        if (i !== idxFornecedor) return f;
+        return {
+          ...f,
+          cores: f.cores.map((c, j) => {
+            if (j !== idxCor) return c;
+            const novo = [...c.pesosRolos];
+            for (let k = 0; k < valores.length; k++) {
+              const pos = idxRoloInicial + k;
+              const str = String(valores[k]);
+              if (pos < novo.length) {
+                novo[pos] = str;
+              } else {
+                // expande com strings vazias até pos, depois grava
+                while (novo.length < pos) novo.push("");
+                novo.push(str);
+              }
+            }
+            const cresceu = novo.length > c.pesosRolos.length;
+            return {
+              ...c,
+              pesosRolos: novo,
+              qtdRolosContratados: cresceu
+                ? String(novo.length)
+                : c.qtdRolosContratados,
+            };
+          }),
+        };
+      }),
+    );
+  }
+
   // ── Montagem do payload ───────────────────────────────────────────
   const payloadAtual = useMemo<SubtaskCompraPayload>(() => {
     const out: SubtaskCompraPayload = {
@@ -663,6 +709,9 @@ export function SubtaskCompra({
           onAtualizarPesoRolo={(idxC, idxR, v) =>
             atualizarPesoRolo(idxF, idxC, idxR, v)
           }
+          onColarPesos={(idxC, idxR, valores) =>
+            colarPesos(idxF, idxC, idxR, valores)
+          }
         />
       ))}
 
@@ -808,6 +857,7 @@ function FornecedorCard(props: {
   ) => void;
   onAtualizarQtdRolos: (idxCor: number, valor: string) => void;
   onAtualizarPesoRolo: (idxCor: number, idxRolo: number, valor: string) => void;
+  onColarPesos: (idxCor: number, idxRoloInicial: number, valores: number[]) => void;
 }) {
   const {
     fornecedor: f,
@@ -821,6 +871,7 @@ function FornecedorCard(props: {
     onAtualizarCampoCor,
     onAtualizarQtdRolos,
     onAtualizarPesoRolo,
+    onColarPesos,
   } = props;
 
   return (
@@ -1026,9 +1077,14 @@ function FornecedorCard(props: {
                 key={c.corId}
                 className="rounded border bg-muted/20 p-3 space-y-2"
               >
-                <div className="text-xs font-medium text-muted-foreground">
-                  Pesos dos rolos · {c.corNome || "?"} ·{" "}
-                  {c.pesosRolos.length} rolos
+                <div className="text-xs font-medium text-muted-foreground flex items-center gap-2">
+                  <span>
+                    Pesos dos rolos · {c.corNome || "?"} ·{" "}
+                    {c.pesosRolos.length} rolos
+                  </span>
+                  <span className="text-[10px] text-muted-foreground/70 font-normal">
+                    Dica: Ctrl+V pra colar uma coluna do Excel.
+                  </span>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-2">
                   {c.pesosRolos.map((p, idxR) => (
@@ -1047,6 +1103,17 @@ function FornecedorCard(props: {
                         onChange={(e) =>
                           onAtualizarPesoRolo(idxC, idxR, e.target.value)
                         }
+                        onPaste={(e) => {
+                          const texto =
+                            e.clipboardData.getData("text/plain") ?? "";
+                          const valores = parsePesosColados(texto);
+                          if (valores.length <= 1) return; // 0 ou 1 valor: default
+                          e.preventDefault();
+                          onColarPesos(idxC, idxR, valores);
+                          toast.success(
+                            `${valores.length} pesos colados a partir do rolo R${idxR + 1}`,
+                          );
+                        }}
                         disabled={!podeEditar}
                         placeholder="kg"
                         className="h-7 text-xs text-right tabular-nums px-1.5"
