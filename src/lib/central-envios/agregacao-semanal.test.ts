@@ -4,6 +4,7 @@ import {
   dowFromYmd,
   fimDaSemanaIso,
   inicioDaSemanaIso,
+  montarAgregacaoProximos7Dias,
   montarAgregacaoSemanal,
 } from "./agregacao-semanal";
 import type { PedidoEnriquecido } from "@/lib/central-envios/sessao/types";
@@ -106,6 +107,25 @@ test("montarAgregacaoSemanal: filtra por janela e agrega por DOW do prazo", () =
   assert.deepEqual(r.topSkus[1].porDow, [0, 0, 0, 2, 0, 0, 0]);
   assert.equal(r.outrosCount, 0);
   assert.deepEqual(r.outrosPorDow, [0, 0, 0, 0, 0, 0, 0]);
+});
+
+test("montarAgregacaoProximos7Dias: janela [hoje, hoje+6] independente de Seg/Dom", () => {
+  // hoje = qua 2024-01-03. Próximos 7 dias = 03..09 (qua a ter).
+  // 01 e 02 ficam fora; 09 entra.
+  const hoje = "2024-01-03";
+  const dados: PedidoEnriquecido[] = [
+    ped("2024-01-02", [{ modeloCodigo: "A", cor: "X", tamanho: "M", qtd: 100 }]),
+    ped("2024-01-03", [{ modeloCodigo: "A", cor: "X", tamanho: "M", qtd: 5 }]),
+    ped("2024-01-09", [{ modeloCodigo: "A", cor: "X", tamanho: "M", qtd: 3 }]),
+    ped("2024-01-10", [{ modeloCodigo: "A", cor: "X", tamanho: "M", qtd: 50 }]),
+  ];
+  const r = montarAgregacaoProximos7Dias(dados, hoje, { maxSkus: 8 });
+  assert.equal(r.inicioIso, "2024-01-03");
+  assert.equal(r.fimIso, "2024-01-09");
+  // 03 (qua, DOW 3) = 5; 09 (ter, DOW 2) = 3
+  assert.equal(r.totalPorDow[3], 5);
+  assert.equal(r.totalPorDow[2], 3);
+  assert.equal(r.pedidosConsiderados, 2);
 });
 
 test("montarAgregacaoSemanal: agrupa SKUs além do topN em 'Outros'", () => {

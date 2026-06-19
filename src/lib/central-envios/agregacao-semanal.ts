@@ -77,14 +77,36 @@ export interface AgregacaoSemanal {
   pedidosConsiderados: number;
 }
 
+// Próximos 7 dias começando em `hojeIso` (inclusive). Diferente da semana
+// corrente (Seg→Dom) — usado quando o consumidor quer alinhar a projeção
+// com "hoje" (ex: projeção de estoque na estante virtual).
+export function montarAgregacaoProximos7Dias(
+  dados: PedidoEnriquecido[],
+  hojeIso: string,
+  opts: { maxSkus: number } = { maxSkus: 8 },
+): AgregacaoSemanal {
+  return agregarEntre(dados, hojeIso, somarDias(hojeIso, 6), opts);
+}
+
 export function montarAgregacaoSemanal(
   dados: PedidoEnriquecido[],
   hojeIso: string,
   opts: { maxSkus: number } = { maxSkus: 8 },
 ): AgregacaoSemanal {
-  const inicioIso = inicioDaSemanaIso(hojeIso);
-  const fimIso = fimDaSemanaIso(hojeIso);
+  return agregarEntre(
+    dados,
+    inicioDaSemanaIso(hojeIso),
+    fimDaSemanaIso(hojeIso),
+    opts,
+  );
+}
 
+function agregarEntre(
+  dados: PedidoEnriquecido[],
+  inicioIso: string,
+  fimIso: string,
+  opts: { maxSkus: number },
+): AgregacaoSemanal {
   const totalPorDow = [0, 0, 0, 0, 0, 0, 0];
   const porSku = new Map<string, PorSkuPorDow>();
   let pedidosConsiderados = 0;

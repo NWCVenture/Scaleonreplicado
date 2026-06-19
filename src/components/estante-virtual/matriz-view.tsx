@@ -26,6 +26,7 @@ import {
   type EstanteFardoItem,
 } from "@/lib/estante-virtual/agregar";
 import { EstoqueVsVendasCard } from "@/components/estante-virtual/estoque-vs-vendas";
+import { SaidasReaisSection } from "@/components/estante-virtual/saidas-reais";
 
 interface MatrizViewProps {
   fardos: EstanteFardoItem[];
@@ -182,6 +183,12 @@ export function MatrizView({ fardos, nomeEstante }: MatrizViewProps) {
 
       {/* ── Estoque × média de vendas (giro) ───────────────────────────── */}
       <EstoqueVsVendasCard totalPecasEstante={agregado.totalPecas} />
+
+      {/* ── Saídas reais (central de envios) ───────────────────────────── */}
+      <SaidasReaisSection
+        totalPecasEstante={agregado.totalPecas}
+        porSku={agregado.porSku}
+      />
     </div>
   );
 }
