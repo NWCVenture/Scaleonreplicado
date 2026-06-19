@@ -68,7 +68,7 @@ export interface CriarOPResult {
     numero: string;
     idInterno: string;
     prefixo: ConfeccaoSubtaskPrefixo;
-    status: "pendente" | "bloqueada";
+    status: "em_andamento" | "bloqueada";
   }>;
   atribuidoNome: string | null;
   criadoPorNome: string | null;
@@ -157,21 +157,27 @@ export async function criarOP(
     })
     .returning();
 
-  // 5. Subtasks na ordem certa
+  // 5. Subtasks na ordem certa.
+  // OPBUY (idx 0) já nasce em em_andamento — não precisa "Iniciar"
+  // (RITM-29 descontinua pré/pós). As demais ficam bloqueadas até a
+  // anterior ser concluída.
   const ordem = data.temVies ? ORDEM_COM_VIES : ORDEM_SEM_VIES;
-  const subtasksInsert = ordem.map((prefixo, idx) => ({
-    id: generateId(),
-    contaId,
-    ordemProducaoId: opId,
-    numero: gerarNumeroSubtaskVisivel(prefixo, sequencial),
-    idInterno: gerarIdInternoSubtask(prefixo, mes, ano, sequencial),
-    prefixo,
-    ordemSequencial: idx + 1,
-    status: (idx === 0 ? "pendente" : "bloqueada") as
-      | "pendente"
-      | "bloqueada",
-    payload: {} as Record<string, unknown>,
-  }));
+  const subtasksInsert = ordem.map((prefixo, idx) => {
+    const statusInicial: "em_andamento" | "bloqueada" =
+      idx === 0 ? "em_andamento" : "bloqueada";
+    return {
+      id: generateId(),
+      contaId,
+      ordemProducaoId: opId,
+      numero: gerarNumeroSubtaskVisivel(prefixo, sequencial),
+      idInterno: gerarIdInternoSubtask(prefixo, mes, ano, sequencial),
+      prefixo,
+      ordemSequencial: idx + 1,
+      status: statusInicial,
+      iniciadaEm: idx === 0 ? new Date() : null,
+      payload: {} as Record<string, unknown>,
+    };
+  });
 
   const subtasks = await tx
     .insert(confeccaoSubtask)
@@ -218,7 +224,7 @@ export async function criarOP(
       numero: s.numero,
       idInterno: s.idInterno,
       prefixo: s.prefixo,
-      status: s.status as "pendente" | "bloqueada",
+      status: s.status as "em_andamento" | "bloqueada",
     })),
     atribuidoNome,
     criadoPorNome: criadorNome,

@@ -76,12 +76,21 @@ test("iniciarSubtask: pendente → em_andamento + iniciada_em + nota", async () 
       data: { produtoId, temVies: false, atribuidoAId: ADMIN },
     }),
   );
-  const primeira = subtasks[0]; // OPBUY
+  // OPBUY (subtasks[0]) já nasce em_andamento (RITM-29). Conclui OPBUY
+  // pra OPRIS (subtasks[1]) ficar pendente — aí testa iniciarSubtask nela.
+  await db.transaction(async (tx) =>
+    concluirSubtask(tx, {
+      contaId: CONTA,
+      subtaskId: subtasks[0].id,
+      usuarioId: ADMIN,
+    }),
+  );
+  const opris = subtasks[1];
 
   const result = await db.transaction(async (tx) =>
     iniciarSubtask(tx, {
       contaId: CONTA,
-      subtaskId: primeira.id,
+      subtaskId: opris.id,
       usuarioId: ADMIN,
     }),
   );
@@ -93,7 +102,7 @@ test("iniciarSubtask: pendente → em_andamento + iniciada_em + nota", async () 
   const [st] = await db
     .select()
     .from(confeccaoSubtask)
-    .where(eq(confeccaoSubtask.id, primeira.id));
+    .where(eq(confeccaoSubtask.id, opris.id));
   assert.equal(st.status, "em_andamento");
   assert.ok(st.iniciadaEm);
 });
@@ -130,19 +139,10 @@ test("concluirSubtask: em_andamento → concluida + desbloqueia próxima", async
       data: { produtoId, temVies: false, atribuidoAId: ADMIN },
     }),
   );
-  const primeira = subtasks[0]; // OPBUY
+  const primeira = subtasks[0]; // OPBUY (RITM-29: já nasce em_andamento)
   const segunda = subtasks[1]; // OPRIS
 
-  // Iniciar primeira
-  await db.transaction(async (tx) =>
-    iniciarSubtask(tx, {
-      contaId: CONTA,
-      subtaskId: primeira.id,
-      usuarioId: ADMIN,
-    }),
-  );
-
-  // Concluir primeira
+  // Concluir primeira diretamente — não precisa iniciar (já está em_andamento)
   const result = await db.transaction(async (tx) =>
     concluirSubtask(tx, {
       contaId: CONTA,
@@ -172,15 +172,20 @@ test("concluirSubtask: última subtask → OP marcada como concluída", async ()
     }),
   );
 
-  // Avança todas as subtasks até a última (pelo helper iniciar+concluir)
-  for (const st of subtasks) {
-    await db.transaction(async (tx) =>
-      iniciarSubtask(tx, {
-        contaId: CONTA,
-        subtaskId: st.id,
-        usuarioId: ADMIN,
-      }),
-    );
+  // Avança todas as subtasks até a última (pelo helper iniciar+concluir).
+  // OPBUY (idx 0) já nasce em em_andamento (RITM-29) — pula o "iniciar"
+  // pra ela. As demais começam bloqueadas/pendentes e precisam do iniciar.
+  for (let i = 0; i < subtasks.length; i++) {
+    const st = subtasks[i];
+    if (i !== 0) {
+      await db.transaction(async (tx) =>
+        iniciarSubtask(tx, {
+          contaId: CONTA,
+          subtaskId: st.id,
+          usuarioId: ADMIN,
+        }),
+      );
+    }
     await db.transaction(async (tx) =>
       concluirSubtask(tx, {
         contaId: CONTA,
@@ -202,7 +207,7 @@ test("concluirSubtask: última subtask → OP marcada como concluída", async ()
   assert.ok(opDb.concluidaEm);
 });
 
-test("concluirSubtask: subtask pendente (não em_andamento) → erro", async () => {
+test("concluirSubtask: subtask bloqueada → erro (RITM-29: OPBUY nasce em_andamento)", async () => {
   const { subtasks } = await db.transaction(async (tx) =>
     criarOP(tx, {
       contaId: CONTA,
@@ -210,13 +215,15 @@ test("concluirSubtask: subtask pendente (não em_andamento) → erro", async () 
       data: { produtoId, temVies: false, atribuidoAId: ADMIN },
     }),
   );
-  // Tenta concluir uma subtask pendente sem iniciar
+  // OPBUY (subtasks[0]) já nasce em em_andamento — concluir só falharia
+  // por payload incompleto. Pra testar especificamente "status_invalido",
+  // tenta concluir OPRIS (subtasks[1]) que está bloqueada.
   await assert.rejects(
     () =>
       db.transaction(async (tx) =>
         concluirSubtask(tx, {
           contaId: CONTA,
-          subtaskId: subtasks[0].id, // OPBUY pendente
+          subtaskId: subtasks[1].id, // OPRIS bloqueada
           usuarioId: ADMIN,
         }),
       ),

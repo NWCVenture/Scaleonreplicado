@@ -123,7 +123,7 @@ test("criarOP: temVies=true gera 6 subtasks com Viés entre Corte e Costura", as
   ]);
 });
 
-test("criarOP: primeira subtask OPBUY entra pendente, demais bloqueada", async () => {
+test("criarOP: primeira subtask OPBUY entra em_andamento (RITM-29), demais bloqueada", async () => {
   const result = await db.transaction(async (tx) =>
     criarOP(tx, {
       contaId: CONTA,
@@ -132,7 +132,7 @@ test("criarOP: primeira subtask OPBUY entra pendente, demais bloqueada", async (
     }),
   );
 
-  assert.equal(result.subtasks[0].status, "pendente");
+  assert.equal(result.subtasks[0].status, "em_andamento");
   for (let i = 1; i < result.subtasks.length; i++) {
     assert.equal(result.subtasks[i].status, "bloqueada");
   }
