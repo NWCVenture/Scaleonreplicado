@@ -111,7 +111,7 @@ export function SubtaskRisco({
       };
       const compra = data.subtasks.find((s) => s.prefixo === "OPBUY");
       const lc =
-        (compra?.payload as SubtaskCompraPayload | undefined)?.pos
+        (compra?.payload as SubtaskCompraPayload | undefined)
           ?.larguraRoloCm ?? null;
       if (!cancelled) setLarguraRoloCm(lc ?? null);
     })();

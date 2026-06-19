@@ -100,12 +100,14 @@ export function SubtaskVies({
       const compra = data.subtasks.find((s) => s.prefixo === "OPBUY")
         ?.payload as SubtaskCompraPayload | undefined;
       if (!cancelled) {
-        if (!tipoTecidoId && compra?.pre?.tipoTecidoId) {
-          setTipoTecidoId(compra.pre.tipoTecidoId);
+        if (!tipoTecidoId && compra?.tipoTecidoId) {
+          setTipoTecidoId(compra.tipoTecidoId);
         }
-        // Primeira cor da Compra como default
-        if (!corId && compra?.pre?.cores?.[0]?.corId) {
-          setCorId(compra.pre.cores[0].corId);
+        // Primeira cor disponível na Compra como default (cross-fornecedor)
+        const primeiraCor = compra?.fornecedores?.flatMap((f) => f.cores)?.[0]
+          ?.corId;
+        if (!corId && primeiraCor) {
+          setCorId(primeiraCor);
         }
       }
     })();

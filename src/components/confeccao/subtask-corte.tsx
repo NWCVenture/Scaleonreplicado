@@ -177,13 +177,16 @@ export function SubtaskCorte({
       const risco = data.subtasks.find((s) => s.prefixo === "OPRIS")
         ?.payload as SubtaskRiscoPayload | undefined;
 
-      // Mapa cor → rolos disponíveis
+      // Mapa cor → rolos disponíveis (qtd de pesos informados, agregando
+      // cross-fornecedor — RITM-29).
       const rolosPorCor = new Map<string, number>();
-      for (const r of compra?.pos?.rolosRecebidos ?? []) {
-        rolosPorCor.set(
-          r.corId,
-          (rolosPorCor.get(r.corId) ?? 0) + r.pesos.length,
-        );
+      for (const f of compra?.fornecedores ?? []) {
+        for (const c of f.cores) {
+          rolosPorCor.set(
+            c.corId,
+            (rolosPorCor.get(c.corId) ?? 0) + c.pesosRolos.length,
+          );
+        }
       }
       // Hidrata nomes
       const idsCor = Array.from(rolosPorCor.keys());

@@ -86,7 +86,7 @@ export async function POST(
             invalido: true as const,
             details: r.error.issues,
             mensagem:
-              "Payload da subtask Compra está incompleto. Preencha todos os campos pré + pós-compra antes de concluir.",
+              "Payload da subtask Compra está incompleto. Preencha tipo de tecido, destinatário do corte, gramatura, largura e todos os fornecedores com cores e pesos antes de concluir.",
           };
         }
       } else if (st.prefixo === "OPCOR") {
@@ -291,7 +291,7 @@ export async function POST(
             ),
           );
         const larguraRoloCm =
-          (opbuy?.payload as SubtaskCompraPayload | undefined)?.pos
+          (opbuy?.payload as SubtaskCompraPayload | undefined)
             ?.larguraRoloCm ?? null;
         const valida = validarLarguraVsRolo(r.data.larguraCm, larguraRoloCm);
         if (!valida.ok) {
