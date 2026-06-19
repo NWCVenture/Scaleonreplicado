@@ -5,10 +5,9 @@
 //   - SKUs com pausadoUpseller=true são ignorados (e geram alerta informativo).
 //   - Modelos sem custoUpseller exportam com Custo Médio vazio + alerta.
 //   - Prefixo de SKU não cadastrado em modelo_principal → alerta.
-//   - Modo consolidado: inclui todos os SKUs ativos+não-pausados do
-//     sku_catalogo, mesmo com zero estoque (sai com 1000), gerando alerta
-//     "sku_ausente" pra cada um.
-//   - Modo estante: exporta só os SKUs presentes nos fardos passados.
+//   - Ambos os modos exportam apenas SKUs com pelo menos uma peça nos fardos
+//     passados. SKUs do catálogo sem estoque são omitidos (não vão como 1000).
+//     O modo modulo agrega todas as estantes; o modo estante recorta numa só.
 //
 // exceljs via dynamic import — fica fora do bundle inicial.
 
@@ -27,7 +26,6 @@ export interface ModeloUpseller {
 export type AlertaTipoUpseller =
   | "sem_custo"
   | "prefixo_desconhecido"
-  | "sku_ausente"
   | "pausado_ignorado"
   | "fora_do_catalogo";
 
@@ -91,20 +89,16 @@ export async function exportarUpseller(
     input.skusCatalogo.filter((s) => s.pausado).map((s) => s.codigo),
   );
 
-  // SKUs esperados (ativos não pausados). No catálogo o "ativo" foi filtrado
-  // upstream (route só retorna ativos), então aqui basta excluir pausados.
-  const skusEsperados = input.skusCatalogo
-    .filter((s) => !s.pausado)
-    .map((s) => s.codigo);
-  const skusEsperadosSet = new Set(skusEsperados);
+  // SKUs do catálogo ativos e não pausados (route só retorna ativos upstream).
+  const skusEsperadosSet = new Set(
+    input.skusCatalogo.filter((s) => !s.pausado).map((s) => s.codigo),
+  );
 
-  // Conjunto final de SKUs que vão no XLSX.
-  // Modo módulo: inclui todos os esperados (mesmo com 0 estoque).
-  // Modo estante: só os SKUs presentes nos fardos da estante.
+  // Conjunto final de SKUs que vão no XLSX: SKUs com pelo menos uma peça nos
+  // fardos passados E presentes no catálogo (ativos + não pausados). SKUs do
+  // catálogo sem estoque são omitidos. SKUs nos fardos fora do catálogo ou
+  // pausados geram alerta e ficam de fora.
   const skusParaExportar = new Set<string>();
-  if (input.escopo === "modulo") {
-    for (const s of skusEsperados) skusParaExportar.add(s);
-  }
   for (const sku of totalPorSku.keys()) {
     if (skusEsperadosSet.has(sku)) {
       skusParaExportar.add(sku);
@@ -157,14 +151,6 @@ export async function exportarUpseller(
     }
 
     const pecas = totalPorSku.get(sku) ?? 0;
-    if (pecas === 0 && input.escopo === "modulo") {
-      alertas.push({
-        tipo: "sku_ausente",
-        mensagem: `SKU "${sku}" esperado mas sem peças em nenhuma estante — exportado como 0.`,
-        sku,
-      });
-    }
-
     linhas.push({ sku, estoque: pecas + offset, custo });
   }
 
