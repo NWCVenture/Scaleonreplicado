@@ -146,17 +146,31 @@ test("validarSaldoRolos: cor sem disponível → erro", () => {
   assert.equal(r.ok, false);
 });
 
-test("rolosCompradosPorCorDeCompra: soma pesos como rolos", () => {
+test("rolosCompradosPorCorDeCompra: conta pesosRolos como rolos — multi-fornecedor (RITM-29)", () => {
   const mapa = rolosCompradosPorCorDeCompra({
-    pos: {
-      rolosRecebidos: [
-        { corId: "co1", pesos: [12.5, 11.8, 13.0] },
-        { corId: "co2", pesos: [10.5] },
-      ],
-      precoKgEfetivo: 25,
-      gramaturaGM2: 180,
-      larguraRoloCm: 165,
-    },
+    gramaturaGM2: 180,
+    larguraRoloCm: 165,
+    fornecedores: [
+      {
+        fornecedorId: "f1",
+        cores: [
+          {
+            corId: "co1",
+            kgsContratados: 30,
+            qtdRolosContratados: 3,
+            precoPorKg: 25,
+            pesosRolos: [12.5, 11.8, 13.0],
+          },
+          {
+            corId: "co2",
+            kgsContratados: 10,
+            qtdRolosContratados: 1,
+            precoPorKg: 25,
+            pesosRolos: [10.5],
+          },
+        ],
+      },
+    ],
   });
   assert.equal(mapa.get("co1"), 3);
   assert.equal(mapa.get("co2"), 1);

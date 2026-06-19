@@ -23,24 +23,31 @@ function st(
 }
 
 const COMPRA_OK: SubtaskCompraPayload = {
-  pre: {
-    fornecedorId: "f1",
-    tipoTecidoId: "t1",
-    destinatarioCorteId: "fo-corte",
-    cores: [
-      { corId: "cor-az", kgsSolicitados: 10 },
-      { corId: "cor-pt", kgsSolicitados: 20 },
-    ],
-  },
-  pos: {
-    rolosRecebidos: [
-      { corId: "cor-az", pesos: [3.2, 3.1, 3.5] }, // 3 rolos, 9.8 kg
-      { corId: "cor-pt", pesos: [5.0, 5.0, 5.0, 5.0] }, // 4 rolos, 20.0 kg
-    ],
-    precoKgEfetivo: 20,
-    gramaturaGM2: 220,
-    larguraRoloCm: 180,
-  },
+  fornecedores: [
+    {
+      fornecedorId: "f1",
+      cores: [
+        {
+          corId: "cor-az",
+          kgsContratados: 10,
+          qtdRolosContratados: 3,
+          precoPorKg: 20,
+          pesosRolos: [3.2, 3.1, 3.5], // 9.8 kg
+        },
+        {
+          corId: "cor-pt",
+          kgsContratados: 20,
+          qtdRolosContratados: 4,
+          precoPorKg: 20,
+          pesosRolos: [5.0, 5.0, 5.0, 5.0], // 20.0 kg
+        },
+      ],
+    },
+  ],
+  tipoTecidoId: "t1",
+  destinatarioCorteId: "fo-corte",
+  gramaturaGM2: 220,
+  larguraRoloCm: 180,
 };
 
 const RISCO_OK: SubtaskRiscoPayload = {
@@ -151,20 +158,81 @@ test("Compra preenchida: kg contratado/recebido/diff/rolos/custoTecido corretos"
   assert.ok(Math.abs(kpis.quantidades.diffKg! - -0.2) < 1e-9);
   // diff%: -0.2/30 ≈ -0.00667
   assert.ok(Math.abs(kpis.quantidades.diffPercentual! - -0.2 / 30) < 1e-9);
-  assert.equal(kpis.quantidades.rolosTotal, 7); // 3 + 4
-  // custoTecido: 29.8 * 20 = 596
+  assert.equal(kpis.quantidades.rolosTotal, 7); // 3 + 4 (contratados)
+  // custoTecido: 9.8*20 (az) + 20*20 (pt) = 196 + 400 = 596
   assert.ok(Math.abs(kpis.financeiro.custoTecido! - 596) < 1e-9);
 });
 
-test("Compra só pré (sem pós): contratado preenchido; recebido/diff/custo = null", () => {
+test("Compra contratada sem pesos: kgContratado/rolos preenchidos; recebido/diff/custo = null", () => {
+  // Operador definiu fornecedor + cores + qtdRolos mas ainda não pesou nada.
+  const payloadSemPesos: SubtaskCompraPayload = {
+    fornecedores: [
+      {
+        fornecedorId: "f1",
+        cores: [
+          {
+            corId: "cor-az",
+            kgsContratados: 10,
+            qtdRolosContratados: 3,
+            precoPorKg: 20,
+            pesosRolos: [], // sem pesos ainda
+          },
+          {
+            corId: "cor-pt",
+            kgsContratados: 20,
+            qtdRolosContratados: 4,
+            precoPorKg: 20,
+            pesosRolos: [],
+          },
+        ],
+      },
+    ],
+  };
   const kpis = derivarKpisOp([
-    st("OPBUY", "em_andamento", { pre: COMPRA_OK.pre }),
+    st("OPBUY", "em_andamento", payloadSemPesos),
   ]);
   assert.equal(kpis.quantidades.kgContratado, 30);
-  assert.equal(kpis.quantidades.kgRecebido, null);
+  assert.equal(kpis.quantidades.rolosTotal, 7); // contratados
+  assert.equal(kpis.quantidades.kgRecebido, null); // nenhum peso informado
   assert.equal(kpis.quantidades.diffKg, null);
-  assert.equal(kpis.quantidades.rolosTotal, null);
   assert.equal(kpis.financeiro.custoTecido, null);
+});
+
+test("Compra com 2 fornecedores: kgs e custo agregam cross-fornecedor", () => {
+  const payload: SubtaskCompraPayload = {
+    fornecedores: [
+      {
+        fornecedorId: "f1",
+        cores: [
+          {
+            corId: "cor-az",
+            kgsContratados: 100,
+            qtdRolosContratados: 3,
+            precoPorKg: 25,
+            pesosRolos: [33, 34, 33], // 100 kg
+          },
+        ],
+      },
+      {
+        fornecedorId: "f2",
+        cores: [
+          {
+            corId: "cor-az",
+            kgsContratados: 50,
+            qtdRolosContratados: 2,
+            precoPorKg: 22,
+            pesosRolos: [25, 25], // 50 kg
+          },
+        ],
+      },
+    ],
+  };
+  const kpis = derivarKpisOp([st("OPBUY", "em_andamento", payload)]);
+  assert.equal(kpis.quantidades.kgContratado, 150); // 100 + 50
+  assert.equal(kpis.quantidades.kgRecebido, 150); // 100 + 50
+  assert.equal(kpis.quantidades.rolosTotal, 5); // 3 + 2
+  // Custo: 100*25 + 50*22 = 2500 + 1100 = 3600
+  assert.equal(kpis.financeiro.custoTecido, 3600);
 });
 
 // ──────────────────────────────────────────────────────────────

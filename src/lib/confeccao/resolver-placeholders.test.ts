@@ -33,18 +33,28 @@ test("resolverPlaceholders: fornecedor_nome quando passado", () => {
   assert.equal(out, "Olá, Tecidos Acme");
 });
 
-test("resolverPlaceholders: tipo_tecido resolve via Map de catálogo", () => {
+test("resolverPlaceholders: tipo_tecido resolve via Map de catálogo (RITM-29: top-level)", () => {
   const out = resolverPlaceholders(
     "Tipo: {tipo_tecido}",
     {
       ...contextoBase,
       compra: {
-        pre: {
-          fornecedorId: "f1",
-          tipoTecidoId: "tt1",
-          destinatarioCorteId: "c1",
-          cores: [{ corId: "cor1", kgsSolicitados: 10 }],
-        },
+        tipoTecidoId: "tt1",
+        destinatarioCorteId: "c1",
+        fornecedores: [
+          {
+            fornecedorId: "f1",
+            cores: [
+              {
+                corId: "cor1",
+                kgsContratados: 10,
+                qtdRolosContratados: 1,
+                precoPorKg: 25,
+                pesosRolos: [],
+              },
+            ],
+          },
+        ],
       },
       tipoTecidoNomes: new Map([["tt1", "Malha PV"]]),
     },
@@ -52,21 +62,45 @@ test("resolverPlaceholders: tipo_tecido resolve via Map de catálogo", () => {
   assert.equal(out, "Tipo: Malha PV");
 });
 
-test("resolverPlaceholders: cor lista todas as cores da compra separadas por vírgula", () => {
+test("resolverPlaceholders: cor lista todas cross-fornecedor sem duplicar", () => {
   const out = resolverPlaceholders(
     "Cores: {cor}",
     {
       ...contextoBase,
       compra: {
-        pre: {
-          fornecedorId: "f1",
-          tipoTecidoId: "tt1",
-          destinatarioCorteId: "c1",
-          cores: [
-            { corId: "cor1", kgsSolicitados: 10 },
-            { corId: "cor2", kgsSolicitados: 5 },
-          ],
-        },
+        fornecedores: [
+          {
+            fornecedorId: "f1",
+            cores: [
+              {
+                corId: "cor1",
+                kgsContratados: 10,
+                qtdRolosContratados: 1,
+                precoPorKg: 25,
+                pesosRolos: [],
+              },
+              {
+                corId: "cor2",
+                kgsContratados: 5,
+                qtdRolosContratados: 1,
+                precoPorKg: 25,
+                pesosRolos: [],
+              },
+            ],
+          },
+          {
+            fornecedorId: "f2",
+            cores: [
+              {
+                corId: "cor1", // dup vai colapsar
+                kgsContratados: 3,
+                qtdRolosContratados: 1,
+                precoPorKg: 28,
+                pesosRolos: [],
+              },
+            ],
+          },
+        ],
       },
       corNomes: new Map([
         ["cor1", "Preto"],
@@ -86,37 +120,58 @@ test("resolverPlaceholders: cor cai pra cor do viés se compra não tem cores", 
   assert.equal(out, "Cor: Marinho");
 });
 
-test("resolverPlaceholders: kg_total e qtd_rolos agregam todos os pesos", () => {
+test("resolverPlaceholders: kg_total e qtd_rolos agregam pesos cross-fornecedor", () => {
   const out = resolverPlaceholders(
     "{qtd_rolos} rolos / {kg_total} kg",
     {
       ...contextoBase,
       compra: {
-        pos: {
-          rolosRecebidos: [
-            { corId: "c1", pesos: [10.5, 11.25] },
-            { corId: "c2", pesos: [9] },
-          ],
-          precoKgEfetivo: 1,
-          gramaturaGM2: 200,
-          larguraRoloCm: 180,
-        },
+        fornecedores: [
+          {
+            fornecedorId: "f1",
+            cores: [
+              {
+                corId: "c1",
+                kgsContratados: 22,
+                qtdRolosContratados: 2,
+                precoPorKg: 1,
+                pesosRolos: [10.5, 11.25],
+              },
+              {
+                corId: "c2",
+                kgsContratados: 9,
+                qtdRolosContratados: 1,
+                precoPorKg: 1,
+                pesosRolos: [9],
+              },
+            ],
+          },
+        ],
       },
     },
   );
   assert.equal(out, "3 rolos / 30.75 kg");
 });
 
-test("resolverPlaceholders: largura_rolo inclui sufixo cm", () => {
+test("resolverPlaceholders: largura_rolo inclui sufixo cm (top-level)", () => {
   const out = resolverPlaceholders("L: {largura_rolo}", {
     ...contextoBase,
     compra: {
-      pos: {
-        rolosRecebidos: [{ corId: "c1", pesos: [10] }],
-        precoKgEfetivo: 1,
-        gramaturaGM2: 200,
-        larguraRoloCm: 175,
-      },
+      larguraRoloCm: 175,
+      fornecedores: [
+        {
+          fornecedorId: "f1",
+          cores: [
+            {
+              corId: "c1",
+              kgsContratados: 10,
+              qtdRolosContratados: 1,
+              precoPorKg: 1,
+              pesosRolos: [10],
+            },
+          ],
+        },
+      ],
     },
   });
   assert.equal(out, "L: 175cm");

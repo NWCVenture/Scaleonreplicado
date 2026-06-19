@@ -49,17 +49,23 @@ export interface RetiradaParaSaldo {
 }
 
 /**
- * Calcula saldos da subtask Compra a partir do payload.
+ * Calcula saldos da subtask Compra a partir do payload (v2: multi-fornecedor).
+ *
+ * `rolosPorCor` usa a quantidade de pesos efetivamente informados (não a
+ * qtd contratada), porque o que está disponível pra enviar ao corte é o
+ * que já chegou e foi pesado. Cross-fornecedor agregado por cor.
  */
 export function calcularSaldosCompra(
   compraPayload: SubtaskCompraPayload | null | undefined,
 ): SaldosCompra {
   const rolosPorCor: Record<string, number> = {};
   const kgsPorCor: Record<string, number> = {};
-  for (const r of compraPayload?.pos?.rolosRecebidos ?? []) {
-    rolosPorCor[r.corId] = (rolosPorCor[r.corId] ?? 0) + r.pesos.length;
-    kgsPorCor[r.corId] =
-      (kgsPorCor[r.corId] ?? 0) + r.pesos.reduce((s, p) => s + p, 0);
+  for (const f of compraPayload?.fornecedores ?? []) {
+    for (const c of f.cores) {
+      rolosPorCor[c.corId] = (rolosPorCor[c.corId] ?? 0) + c.pesosRolos.length;
+      kgsPorCor[c.corId] =
+        (kgsPorCor[c.corId] ?? 0) + c.pesosRolos.reduce((s, p) => s + p, 0);
+    }
   }
   return { rolosPorCor, kgsPorCor };
 }

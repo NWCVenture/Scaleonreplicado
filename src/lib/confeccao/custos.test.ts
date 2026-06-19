@@ -22,24 +22,38 @@ test("calcularCustosOP: OP vazia → tudo zero, sem erro", () => {
   assert.equal(r.perdas, 0);
 });
 
-test("calcularCustosOP: tecido = precoKg × sum(pesos)", () => {
+test("calcularCustosOP: tecido = sum por cor (peso × precoPorKg) — multi-fornecedor", () => {
   const r = calcularCustosOP({
     temVies: false,
     compra: {
-      pos: {
-        precoKgEfetivo: 30,
-        gramaturaGM2: 200,
-        larguraRoloCm: 180,
-        rolosRecebidos: [
-          { corId: "c1", pesos: [10, 12] },
-          { corId: "c2", pesos: [8] },
-        ],
-      },
+      gramaturaGM2: 200,
+      larguraRoloCm: 180,
+      fornecedores: [
+        {
+          fornecedorId: "f1",
+          cores: [
+            {
+              corId: "c1",
+              kgsContratados: 22,
+              qtdRolosContratados: 2,
+              precoPorKg: 30,
+              pesosRolos: [10, 12], // 22 × 30 = 660
+            },
+            {
+              corId: "c2",
+              kgsContratados: 8,
+              qtdRolosContratados: 1,
+              precoPorKg: 30,
+              pesosRolos: [8], // 8 × 30 = 240
+            },
+          ],
+        },
+      ],
     },
     lalamoves: [],
     subconferencias: [],
   });
-  // (10+12+8) × 30 = 900
+  // 660 + 240 = 900
   assert.equal(r.tecido, 900);
   assert.equal(r.custoTotal, 900);
 });
@@ -187,12 +201,22 @@ test("calcularCustosOP: custo total agrega tudo e calcula por peça", () => {
   const r = calcularCustosOP({
     temVies: true,
     compra: {
-      pos: {
-        precoKgEfetivo: 20,
-        gramaturaGM2: 200,
-        larguraRoloCm: 180,
-        rolosRecebidos: [{ corId: "c1", pesos: [10, 10] }], // 20kg → 400
-      },
+      gramaturaGM2: 200,
+      larguraRoloCm: 180,
+      fornecedores: [
+        {
+          fornecedorId: "f1",
+          cores: [
+            {
+              corId: "c1",
+              kgsContratados: 20,
+              qtdRolosContratados: 2,
+              precoPorKg: 20,
+              pesosRolos: [10, 10], // 20kg × 20 = 400
+            },
+          ],
+        },
+      ],
     },
     risco: { valorServico: 100 },
     corte: {
@@ -243,14 +267,22 @@ test("calcularCustosOP: perdas = kgMedio × precoKg × qtdDescartada", () => {
   const r = calcularCustosOP({
     temVies: false,
     compra: {
-      pos: {
-        precoKgEfetivo: 20,
-        gramaturaGM2: 200,
-        larguraRoloCm: 180,
-        rolosRecebidos: [
-          { corId: "c1", pesos: [10, 12, 14] }, // média 12kg
-        ],
-      },
+      gramaturaGM2: 200,
+      larguraRoloCm: 180,
+      fornecedores: [
+        {
+          fornecedorId: "f1",
+          cores: [
+            {
+              corId: "c1",
+              kgsContratados: 36,
+              qtdRolosContratados: 3,
+              precoPorKg: 20,
+              pesosRolos: [10, 12, 14], // média 12kg
+            },
+          ],
+        },
+      ],
     },
     corte: {
       oficinas: [

@@ -66,15 +66,13 @@ function somaMatriz(
 }
 
 export function calcularCustosOP(input: CalcularCustosInput): CustosResult {
-  // === Tecido ===
+  // === Tecido === (multi-fornecedor, preço por cor — RITM-29)
   let tecido = 0;
-  const precoKg = input.compra?.pos?.precoKgEfetivo;
-  if (precoKg !== undefined && precoKg !== null) {
-    const pesoTotal = (input.compra?.pos?.rolosRecebidos ?? []).reduce(
-      (s, r) => s + r.pesos.reduce((s2, p) => s2 + p, 0),
-      0,
-    );
-    tecido = pesoTotal * precoKg;
+  for (const f of input.compra?.fornecedores ?? []) {
+    for (const c of f.cores) {
+      const pesoCor = c.pesosRolos.reduce((s, p) => s + p, 0);
+      tecido += pesoCor * c.precoPorKg;
+    }
   }
 
   // === Risco === (valor único do payload)
@@ -143,26 +141,42 @@ export function calcularCustosOP(input: CalcularCustosInput): CustosResult {
     pecasAprovadas > 0 ? custoTotal / pecasAprovadas : null;
 
   // === Perdas (rolos descartados em OPCOR) ===
-  // Custo de cada rolo descartado = kgMedioPorRolo(daquela cor) × precoKg
+  // Custo de cada rolo descartado = kgMedioPorRolo(daquela cor) × precoMedio(cor)
+  // No schema novo, peso e preço vivem por cor por fornecedor — agregamos
+  // peso e custo cross-fornecedor e tiramos kg-médio + custo-médio por cor.
   let perdas = 0;
-  if (precoKg !== undefined && precoKg !== null && input.corte) {
-    // kg médio por rolo por cor — baseado em OPBUY.pos.rolosRecebidos
-    const kgMedioPorCor = new Map<string, number>();
-    for (const r of input.compra?.pos?.rolosRecebidos ?? []) {
-      if (r.pesos.length === 0) continue;
-      const media = r.pesos.reduce((s, p) => s + p, 0) / r.pesos.length;
-      // Se a cor já existir (caso de múltiplos blocos da mesma cor),
-      // tira média ponderada simples
-      const anterior = kgMedioPorCor.get(r.corId);
-      kgMedioPorCor.set(
-        r.corId,
-        anterior === undefined ? media : (anterior + media) / 2,
-      );
+  if (input.corte && input.compra) {
+    // Soma peso total e custo total por cor (cross-fornecedor)
+    const pesoTotalPorCor = new Map<string, number>();
+    const custoTotalPorCor = new Map<string, number>();
+    const numRolosPorCor = new Map<string, number>();
+    for (const f of input.compra.fornecedores ?? []) {
+      for (const c of f.cores) {
+        const pesoCor = c.pesosRolos.reduce((s, p) => s + p, 0);
+        if (pesoCor === 0) continue;
+        pesoTotalPorCor.set(
+          c.corId,
+          (pesoTotalPorCor.get(c.corId) ?? 0) + pesoCor,
+        );
+        custoTotalPorCor.set(
+          c.corId,
+          (custoTotalPorCor.get(c.corId) ?? 0) + pesoCor * c.precoPorKg,
+        );
+        numRolosPorCor.set(
+          c.corId,
+          (numRolosPorCor.get(c.corId) ?? 0) + c.pesosRolos.length,
+        );
+      }
     }
     for (const o of input.corte.oficinas ?? []) {
       for (const d of o.rolosDescartados ?? []) {
-        const kgMedio = kgMedioPorCor.get(d.corId) ?? 0;
-        perdas += kgMedio * precoKg * d.qtdRolos;
+        const pesoTot = pesoTotalPorCor.get(d.corId) ?? 0;
+        const custoTot = custoTotalPorCor.get(d.corId) ?? 0;
+        const nRolos = numRolosPorCor.get(d.corId) ?? 0;
+        if (nRolos === 0) continue;
+        const kgMedio = pesoTot / nRolos;
+        const precoMedio = custoTot / pesoTot;
+        perdas += kgMedio * precoMedio * d.qtdRolos;
       }
     }
   }

@@ -14,18 +14,31 @@ test("calcularSaldosCompra: payload vazio → tudo zero", () => {
   assert.deepEqual(s.kgsPorCor, {});
 });
 
-test("calcularSaldosCompra: soma rolos (pesos.length) e KGs por cor", () => {
+test("calcularSaldosCompra: soma rolos (pesos.length) e KGs por cor — multi-fornecedor (RITM-29)", () => {
   const s = calcularSaldosCompra({
-    pos: {
-      rolosRecebidos: [
-        { corId: "co1", pesos: [12.5, 11.8] },
-        { corId: "co1", pesos: [13.0] },
-        { corId: "co2", pesos: [10.5] },
-      ],
-      precoKgEfetivo: 25,
-      gramaturaGM2: 180,
-      larguraRoloCm: 165,
-    },
+    gramaturaGM2: 180,
+    larguraRoloCm: 165,
+    fornecedores: [
+      {
+        fornecedorId: "f1",
+        cores: [
+          {
+            corId: "co1",
+            kgsContratados: 30,
+            qtdRolosContratados: 3,
+            precoPorKg: 25,
+            pesosRolos: [12.5, 11.8, 13.0],
+          },
+          {
+            corId: "co2",
+            kgsContratados: 10,
+            qtdRolosContratados: 1,
+            precoPorKg: 25,
+            pesosRolos: [10.5],
+          },
+        ],
+      },
+    ],
   });
   assert.equal(s.rolosPorCor.co1, 3);
   assert.equal(s.rolosPorCor.co2, 1);
@@ -209,12 +222,22 @@ test("validarSaldoRetirada: oficina sem envio → erro", () => {
 test("calcularSaldosOP: integra compra + corte + costura", () => {
   const s = calcularSaldosOP({
     compra: {
-      pos: {
-        rolosRecebidos: [{ corId: "co1", pesos: [10, 10, 10] }],
-        precoKgEfetivo: 25,
-        gramaturaGM2: 180,
-        larguraRoloCm: 165,
-      },
+      gramaturaGM2: 180,
+      larguraRoloCm: 165,
+      fornecedores: [
+        {
+          fornecedorId: "f1",
+          cores: [
+            {
+              corId: "co1",
+              kgsContratados: 30,
+              qtdRolosContratados: 3,
+              precoPorKg: 25,
+              pesosRolos: [10, 10, 10],
+            },
+          ],
+        },
+      ],
     },
     corte: {
       oficinas: [

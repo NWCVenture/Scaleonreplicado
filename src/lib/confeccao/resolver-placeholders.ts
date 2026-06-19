@@ -45,11 +45,11 @@ const PLACEHOLDERS: Array<{
   { key: "produto", resolver: (c) => c.produtoNome },
   { key: "fornecedor_nome", resolver: (c) => c.fornecedorNome ?? "" },
 
-  // Compra
+  // Compra (RITM-29: multi-fornecedor, agrega cross-fornecedor)
   {
     key: "tipo_tecido",
     resolver: (c) => {
-      const id = c.compra?.pre?.tipoTecidoId;
+      const id = c.compra?.tipoTecidoId;
       if (!id) return "";
       return c.tipoTecidoNomes?.get(id) ?? "";
     },
@@ -57,11 +57,14 @@ const PLACEHOLDERS: Array<{
   {
     key: "cor",
     resolver: (c) => {
-      const ids = c.compra?.pre?.cores?.map((co) => co.corId) ?? [];
-      if (ids.length === 0 && c.vies?.corId) {
+      const idsCompra = (c.compra?.fornecedores ?? []).flatMap((f) =>
+        f.cores.map((co) => co.corId),
+      );
+      const idsUnicos = Array.from(new Set(idsCompra));
+      if (idsUnicos.length === 0 && c.vies?.corId) {
         return c.corNomes?.get(c.vies.corId) ?? "";
       }
-      const nomes = ids
+      const nomes = idsUnicos
         .map((id) => c.corNomes?.get(id))
         .filter((n): n is string => Boolean(n));
       return nomes.join(", ");
@@ -70,8 +73,13 @@ const PLACEHOLDERS: Array<{
   {
     key: "kg_total",
     resolver: (c) => {
-      const total = (c.compra?.pos?.rolosRecebidos ?? []).reduce(
-        (s, r) => s + r.pesos.reduce((s2, p) => s2 + p, 0),
+      const total = (c.compra?.fornecedores ?? []).reduce(
+        (s, f) =>
+          s +
+          f.cores.reduce(
+            (sc, co) => sc + co.pesosRolos.reduce((sp, p) => sp + p, 0),
+            0,
+          ),
         0,
       );
       return total > 0 ? total.toFixed(2) : "";
@@ -80,8 +88,9 @@ const PLACEHOLDERS: Array<{
   {
     key: "qtd_rolos",
     resolver: (c) => {
-      const total = (c.compra?.pos?.rolosRecebidos ?? []).reduce(
-        (s, r) => s + r.pesos.length,
+      const total = (c.compra?.fornecedores ?? []).reduce(
+        (s, f) =>
+          s + f.cores.reduce((sc, co) => sc + co.pesosRolos.length, 0),
         0,
       );
       return total > 0 ? String(total) : "";
@@ -90,8 +99,8 @@ const PLACEHOLDERS: Array<{
   {
     key: "largura_rolo",
     resolver: (c) =>
-      c.compra?.pos?.larguraRoloCm !== undefined
-        ? `${c.compra.pos.larguraRoloCm}cm`
+      c.compra?.larguraRoloCm !== undefined
+        ? `${c.compra.larguraRoloCm}cm`
         : "",
   },
 

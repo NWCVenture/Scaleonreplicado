@@ -138,15 +138,17 @@ export function validarSaldoRolos(
 
 /**
  * Helper pra montar o Map de rolos comprados por cor a partir do payload
- * da subtask Compra (OPBUY).
+ * da subtask Compra (OPBUY). Multi-fornecedor: agrega cross-fornecedor.
+ * Usa quantidade de pesos efetivamente informados (disponibilidade real).
  */
 export function rolosCompradosPorCorDeCompra(
   compraPayload: SubtaskCompraPayload | null | undefined,
 ): Map<string, number> {
   const mapa = new Map<string, number>();
-  const rolos = compraPayload?.pos?.rolosRecebidos ?? [];
-  for (const r of rolos) {
-    mapa.set(r.corId, (mapa.get(r.corId) ?? 0) + r.pesos.length);
+  for (const f of compraPayload?.fornecedores ?? []) {
+    for (const c of f.cores) {
+      mapa.set(c.corId, (mapa.get(c.corId) ?? 0) + c.pesosRolos.length);
+    }
   }
   return mapa;
 }

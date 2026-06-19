@@ -120,19 +120,27 @@ function derivarQuantidades(
   corte: SubtaskCortePayload | null,
   costura: SubtaskCosturaPayload | null,
 ): KpisQuantidades {
-  // Compra
-  const coresPre = compra?.pre?.cores ?? [];
-  const kgContratado = coresPre.length > 0
-    ? coresPre.reduce((s, c) => s + c.kgsSolicitados, 0)
+  // Compra (multi-fornecedor — agrega cross-fornecedor)
+  const fornecedores = compra?.fornecedores ?? [];
+  const cores = fornecedores.flatMap((f) => f.cores);
+  const kgContratado = cores.length > 0
+    ? cores.reduce((s, c) => s + c.kgsContratados, 0)
     : null;
-
-  const rolos = compra?.pos?.rolosRecebidos ?? [];
-  const temRolos = rolos.length > 0;
-  const kgRecebido = temRolos
-    ? rolos.reduce((s, r) => s + r.pesos.reduce((a, p) => a + p, 0), 0)
+  // "Recebido" = soma de pesosRolos (peso real informado pelo operador).
+  // Se nenhum peso foi informado em nenhuma cor, fica null (— na UI).
+  const algumPesoInformado = cores.some((c) => c.pesosRolos.length > 0);
+  const kgRecebido = algumPesoInformado
+    ? cores.reduce(
+        (s, c) => s + c.pesosRolos.reduce((a, p) => a + p, 0),
+        0,
+      )
     : null;
-  const rolosTotal = temRolos
-    ? rolos.reduce((s, r) => s + r.pesos.length, 0)
+  // "Rolos" no dashboard: total CONTRATADO (planejamento). O número real
+  // recebido aparece implícito no peso (kgRecebido). Quando nada foi
+  // contratado ainda, fica null.
+  const temContratacao = cores.some((c) => c.qtdRolosContratados > 0);
+  const rolosTotal = temContratacao
+    ? cores.reduce((s, c) => s + c.qtdRolosContratados, 0)
     : null;
 
   const diffKg =
@@ -239,16 +247,21 @@ function derivarFinanceiro(args: {
     pecasCortadas,
   } = args;
 
-  // Tecido: kg total × preço/kg efetivo
-  const precoKg = compraPayload?.pos?.precoKgEfetivo ?? null;
-  const kgTotal = compraPayload?.pos?.rolosRecebidos
-    ? compraPayload.pos.rolosRecebidos.reduce(
-        (s, r) => s + r.pesos.reduce((a, p) => a + p, 0),
-        0,
-      )
-    : null;
-  const custoTecido =
-    precoKg !== null && kgTotal !== null ? kgTotal * precoKg : null;
+  // Tecido: sum por cor por fornecedor de (pesos × precoPorKg).
+  // Null quando nenhum peso foi informado ainda em nenhuma cor.
+  const fornecedores = compraPayload?.fornecedores ?? [];
+  let custoTecidoAcum = 0;
+  let algumPeso = false;
+  for (const f of fornecedores) {
+    for (const c of f.cores) {
+      const pesoCor = c.pesosRolos.reduce((s, p) => s + p, 0);
+      if (pesoCor > 0) {
+        custoTecidoAcum += pesoCor * c.precoPorKg;
+        algumPeso = true;
+      }
+    }
+  }
+  const custoTecido = algumPeso ? custoTecidoAcum : null;
 
   // Risco: valor fixo do serviço
   const custoRisco = riscoPayload?.valorServico ?? null;
