@@ -253,6 +253,13 @@
       "when": 1781121040515,
       "tag": "0035_serious_quasimodo",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1781213761545,
+      "tag": "0036_funny_frightful_four",
+      "breakpoints": true
     }
   ]
 }

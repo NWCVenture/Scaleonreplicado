@@ -1,0 +1,1 @@
+ALTER TABLE "sku_catalogo" ADD COLUMN "hex_color" text;

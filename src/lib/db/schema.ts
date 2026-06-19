@@ -157,6 +157,9 @@ export const skuCatalogo = pgTable(
     // SKU permanece ativo no ERP mas é excluído do export pra Upseller
     // (ex.: variação pausada no marketplace).
     pausadoUpseller: boolean("pausado_upseller").notNull().default(false),
+    // Cor hex (#rrggbb) usada nos gráficos por variação. Nulo = paleta
+    // determinística por hash do código.
+    hexColor: text("hex_color"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [

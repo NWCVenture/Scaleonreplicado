@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -22,6 +22,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Legend,
   ResponsiveContainer,
   Tooltip,
@@ -130,43 +131,115 @@ function formatarDataBr(iso: string): string {
   return `${d}/${m}`;
 }
 
-function TotalPorDiaCard({
-  totalPorDow,
-  inicioIso,
-  fimIso,
+// Cor por variação: usa skuCatalogo.hex_color (cadastrável; UI vem depois)
+// e cai numa paleta determinística por hash quando vazio. Hash simples de
+// FNV-like é suficiente — só precisa ser estável entre reloads.
+function hashSku(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+function resolverCorVariacao(
+  sku: string,
+  coresPorSku: Map<string, string | null>,
+): string {
+  const custom = coresPorSku.get(sku);
+  if (custom && /^#[0-9a-fA-F]{6}$/.test(custom)) return custom;
+  return CORES_SKU[hashSku(sku) % CORES_SKU.length];
+}
+
+// Soma N dias civis a uma data 'YYYY-MM-DD'. UTC pra evitar drift de fuso
+// (data civil SP é tratada como ymd puro pelo composer e pelo agregador).
+function somarDiasIso(ymd: string, dias: number): string {
+  const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return ymd;
+  const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) + dias * 86400000;
+  const dt = new Date(t);
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+}
+
+const DIAS_UTEIS = [1, 2, 3, 4, 5] as const;
+const NOMES_DOW_LONGOS = [
+  "Domingo",
+  "Segunda",
+  "Terça",
+  "Quarta",
+  "Quinta",
+  "Sexta",
+  "Sábado",
+];
+
+function PecasPorDiaCard({
+  skus,
+  dow,
+  dataIso,
+  coresPorSku,
 }: {
-  totalPorDow: number[];
-  inicioIso: string;
-  fimIso: string;
+  // Recebe a agregação semanal completa; filtra/ordena pelo DOW alvo.
+  skus: Array<{ sku: string; porDow: number[]; total: number }>;
+  dow: number;
+  dataIso: string;
+  coresPorSku: Map<string, string | null>;
 }) {
-  const data = DOW_VISUAL_SEG_DOM.map((dow, i) => ({
-    dia: DOW_NOMES_CURTOS[dow],
-    diaSemana: dow,
-    total: totalPorDow[dow],
-    indice: i,
-  }));
-  const semDados = data.every((d) => d.total === 0);
+  // 1 barra horizontal por variação com saída neste DOW. Cor cadastrável
+  // (sku_catalogo.hex_color), fallback paleta determinística.
+  // "Saída" = prazoIso do pedido cair neste dia — já é a data limite de
+  // preparação/embarque (criação + dias úteis do canal, ex: TikTok +2).
+  // TODO: tornar período selecionável (date-range picker). Hoje = semana
+  // corrente Seg→Dom alinhado com `agregacaoCompleta`.
+  const data = skus
+    .map((s) => ({ sku: s.sku, total: s.porDow[dow] ?? 0 }))
+    .filter((s) => s.total > 0)
+    .sort((a, b) => b.total - a.total);
+  const totalPecas = data.reduce((acc, d) => acc + d.total, 0);
+  const altura = Math.max(180, data.length * 22 + 60);
+  const semDados = data.length === 0;
+  const nomeDia = NOMES_DOW_LONGOS[dow] ?? "";
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">Peças a entregar na semana</CardTitle>
+        <CardTitle className="text-base">
+          {nomeDia} · {formatarDataBr(dataIso)}
+        </CardTitle>
         <p className="text-xs text-muted-foreground tabular-nums">
-          Semana de {formatarDataBr(inicioIso)} a {formatarDataBr(fimIso)} ·
-          baseado na data de entrega (criação + prazo do canal).
+          {data.length} variação{data.length === 1 ? "" : "ões"} ·{" "}
+          {totalPecas.toLocaleString("pt-BR")} peça
+          {totalPecas === 1 ? "" : "s"} · cor por sku_catalogo.hex_color
+          (fallback paleta automática).
         </p>
       </CardHeader>
       <CardContent>
         {semDados ? (
-          <p className="text-sm text-muted-foreground italic py-6 text-center">
-            Sem pedidos com data de entrega na semana corrente.
+          <p className="text-sm text-muted-foreground italic py-4 text-center">
+            Sem saídas neste dia.
           </p>
         ) : (
-          <div className="h-64">
+          <div style={{ height: altura }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data} margin={{ top: 16, right: 12, left: 0, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                <XAxis dataKey="dia" tick={{ fontSize: 12 }} className="fill-muted-foreground" />
-                <YAxis allowDecimals={false} tick={{ fontSize: 11 }} className="fill-muted-foreground" />
+              <BarChart
+                data={data}
+                layout="vertical"
+                margin={{ top: 8, right: 24, left: 0, bottom: 4 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  className="stroke-muted"
+                />
+                <XAxis
+                  type="number"
+                  allowDecimals={false}
+                  tick={{ fontSize: 11 }}
+                  className="fill-muted-foreground"
+                />
+                <YAxis
+                  type="category"
+                  dataKey="sku"
+                  tick={{ fontSize: 11 }}
+                  className="fill-muted-foreground"
+                  width={180}
+                  interval={0}
+                />
                 <Tooltip
                   cursor={{ className: "fill-muted/40" }}
                   content={({ active, payload }) => {
@@ -174,7 +247,7 @@ function TotalPorDiaCard({
                     const d = payload[0].payload as (typeof data)[number];
                     return (
                       <div className="rounded-md border bg-popover px-3 py-2 text-xs shadow-md">
-                        <div className="font-semibold mb-0.5">{d.dia}</div>
+                        <div className="font-semibold mb-0.5">{d.sku}</div>
                         <div className="tabular-nums">
                           {d.total.toLocaleString("pt-BR")} peça
                           {d.total === 1 ? "" : "s"}
@@ -183,7 +256,14 @@ function TotalPorDiaCard({
                     );
                   }}
                 />
-                <Bar dataKey="total" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="total" radius={[2, 2, 2, 2]}>
+                  {data.map((d, i) => (
+                    <Cell
+                      key={i}
+                      fill={resolverCorVariacao(d.sku, coresPorSku)}
+                    />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -204,14 +284,18 @@ function PorSkuCard({
 }) {
   // Cada entrada do data array é um DOW; as chaves dinâmicas são os SKUs.
   // Renderizamos um <Bar> por SKU + um pra "Outros" quando aplicável.
-  const data = DOW_VISUAL_SEG_DOM.map((dow) => {
-    const ponto: Record<string, number | string> = {
-      dia: DOW_NOMES_CURTOS[dow],
-    };
-    for (const s of topSkus) ponto[s.sku] = s.porDow[dow];
-    if (outrosCount > 0) ponto.__outros = outrosPorDow[dow];
-    return ponto;
-  });
+  // Filtra dias úteis (Seg–Sex); Sáb/Dom são omitidos pra alinhar com os
+  // cards diários acima.
+  const data = DOW_VISUAL_SEG_DOM.filter((dow) => dow >= 1 && dow <= 5).map(
+    (dow) => {
+      const ponto: Record<string, number | string> = {
+        dia: DOW_NOMES_CURTOS[dow],
+      };
+      for (const s of topSkus) ponto[s.sku] = s.porDow[dow];
+      if (outrosCount > 0) ponto.__outros = outrosPorDow[dow];
+      return ponto;
+    },
+  );
   const semDados = topSkus.length === 0 && outrosCount === 0;
   return (
     <Card>
@@ -294,11 +378,53 @@ function PorSkuCard({
   );
 }
 
+// Carrega o catálogo de SKUs (com hex_color cadastrada quando houver) pra
+// pintar o gráfico por variação. Inativos incluídos — uma variação pode
+// estar inativa no cadastro mas ainda ter saídas na sessão atual.
+function useCoresPorSku(): Map<string, string | null> {
+  const [coresPorSku, setCoresPorSku] = useState<Map<string, string | null>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/sku-catalogo?incluirInativos=1");
+        if (!r.ok) return;
+        const j = (await r.json()) as {
+          skus?: Array<{ codigo: string; hexColor: string | null }>;
+        };
+        if (cancelado) return;
+        const m = new Map<string, string | null>();
+        for (const s of j.skus ?? []) m.set(s.codigo, s.hexColor ?? null);
+        setCoresPorSku(m);
+      } catch {
+        // silencioso — gráfico cai no fallback determinístico.
+      }
+    })();
+    return () => {
+      cancelado = true;
+    };
+  }, []);
+  return coresPorSku;
+}
+
 export function DashboardTab({ estatisticas, dados, hojeIso }: Props) {
+  // Agregação "completa" — todas as variações sem bucket "Outros". Usado pelo
+  // gráfico horizontal por variação. O `PorSkuCard` (stacked DOW) ainda usa
+  // a versão com Top 8 + Outros pra não poluir as séries.
+  const agregacaoCompleta = useMemo(
+    () =>
+      montarAgregacaoSemanal(dados, hojeIso, {
+        maxSkus: Number.MAX_SAFE_INTEGER,
+      }),
+    [dados, hojeIso],
+  );
   const agregacao = useMemo(
     () => montarAgregacaoSemanal(dados, hojeIso, { maxSkus: 8 }),
     [dados, hojeIso],
   );
+  const coresPorSku = useCoresPorSku();
 
   if (!estatisticas || !estatisticas.totalPedidos) {
     return (
@@ -359,11 +485,17 @@ export function DashboardTab({ estatisticas, dados, hojeIso }: Props) {
         />
       </div>
 
-      <TotalPorDiaCard
-        totalPorDow={agregacao.totalPorDow}
-        inicioIso={agregacao.inicioIso}
-        fimIso={agregacao.fimIso}
-      />
+      <div className="space-y-4">
+        {DIAS_UTEIS.map((dow) => (
+          <PecasPorDiaCard
+            key={dow}
+            skus={agregacaoCompleta.topSkus}
+            dow={dow}
+            dataIso={somarDiasIso(agregacaoCompleta.inicioIso, dow - 1)}
+            coresPorSku={coresPorSku}
+          />
+        ))}
+      </div>
 
       <PorSkuCard
         topSkus={agregacao.topSkus}

@@ -62,6 +62,7 @@ export async function GET(_request: NextRequest) {
             codigo: skuCatalogo.codigo,
             ativo: skuCatalogo.ativo,
             pausadoUpseller: skuCatalogo.pausadoUpseller,
+            hexColor: skuCatalogo.hexColor,
           })
           .from(skuCatalogo)
           .where(eq(skuCatalogo.contaId, contaId)),
