@@ -155,6 +155,86 @@ export function SubtaskCompra({
     ),
   );
 
+  // ── Refs e nav teclado dos inputs de peso de rolo (RITM-31) ──────
+  // Map<"idxF-idxC-idxR", HTMLInputElement>. Crescer um pouco com refs
+  // zumbis é ok — pra OPs típicas falamos de dezenas de entries.
+  const pesoInputRefs = useRef<Map<string, HTMLInputElement | null>>(new Map());
+  // Espelho de `fornecedores` pra closures dos callbacks lerem versão
+  // atualizada sem precisar invalidar useCallback a cada render.
+  const fornecedoresRef = useRef(fornecedores);
+  useEffect(() => {
+    fornecedoresRef.current = fornecedores;
+  }, [fornecedores]);
+
+  const registerPesoRef = useCallback(
+    (key: string, el: HTMLInputElement | null) => {
+      if (el) pesoInputRefs.current.set(key, el);
+      else pesoInputRefs.current.delete(key);
+    },
+    [],
+  );
+
+  const focarPesoProximo = useCallback(
+    (idxF: number, idxC: number, idxR: number, direcao: 1 | -1) => {
+      const fs = fornecedoresRef.current;
+      const focar = (key: string) => {
+        const el = pesoInputRefs.current.get(key);
+        if (el) {
+          el.focus();
+          el.select();
+        }
+      };
+
+      const fornecedor = fs[idxF];
+      if (!fornecedor) return;
+
+      // (a) Mesma cor, rolo adjacente
+      const cor = fornecedor.cores[idxC];
+      if (cor) {
+        const proxR = idxR + direcao;
+        if (proxR >= 0 && proxR < cor.pesosRolos.length) {
+          focar(`${idxF}-${idxC}-${proxR}`);
+          return;
+        }
+      }
+
+      // (b) Cor seguinte/anterior no mesmo fornecedor (com pesosRolos > 0)
+      let proxIdxC = idxC + direcao;
+      while (proxIdxC >= 0 && proxIdxC < fornecedor.cores.length) {
+        const proxCor = fornecedor.cores[proxIdxC];
+        if (proxCor.pesosRolos.length > 0) {
+          const proxR = direcao === 1 ? 0 : proxCor.pesosRolos.length - 1;
+          focar(`${idxF}-${proxIdxC}-${proxR}`);
+          return;
+        }
+        proxIdxC += direcao;
+      }
+
+      // (c) Próximo fornecedor (primeira/última cor com pesosRolos > 0)
+      let proxIdxF = idxF + direcao;
+      while (proxIdxF >= 0 && proxIdxF < fs.length) {
+        const proxF = fs[proxIdxF];
+        const ordem =
+          direcao === 1
+            ? proxF.cores.map((c, i) => ({ c, i }))
+            : proxF.cores.map((c, i) => ({ c, i })).reverse();
+        for (const { c, i } of ordem) {
+          if (c.pesosRolos.length > 0) {
+            const proxR = direcao === 1 ? 0 : c.pesosRolos.length - 1;
+            focar(`${proxIdxF}-${i}-${proxR}`);
+            return;
+          }
+        }
+        proxIdxF += direcao;
+      }
+
+      // (d) Nada adiante — blur do input atual
+      const atual = pesoInputRefs.current.get(`${idxF}-${idxC}-${idxR}`);
+      atual?.blur();
+    },
+    [],
+  );
+
   // Loading flags
   const [salvando, setSalvando] = useState(false);
   const [concluindo, setConcluindo] = useState(false);
@@ -712,6 +792,8 @@ export function SubtaskCompra({
           onColarPesos={(idxC, idxR, valores) =>
             colarPesos(idxF, idxC, idxR, valores)
           }
+          registerPesoRef={registerPesoRef}
+          focarPesoProximo={focarPesoProximo}
         />
       ))}
 
@@ -858,6 +940,13 @@ function FornecedorCard(props: {
   onAtualizarQtdRolos: (idxCor: number, valor: string) => void;
   onAtualizarPesoRolo: (idxCor: number, idxRolo: number, valor: string) => void;
   onColarPesos: (idxCor: number, idxRoloInicial: number, valores: number[]) => void;
+  registerPesoRef: (key: string, el: HTMLInputElement | null) => void;
+  focarPesoProximo: (
+    idxF: number,
+    idxC: number,
+    idxR: number,
+    direcao: 1 | -1,
+  ) => void;
 }) {
   const {
     fornecedor: f,
@@ -872,6 +961,8 @@ function FornecedorCard(props: {
     onAtualizarQtdRolos,
     onAtualizarPesoRolo,
     onColarPesos,
+    registerPesoRef,
+    focarPesoProximo,
   } = props;
 
   return (
@@ -1066,36 +1157,64 @@ function FornecedorCard(props: {
           />
         )}
 
-        {/* Spill de pesos por cor */}
+        {/* Spill de pesos por cor — lista vertical com nav por teclado (RITM-31) */}
         {f.cores
           .filter((c) => c.pesosRolos.length > 0)
-          .map((c, idxCFiltered) => {
-            // recupera idx original na lista
+          .map((c) => {
+            // recupera idx original na lista (filter pode reordenar)
             const idxC = f.cores.findIndex((x) => x.corId === c.corId);
+            const preenchidos = c.pesosRolos.filter(
+              (p) => p.trim() !== "",
+            ).length;
+            const somaKg = c.pesosRolos.reduce(
+              (s, p) => s + (p.trim() ? normalizarNumero(p) : 0),
+              0,
+            );
             return (
               <div
                 key={c.corId}
                 className="rounded border bg-muted/20 p-3 space-y-2"
               >
-                <div className="text-xs font-medium text-muted-foreground flex items-center gap-2">
-                  <span>
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <div className="text-xs font-medium text-muted-foreground">
                     Pesos dos rolos · {c.corNome || "?"} ·{" "}
-                    {c.pesosRolos.length} rolos
-                  </span>
-                  <span className="text-[10px] text-muted-foreground/70 font-normal">
-                    Dica: Ctrl+V pra colar uma coluna do Excel.
-                  </span>
+                    <span className="tabular-nums">
+                      {preenchidos}/{c.pesosRolos.length}
+                    </span>{" "}
+                    informados ·{" "}
+                    <span className="tabular-nums">
+                      {somaKg.toLocaleString("pt-BR", {
+                        minimumFractionDigits: 1,
+                        maximumFractionDigits: 1,
+                      })}
+                    </span>{" "}
+                    kg
+                  </div>
+                  <div className="text-[10px] text-muted-foreground/70">
+                    Enter avança · ↑/↓ navega · Ctrl+V cola coluna do Excel
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-2">
+                <div
+                  className="flex flex-col gap-1 max-w-xs"
+                  role="list"
+                  aria-label={`Pesos dos rolos da cor ${c.corNome || "?"}`}
+                >
                   {c.pesosRolos.map((p, idxR) => (
                     <div
                       key={idxR}
-                      className="flex items-center gap-1"
+                      className="flex items-center gap-2"
+                      role="listitem"
                     >
-                      <span className="text-[10px] text-muted-foreground tabular-nums w-7 text-right">
+                      <span className="text-xs text-muted-foreground tabular-nums w-10 text-right">
                         R{idxR + 1}
                       </span>
                       <Input
+                        ref={(el) =>
+                          registerPesoRef(
+                            `${idxFornecedor}-${idxC}-${idxR}`,
+                            el,
+                          )
+                        }
                         type="number"
                         step="0.01"
                         inputMode="decimal"
@@ -1103,6 +1222,25 @@ function FornecedorCard(props: {
                         onChange={(e) =>
                           onAtualizarPesoRolo(idxC, idxR, e.target.value)
                         }
+                        onFocus={(e) => e.currentTarget.select()}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            focarPesoProximo(
+                              idxFornecedor,
+                              idxC,
+                              idxR,
+                              e.shiftKey ? -1 : 1,
+                            );
+                          } else if (e.key === "ArrowDown") {
+                            e.preventDefault();
+                            focarPesoProximo(idxFornecedor, idxC, idxR, 1);
+                          } else if (e.key === "ArrowUp") {
+                            e.preventDefault();
+                            focarPesoProximo(idxFornecedor, idxC, idxR, -1);
+                          }
+                          // Tab: comportamento nativo
+                        }}
                         onPaste={(e) => {
                           const texto =
                             e.clipboardData.getData("text/plain") ?? "";
@@ -1116,14 +1254,13 @@ function FornecedorCard(props: {
                         }}
                         disabled={!podeEditar}
                         placeholder="kg"
-                        className="h-7 text-xs text-right tabular-nums px-1.5"
+                        className="h-8 text-sm text-right tabular-nums w-28"
                       />
                     </div>
                   ))}
                 </div>
               </div>
             );
-            void idxCFiltered;
           })}
 
         {/* Observações por fornecedor */}
