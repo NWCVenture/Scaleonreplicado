@@ -24,9 +24,16 @@ import {
   user,
   type ConfeccaoSubtaskPrefixo,
 } from "@/lib/db/schema";
-import { SubtaskCompraPayloadSchema } from "@/lib/confeccao/schemas/payloads/compra";
+import {
+  SubtaskCompraPayloadSchema,
+  type SubtaskCompraPayload,
+} from "@/lib/confeccao/schemas/payloads/compra";
 import { SubtaskRiscoPayloadSchema } from "@/lib/confeccao/schemas/payloads/risco";
-import { SubtaskCortePayloadSchema } from "@/lib/confeccao/schemas/payloads/corte";
+import {
+  SubtaskCortePayloadSchema,
+  type SubtaskCortePayload,
+} from "@/lib/confeccao/schemas/payloads/corte";
+import { sincronizarCorteComCompra } from "@/lib/confeccao/sincronizar-corte";
 import { SubtaskViesPayloadSchema } from "@/lib/confeccao/schemas/payloads/vies";
 import { SubtaskCosturaPayloadSchema } from "@/lib/confeccao/schemas/payloads/costura";
 import {
@@ -153,12 +160,55 @@ export async function PATCH(
         return { invalido: true as const, details: validacao.details };
       }
 
+      // RITM-33: ao salvar payload da OPBUY, propaga distribuicaoOficinas
+      // pro OPCOR da mesma OP. Bloqueia (422) se a mudança removeria
+      // oficina com pós-corte preenchido. Comportamento simétrico ao
+      // /concluir — vale tanto em rascunho quanto em edição retroativa.
+      let opcorIdParaAtualizar: string | null = null;
+      let opcorPayloadSincronizado: SubtaskCortePayload | null = null;
+      if (st.prefixo === "OPBUY") {
+        const novoCompraPayload = validacao.data as SubtaskCompraPayload;
+        const [opcor] = await tx
+          .select()
+          .from(confeccaoSubtask)
+          .where(
+            and(
+              eq(confeccaoSubtask.ordemProducaoId, st.ordemProducaoId),
+              eq(confeccaoSubtask.prefixo, "OPCOR"),
+            ),
+          );
+        if (opcor) {
+          const sync = sincronizarCorteComCompra(
+            novoCompraPayload,
+            opcor.payload as SubtaskCortePayload | null,
+          );
+          if (!sync.ok) {
+            return {
+              perdaCorte: true as const,
+              perdas: sync.perdas,
+            };
+          }
+          opcorIdParaAtualizar = opcor.id;
+          opcorPayloadSincronizado = sync.payload;
+        }
+      }
+
       const payloadAntigo = st.payload as Record<string, unknown>;
       const [updated] = await tx
         .update(confeccaoSubtask)
         .set({ payload: validacao.data, updatedAt: new Date() })
         .where(eq(confeccaoSubtask.id, id))
         .returning();
+
+      if (opcorIdParaAtualizar && opcorPayloadSincronizado) {
+        await tx
+          .update(confeccaoSubtask)
+          .set({
+            payload: opcorPayloadSincronizado as never,
+            updatedAt: new Date(),
+          })
+          .where(eq(confeccaoSubtask.id, opcorIdParaAtualizar));
+      }
 
       // Auditoria de edição retroativa
       if (ehEdicaoRetroativa) {
@@ -222,6 +272,20 @@ export async function PATCH(
       return NextResponse.json(
         { error: "Payload inválido", details: result.details },
         { status: 400 },
+      );
+    }
+    if ("perdaCorte" in result) {
+      const perdas = result.perdas ?? [];
+      const lista = perdas
+        .map((p) => `${p.oficinaId} (${p.campos.join(", ")})`)
+        .join("; ");
+      return NextResponse.json(
+        {
+          error: `Mudança removeria oficina(s) com dados pós-corte preenchidos: ${lista}. Limpe os dados do Corte ou mantenha a oficina no plano.`,
+          code: "perda_corte",
+          perdas,
+        },
+        { status: 422 },
       );
     }
     return NextResponse.json({ item: result.item });

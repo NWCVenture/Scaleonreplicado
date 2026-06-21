@@ -24,7 +24,9 @@ import {
   ConcluirSubtaskCorteSchema,
   rolosCompradosPorCorDeCompra,
   validarSaldoRolos,
+  type SubtaskCortePayload,
 } from "@/lib/confeccao/schemas/payloads/corte";
+import { sincronizarCorteComCompra } from "@/lib/confeccao/sincronizar-corte";
 import { ConcluirSubtaskViesSchema } from "@/lib/confeccao/schemas/payloads/vies";
 import {
   ConcluirSubtaskCosturaSchema,
@@ -316,6 +318,53 @@ export async function POST(
         subtaskId: id,
         usuarioId: session.user.id,
       });
+
+      // RITM-33: ao concluir a Compra, projeta distribuicaoOficinas no
+      // payload do Corte (pré-popula oficinas + rolosEnviadosPorCor).
+      // Sincroniza dentro da mesma transação pra que o Corte já abra
+      // com o plano definitivo após a OPBUY ser concluída.
+      if (st.prefixo === "OPBUY") {
+        const compraPayload = st.payload as SubtaskCompraPayload;
+        const [opcor] = await tx
+          .select()
+          .from(confeccaoSubtask)
+          .where(
+            and(
+              eq(confeccaoSubtask.ordemProducaoId, st.ordemProducaoId),
+              eq(confeccaoSubtask.prefixo, "OPCOR"),
+            ),
+          );
+        if (opcor) {
+          const sync = sincronizarCorteComCompra(
+            compraPayload,
+            opcor.payload as SubtaskCortePayload | null,
+          );
+          // Na conclusão da Compra, perdas indicam algo bizarro (Corte
+          // já tinha pós-corte de oficina que a Compra agora ignora).
+          // Bloqueia explicitamente — operador resolve manualmente.
+          if (!sync.ok) {
+            return {
+              invalido: true as const,
+              details: [
+                {
+                  code: "custom",
+                  path: ["distribuicaoOficinas"],
+                  message: `Não foi possível sincronizar o Corte: oficina(s) ${sync.perdas
+                    .map((p) => p.oficinaId)
+                    .join(", ")} têm dados pós-corte preenchidos que seriam perdidos. Restaure-as na distribuição da Compra ou limpe os dados do Corte antes.`,
+                },
+              ],
+              mensagem:
+                "Não foi possível sincronizar o Corte — dados pós-corte seriam perdidos. Restaure as oficinas no plano da Compra antes de concluir.",
+            };
+          }
+          await tx
+            .update(confeccaoSubtask)
+            .set({ payload: sync.payload as never })
+            .where(eq(confeccaoSubtask.id, opcor.id));
+        }
+      }
+
       // Após a transição, lê OP pra saber se foi marcada como concluída
       const [opAtual] = await tx
         .select({

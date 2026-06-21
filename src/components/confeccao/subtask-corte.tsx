@@ -7,10 +7,12 @@
 // Cada oficina tem config (pré-corte) + resultado (pós-corte).
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   CheckCircle2,
+  ExternalLink,
   Info,
   Play,
   Plus,
@@ -45,7 +47,10 @@ import type {
   ModoSeparacaoCorte,
   SubtaskCortePayload,
 } from "@/lib/confeccao/schemas/payloads/corte";
-import type { SubtaskCompraPayload } from "@/lib/confeccao/schemas/payloads/compra";
+import type {
+  DistribuicaoOficina,
+  SubtaskCompraPayload,
+} from "@/lib/confeccao/schemas/payloads/compra";
 import type {
   SubtaskRiscoPayload,
   TamanhoGradeRisco,
@@ -116,6 +121,17 @@ export function SubtaskCorte({
   const [tamanhosDoRisco, setTamanhosDoRisco] = useState<TamanhoGradeRisco[]>(
     [],
   );
+  // RITM-33: plano de distribuição vindo da Compra (read-only no Corte).
+  const [distribuicaoCompra, setDistribuicaoCompra] = useState<
+    DistribuicaoOficina[]
+  >([]);
+  /** Mapa oficinaId → nome amigável (hidratado do /api/fornecedores). */
+  const [oficinasNomes, setOficinasNomes] = useState<Map<string, string>>(
+    () => new Map(),
+  );
+  /** true quando a Compra definiu distribuicaoOficinas — UI vira read-only
+   *  pros blocos derivados do plano (oficinas, rolosEnviadosPorCor). */
+  const planDriven = distribuicaoCompra.length > 0;
 
   // Oficinas
   const [oficinas, setOficinas] = useState<OficinaState[]>(() => {
@@ -204,6 +220,22 @@ export function SubtaskCorte({
         }
       }
 
+      // RITM-33: plano de distribuição da Compra (oficinas + rolos).
+      const distribuicao = compra?.distribuicaoOficinas ?? [];
+      const oficinasMapa = new Map<string, string>();
+      if (distribuicao.length > 0) {
+        const resFor = await fetch(
+          `/api/confeccao/fornecedores?pageSize=200&incluirInativos=true`,
+          { cache: "no-store" },
+        );
+        if (resFor.ok && !cancelled) {
+          const dataFor = (await resFor.json()) as {
+            items: Array<{ id: string; nome: string }>;
+          };
+          for (const f of dataFor.items) oficinasMapa.set(f.id, f.nome);
+        }
+      }
+
       if (!cancelled) {
         setCoresContext(
           Array.from(rolosPorCor.entries()).map(([id, qtd]) => ({
@@ -213,6 +245,8 @@ export function SubtaskCorte({
           })),
         );
         setTamanhosDoRisco((risco?.tamanhos ?? []).map((t) => t.tamanho));
+        setDistribuicaoCompra(distribuicao);
+        setOficinasNomes(oficinasMapa);
       }
     })();
     return () => {
@@ -494,6 +528,34 @@ export function SubtaskCorte({
         </div>
       </div>
 
+      {/* RITM-33: banner top sobre origem do plano */}
+      {planDriven ? (
+        <div className="flex items-start gap-2 rounded border bg-card p-3 text-sm">
+          <Info className="size-4 shrink-0 mt-0.5 text-muted-foreground" />
+          <div className="flex-1">
+            Plano de distribuição vem da Compra. Pra alterar oficinas ou
+            rolos por cor, edite a{" "}
+            <Link
+              href={`/confeccao/ops/${opNumero}`}
+              className="inline-flex items-center gap-1 text-primary hover:underline"
+            >
+              Compra (OPBUY)
+              <ExternalLink className="size-3" />
+            </Link>
+            .
+          </div>
+        </div>
+      ) : coresContext.length > 0 ? (
+        <div className="flex items-start gap-2 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <AlertTriangle className="size-4 shrink-0 mt-0.5" />
+          <div>
+            Plano de distribuição não disponível na Compra — editando
+            oficinas manualmente. Recomendado: definir distribuição na
+            Compra (clique &ldquo;Planejar distribuição&rdquo; na OPBUY).
+          </div>
+        </div>
+      ) : null}
+
       {/* Saldo da Compra */}
       {coresContext.length === 0 ? (
         <div className="flex items-start gap-2 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -539,7 +601,7 @@ export function SubtaskCorte({
                 Oficina {idx + 1}
                 {o.oficinaNome ? ` — ${o.oficinaNome}` : ""}
               </CardTitle>
-              {podeEditar && oficinas.length > 1 && (
+              {podeEditar && !planDriven && oficinas.length > 1 && (
                 <Button
                   size="icon"
                   variant="ghost"
@@ -556,30 +618,38 @@ export function SubtaskCorte({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label>Oficina de corte</Label>
-                <LookupComCadastroInline
-                  endpoint="/api/confeccao/fornecedores"
-                  extraQuery={{ categoria: "corte" }}
-                  value={o.oficinaId}
-                  onChange={(id, item) => {
-                    setOficinaCampo(idx, "oficinaId", id);
-                    setOficinaCampo(idx, "oficinaNome", item.nome);
-                  }}
-                  entidadeLabel="oficina de corte"
-                  permiteCadastrar={isAdmin}
-                  cadastroInlineRender={
-                    isAdmin
-                      ? ({ onCreated, onCancel }) => (
-                          <FormFornecedorRapido
-                            categoriaInicial="corte"
-                            onCreated={onCreated}
-                            onCancel={onCancel}
-                          />
-                        )
-                      : undefined
-                  }
-                  disabled={!podeEditar}
-                  className="w-full"
-                />
+                {planDriven ? (
+                  <div className="h-9 px-3 flex items-center rounded border bg-muted/30 text-sm">
+                    {o.oficinaNome ||
+                      oficinasNomes.get(o.oficinaId) ||
+                      "(carregando)"}
+                  </div>
+                ) : (
+                  <LookupComCadastroInline
+                    endpoint="/api/confeccao/fornecedores"
+                    extraQuery={{ categoria: "corte" }}
+                    value={o.oficinaId}
+                    onChange={(id, item) => {
+                      setOficinaCampo(idx, "oficinaId", id);
+                      setOficinaCampo(idx, "oficinaNome", item.nome);
+                    }}
+                    entidadeLabel="oficina de corte"
+                    permiteCadastrar={isAdmin}
+                    cadastroInlineRender={
+                      isAdmin
+                        ? ({ onCreated, onCancel }) => (
+                            <FormFornecedorRapido
+                              categoriaInicial="corte"
+                              onCreated={onCreated}
+                              onCancel={onCancel}
+                            />
+                          )
+                        : undefined
+                    }
+                    disabled={!podeEditar}
+                    className="w-full"
+                  />
+                )}
               </div>
               <div className="space-y-2">
                 <Label>Modo de separação</Label>
@@ -609,31 +679,47 @@ export function SubtaskCorte({
             </div>
 
             <div className="space-y-2">
-              <Label>Rolos enviados por cor</Label>
+              <Label>
+                Rolos enviados por cor
+                {planDriven && (
+                  <span className="ml-2 text-[10px] font-normal uppercase tracking-wider text-muted-foreground">
+                    da Compra
+                  </span>
+                )}
+              </Label>
               {coresContext.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
                   Defina os rolos recebidos na Compra primeiro.
                 </p>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {coresContext.map((c) => (
-                    <div key={c.id} className="space-y-1">
-                      <span className="text-xs text-muted-foreground">
-                        {c.nome}
-                      </span>
-                      <Input
-                        type="number"
-                        min="0"
-                        max={c.rolosDisponiveis}
-                        value={o.rolosEnviadosPorCor[c.id] ?? ""}
-                        onChange={(e) =>
-                          setRolosEnviados(idx, c.id, e.target.value)
-                        }
-                        disabled={!podeEditar}
-                        className="h-8 text-sm"
-                      />
-                    </div>
-                  ))}
+                  {coresContext.map((c) => {
+                    const valor = o.rolosEnviadosPorCor[c.id] ?? "";
+                    return (
+                      <div key={c.id} className="space-y-1">
+                        <span className="text-xs text-muted-foreground">
+                          {c.nome}
+                        </span>
+                        {planDriven ? (
+                          <div className="h-8 px-3 flex items-center rounded border bg-muted/30 text-sm tabular-nums">
+                            {valor === "" || valor === "0" ? "—" : valor}
+                          </div>
+                        ) : (
+                          <Input
+                            type="number"
+                            min="0"
+                            max={c.rolosDisponiveis}
+                            value={valor}
+                            onChange={(e) =>
+                              setRolosEnviados(idx, c.id, e.target.value)
+                            }
+                            disabled={!podeEditar}
+                            className="h-8 text-sm"
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -894,10 +980,16 @@ export function SubtaskCorte({
 
       {podeEditar && (
         <div className="flex justify-between items-center">
-          <Button variant="outline" size="sm" onClick={adicionarOficina}>
-            <Plus className="size-3.5" />
-            Adicionar oficina
-          </Button>
+          {planDriven ? (
+            <span className="text-xs text-muted-foreground">
+              Oficinas vêm do plano da Compra
+            </span>
+          ) : (
+            <Button variant="outline" size="sm" onClick={adicionarOficina}>
+              <Plus className="size-3.5" />
+              Adicionar oficina
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
