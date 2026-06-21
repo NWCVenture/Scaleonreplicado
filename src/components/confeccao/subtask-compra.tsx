@@ -36,12 +36,15 @@ import { FormFornecedorRapido } from "@/components/confeccao/form-fornecedor-rap
 import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
 import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
+import { ModalDistribuicaoCompra } from "@/components/confeccao/modal-distribuicao-compra";
 import type { ConfeccaoSubtask } from "@/lib/db/schema";
 import type {
   CorContratada,
+  DistribuicaoOficina,
   FornecedorCompra,
   SubtaskCompraPayload,
 } from "@/lib/confeccao/schemas/payloads/compra";
+import { calcularSaldoDistribuicao } from "@/lib/confeccao/schemas/payloads/compra";
 import { parsePesosColados } from "@/lib/confeccao/parse-pesos-colados";
 import { cn } from "@/lib/utils";
 
@@ -137,9 +140,11 @@ export function SubtaskCompra({
   const [tipoTecidoId, setTipoTecidoId] = useState(
     payload.tipoTecidoId ?? "",
   );
-  const [destinatarioCorteId, setDestinatarioCorteId] = useState(
-    payload.destinatarioCorteId ?? "",
-  );
+  // RITM-32: distribuição multi-oficina substitui destinatarioCorteId.
+  const [distribuicaoOficinas, setDistribuicaoOficinas] = useState<
+    DistribuicaoOficina[]
+  >(payload.distribuicaoOficinas ?? []);
+  const [modalDistribuicaoOpen, setModalDistribuicaoOpen] = useState(false);
   const [gramaturaGM2, setGramaturaGM2] = useState(
     payload.gramaturaGM2 !== undefined ? String(payload.gramaturaGM2) : "",
   );
@@ -526,7 +531,8 @@ export function SubtaskCompra({
       })),
     };
     if (tipoTecidoId) out.tipoTecidoId = tipoTecidoId;
-    if (destinatarioCorteId) out.destinatarioCorteId = destinatarioCorteId;
+    if (distribuicaoOficinas.length > 0)
+      out.distribuicaoOficinas = distribuicaoOficinas;
     if (gramaturaGM2.trim()) out.gramaturaGM2 = normalizarNumero(gramaturaGM2);
     if (larguraRoloCm.trim()) out.larguraRoloCm = normalizarNumero(larguraRoloCm);
     if (observacoes.trim()) out.observacoes = observacoes;
@@ -534,7 +540,7 @@ export function SubtaskCompra({
   }, [
     fornecedores,
     tipoTecidoId,
-    destinatarioCorteId,
+    distribuicaoOficinas,
     gramaturaGM2,
     larguraRoloCm,
     observacoes,
@@ -612,6 +618,33 @@ export function SubtaskCompra({
     }
   }
 
+  // ── Mapa corId → nome (pra passar ao modal de distribuição) ──────
+  const coresNomes = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const f of fornecedores) {
+      for (const c of f.cores) {
+        if (c.corNome) m.set(c.corId, c.corNome);
+      }
+    }
+    return m;
+  }, [fornecedores]);
+
+  // ── Saldo de distribuição (RITM-32) ───────────────────────────────
+  const saldoDistribuicao = useMemo(
+    () => calcularSaldoDistribuicao(payloadAtual),
+    [payloadAtual],
+  );
+  const saldoTotalDescasado = useMemo(() => {
+    let s = 0;
+    for (const { saldo } of saldoDistribuicao.values()) s += saldo;
+    return s;
+  }, [saldoDistribuicao]);
+  const distribuicaoCompleta =
+    saldoDistribuicao.size > 0 &&
+    Array.from(saldoDistribuicao.values()).every((v) => v.saldo === 0);
+  const distribuicaoVazia = distribuicaoOficinas.length === 0;
+  const temContratado = saldoDistribuicao.size > 0;
+
   // ── Summary derivado ──────────────────────────────────────────────
   const summary = useMemo(() => {
     let contratado = 0;
@@ -652,9 +685,51 @@ export function SubtaskCompra({
           )}
           {podeEditar && (
             <Button
-              onClick={concluir}
-              disabled={concluindo || salvando}
+              type="button"
+              variant="outline"
               size="sm"
+              onClick={() => setModalDistribuicaoOpen(true)}
+              disabled={!temContratado}
+              title={
+                !temContratado
+                  ? "Preencha qtd. de rolos contratados antes de planejar a distribuição"
+                  : undefined
+              }
+            >
+              {distribuicaoVazia ? (
+                "Planejar distribuição"
+              ) : distribuicaoCompleta ? (
+                <span className="text-emerald-700">
+                  ✓ Distribuição completa
+                </span>
+              ) : saldoTotalDescasado > 0 ? (
+                <span className="text-amber-700">
+                  ⚠ {saldoTotalDescasado} rolo(s) sem destino
+                </span>
+              ) : (
+                <span className="text-destructive">
+                  ⚠ {-saldoTotalDescasado} rolo(s) excedente(s)
+                </span>
+              )}
+            </Button>
+          )}
+          {podeEditar && (
+            <Button
+              onClick={concluir}
+              disabled={
+                concluindo ||
+                salvando ||
+                !temContratado ||
+                !distribuicaoCompleta
+              }
+              size="sm"
+              title={
+                !temContratado
+                  ? "Adicione cores e qtd. de rolos antes de concluir"
+                  : !distribuicaoCompleta
+                    ? "Distribua todos os rolos entre oficinas antes de concluir"
+                    : undefined
+              }
             >
               <CheckCircle2 className="size-3.5" />
               {concluindo ? "Concluindo…" : "Concluir"}
@@ -668,8 +743,9 @@ export function SubtaskCompra({
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Configuração do tecido</CardTitle>
           <CardDescription>
-            Tipo, destino, gramatura e largura — valem para toda a OP
-            independente de quantos fornecedores.
+            Tipo, gramatura e largura — valem para toda a OP independente
+            de quantos fornecedores. O destino do tecido (oficinas) é
+            planejado no botão &ldquo;Planejar distribuição&rdquo; acima.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -685,30 +761,6 @@ export function SubtaskCompra({
                 isAdmin
                   ? ({ onCreated, onCancel }) => (
                       <CriarTipoTecidoForm
-                        onCreated={onCreated}
-                        onCancel={onCancel}
-                      />
-                    )
-                  : undefined
-              }
-              disabled={!podeEditar}
-              className="w-full"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Destinatário (oficina de corte)</Label>
-            <LookupComCadastroInline
-              endpoint="/api/confeccao/fornecedores"
-              extraQuery={{ categoria: "corte" }}
-              value={destinatarioCorteId}
-              onChange={(id) => setDestinatarioCorteId(id)}
-              entidadeLabel="oficina de corte"
-              permiteCadastrar={isAdmin}
-              cadastroInlineRender={
-                isAdmin
-                  ? ({ onCreated, onCancel }) => (
-                      <FormFornecedorRapido
-                        categoriaInicial="corte"
                         onCreated={onCreated}
                         onCancel={onCancel}
                       />
@@ -911,6 +963,19 @@ export function SubtaskCompra({
         opNumero={opNumero}
         subtaskNumero={subtask.numero}
         readOnly={readOnly}
+      />
+
+      {/* ── Modal de distribuição multi-oficina (RITM-32) ───────── */}
+      <ModalDistribuicaoCompra
+        open={modalDistribuicaoOpen}
+        onOpenChange={setModalDistribuicaoOpen}
+        payload={payloadAtual}
+        coresNomes={coresNomes}
+        isAdmin={isAdmin}
+        disabled={!podeEditar}
+        onSalvar={(dist) => {
+          setDistribuicaoOficinas(dist);
+        }}
       />
     </div>
   );

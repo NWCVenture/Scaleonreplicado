@@ -1,4 +1,4 @@
-// Schema do payload JSONB da subtask OPBUY (Compra de Tecido — RITM-08 + RITM-29).
+// Schema do payload JSONB da subtask OPBUY (Compra de Tecido — RITM-08 + RITM-29 + RITM-32).
 //
 // v2: estrutura plana "compra como planilha":
 //   - Lista de fornecedores (1..N) — uma OP pode comprar de múltiplos
@@ -8,6 +8,11 @@
 //     e o array de pesos reais dos rolos (sized idealmente = qtdRolos).
 //   - Top-level: tipo de tecido (único pra OP), destinatário do corte,
 //     gramatura, largura do rolo.
+//
+// v3 (RITM-32): substitui `destinatarioCorteId` (single oficina) por
+//   `distribuicaoOficinas: [{oficinaId, rolosPorCor}]` — plano multi-oficina
+//   decidido na Compra. O campo legacy permanece optional pra leitura
+//   durante o ciclo de migração (`src/lib/db/migrate-compra-payload-v3.ts`).
 //
 // O formato antigo (`pre`/`pos`) foi descontinuado. Migration de payloads
 // existentes em `src/lib/db/migrate-compra-payload-v2.ts`.
@@ -32,8 +37,22 @@ export const FornecedorCompraSchema = z.object({
 });
 export type FornecedorCompra = z.infer<typeof FornecedorCompraSchema>;
 
+// Cada entry: 1 oficina recebe N rolos de M cores. Plano definido na
+// Compra e consumido pelo Corte (RITM-33).
+export const DistribuicaoOficinaSchema = z.object({
+  oficinaId: z.string().min(1),
+  // Mapa corId → qtd de rolos atribuídos a esta oficina.
+  // Schema permissivo (rascunho/parcial). Validação rígida (saldo zerado,
+  // sem oficina-fantasma) só na conclusão.
+  rolosPorCor: z.record(z.string(), z.number().int().nonnegative()),
+});
+export type DistribuicaoOficina = z.infer<typeof DistribuicaoOficinaSchema>;
+
 export const SubtaskCompraPayloadSchema = z.object({
   fornecedores: z.array(FornecedorCompraSchema).optional(),
+  // v3 (RITM-32) — plano de distribuição multi-oficina decidido na Compra
+  distribuicaoOficinas: z.array(DistribuicaoOficinaSchema).optional(),
+  // legacy v2 — mantido optional pra leitura durante migration
   destinatarioCorteId: z.string().min(1).optional(),
   tipoTecidoId: z.string().min(1).optional(),
   gramaturaGM2: z.number().positive().finite().optional(),
@@ -137,6 +156,56 @@ export function agruparKgContratadoPorCor(
 }
 
 // ──────────────────────────────────────────────────────────────────────
+// Helpers de distribuição (RITM-32)
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Soma rolos atribuídos por cor cross-oficinas. Espelha do lado da
+ * distribuição o que `agruparRolosContratadosPorCor` faz do lado da Compra.
+ */
+export function agruparRolosAtribuidosPorCor(
+  payload: SubtaskCompraPayload | null | undefined,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const o of payload?.distribuicaoOficinas ?? []) {
+    for (const [corId, qtd] of Object.entries(o.rolosPorCor)) {
+      out.set(corId, (out.get(corId) ?? 0) + qtd);
+    }
+  }
+  return out;
+}
+
+export interface SaldoDistribuicaoCor {
+  contratado: number;
+  atribuido: number;
+  /** Positivo = falta atribuir; negativo = atribuído além do contratado. */
+  saldo: number;
+}
+
+/**
+ * Por cor (união contratadas ∪ atribuídas), devolve quanto foi contratado,
+ * quanto está atribuído a oficinas e o saldo. Saldo zerado em todas as
+ * cores é pré-condição pra conclusão da Compra.
+ */
+export function calcularSaldoDistribuicao(
+  payload: SubtaskCompraPayload | null | undefined,
+): Map<string, SaldoDistribuicaoCor> {
+  const contratados = agruparRolosContratadosPorCor(payload);
+  const atribuidos = agruparRolosAtribuidosPorCor(payload);
+  const cores = new Set<string>([
+    ...contratados.keys(),
+    ...atribuidos.keys(),
+  ]);
+  const out = new Map<string, SaldoDistribuicaoCor>();
+  for (const corId of cores) {
+    const c = contratados.get(corId) ?? 0;
+    const a = atribuidos.get(corId) ?? 0;
+    out.set(corId, { contratado: c, atribuido: a, saldo: c - a });
+  }
+  return out;
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // Schema de conclusão — tudo obrigatório + refinements
 // ──────────────────────────────────────────────────────────────────────
 
@@ -154,7 +223,10 @@ const FornecedorConcluirSchema = FornecedorCompraSchema.extend({
 export const ConcluirSubtaskCompraSchema = z
   .object({
     fornecedores: z.array(FornecedorConcluirSchema).min(1),
-    destinatarioCorteId: z.string().min(1),
+    // v3 (RITM-32): plano de distribuição é obrigatório na conclusão
+    distribuicaoOficinas: z.array(DistribuicaoOficinaSchema).min(1),
+    // legacy v2 — manter optional pra payloads em migração
+    destinatarioCorteId: z.string().min(1).optional(),
     tipoTecidoId: z.string().min(1),
     gramaturaGM2: z.number().positive().finite(),
     larguraRoloCm: z.number().positive().finite().max(500),
@@ -202,6 +274,66 @@ export const ConcluirSubtaskCompraSchema = z
             message: `Quantidade de pesos (${c.pesosRolos.length}) não bate com qtd. de rolos contratada (${c.qtdRolosContratados})`,
           });
         }
+      }
+    }
+
+    // ── Distribuição (RITM-32) ─────────────────────────────────────
+    // Oficinas duplicadas.
+    const idsOficina = new Set<string>();
+    for (let i = 0; i < data.distribuicaoOficinas.length; i++) {
+      const id = data.distribuicaoOficinas[i].oficinaId;
+      if (idsOficina.has(id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["distribuicaoOficinas", i, "oficinaId"],
+          message:
+            "Oficina duplicada — uma oficina só pode receber rolos uma vez por plano de distribuição",
+        });
+      }
+      idsOficina.add(id);
+    }
+    // Cada oficina precisa receber ao menos 1 rolo (de qualquer cor).
+    for (let i = 0; i < data.distribuicaoOficinas.length; i++) {
+      const o = data.distribuicaoOficinas[i];
+      const total = Object.values(o.rolosPorCor).reduce((s, n) => s + n, 0);
+      if (total === 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["distribuicaoOficinas", i, "rolosPorCor"],
+          message:
+            "Oficina precisa receber ao menos 1 rolo — remova a oficina ou atribua rolos",
+        });
+      }
+    }
+    // Saldo zerado por cor: contratado === atribuído em cada cor contratada.
+    const contratado = agruparRolosContratadosPorCor({
+      fornecedores: data.fornecedores,
+    });
+    const atribuido = agruparRolosAtribuidosPorCor({
+      distribuicaoOficinas: data.distribuicaoOficinas,
+    });
+    const corIds = new Set<string>([
+      ...contratado.keys(),
+      ...atribuido.keys(),
+    ]);
+    for (const corId of corIds) {
+      const c = contratado.get(corId) ?? 0;
+      const a = atribuido.get(corId) ?? 0;
+      if (c !== a) {
+        const idxOficina = data.distribuicaoOficinas.findIndex(
+          (o) => o.rolosPorCor[corId] !== undefined,
+        );
+        ctx.addIssue({
+          code: "custom",
+          path:
+            idxOficina >= 0
+              ? ["distribuicaoOficinas", idxOficina, "rolosPorCor", corId]
+              : ["distribuicaoOficinas"],
+          message:
+            c > a
+              ? `Cor ${corId}: ${c - a} rolo(s) sem destino (contratado ${c}, distribuído ${a})`
+              : `Cor ${corId}: ${a - c} rolo(s) atribuído(s) além do contratado (contratado ${c}, distribuído ${a})`,
+        });
       }
     }
   });
