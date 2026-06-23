@@ -33,6 +33,15 @@ export const RoloDescartadoSchema = z.object({
   justificativa: z.string().min(1).max(500),
 });
 
+// RITM-34: rolo físico recebido pelo cortador. Sem ID — matching com o
+// rolo do fornecedor é feito por rank de peso dentro de (cor, oficina).
+export const RoloRecebidoSchema = z.object({
+  corId: z.string().min(1),
+  pesoCortador: z.number().positive().finite(),
+  folhasRendidas: z.number().int().nonnegative(),
+});
+export type RoloRecebido = z.infer<typeof RoloRecebidoSchema>;
+
 export const OficinaCorteSchema = z.object({
   oficinaId: z.string().min(1),
   modoSeparacao: ModoSeparacaoCorteSchema,
@@ -41,6 +50,10 @@ export const OficinaCorteSchema = z.object({
     z.string(),
     z.number().int().nonnegative(),
   ),
+  // RITM-34: 1 entry por rolo físico recebido. Lista pode ser parcial
+  // enquanto subtask está em andamento; na conclusão exige count match
+  // por cor (refinement em ConcluirSubtaskCorteSchema).
+  rolosRecebidos: z.array(RoloRecebidoSchema).optional(),
   // Pós-corte (opcional enquanto subtask está em andamento)
   folhasEnfesto: z.number().int().positive().optional(),
   rendimentoTotal: z.number().int().nonnegative().optional(),
@@ -104,6 +117,49 @@ export const ConcluirSubtaskCorteSchema = z
           message:
             "Oficina precisa receber ao menos 1 rolo (de qualquer cor)",
         });
+      }
+    }
+    // RITM-34: rolosRecebidos coerentes com rolosEnviadosPorCor por cor.
+    for (let i = 0; i < data.oficinas.length; i++) {
+      const o = data.oficinas[i];
+      const recebidos = o.rolosRecebidos ?? [];
+      // (a) Nenhum corId em recebidos fora das chaves de enviadosPorCor
+      const coresEnviadas = new Set(
+        Object.entries(o.rolosEnviadosPorCor)
+          .filter(([, n]) => n > 0)
+          .map(([cor]) => cor),
+      );
+      for (let r = 0; r < recebidos.length; r++) {
+        if (!coresEnviadas.has(recebidos[r].corId)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["oficinas", i, "rolosRecebidos", r, "corId"],
+            message: `Oficina ${o.oficinaId} · cor "${recebidos[r].corId}": cortador informou rolo de cor que não foi enviada pra essa oficina`,
+          });
+        }
+      }
+      // (b) Count por cor: rolosRecebidos.filter(corId).length === enviados[cor]
+      const recebidosPorCor = new Map<string, number>();
+      for (const r of recebidos) {
+        recebidosPorCor.set(
+          r.corId,
+          (recebidosPorCor.get(r.corId) ?? 0) + 1,
+        );
+      }
+      for (const [corId, enviados] of Object.entries(o.rolosEnviadosPorCor)) {
+        if (enviados <= 0) continue;
+        const recebidos = recebidosPorCor.get(corId) ?? 0;
+        if (recebidos !== enviados) {
+          const diff = enviados - recebidos;
+          ctx.addIssue({
+            code: "custom",
+            path: ["oficinas", i, "rolosRecebidos"],
+            message:
+              diff > 0
+                ? `Oficina ${o.oficinaId} · ${corId}: faltam ${diff} rolo(s) no informe do cortador (esperado ${enviados}, informado ${recebidos})`
+                : `Oficina ${o.oficinaId} · ${corId}: cortador informou ${-diff} rolo(s) a mais que o enviado (esperado ${enviados}, informado ${recebidos})`,
+          });
+        }
       }
     }
   });

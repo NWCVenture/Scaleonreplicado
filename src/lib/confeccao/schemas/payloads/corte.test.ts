@@ -19,6 +19,13 @@ test("ConcluirSubtaskCorte: aceita oficina completa", () => {
         oficinaId: "of1",
         modoSeparacao: "por_cor",
         rolosEnviadosPorCor: { co1: 3, co2: 2 },
+        rolosRecebidos: [
+          { corId: "co1", pesoCortador: 12, folhasRendidas: 40 },
+          { corId: "co1", pesoCortador: 12.5, folhasRendidas: 41 },
+          { corId: "co1", pesoCortador: 13, folhasRendidas: 42 },
+          { corId: "co2", pesoCortador: 11, folhasRendidas: 38 },
+          { corId: "co2", pesoCortador: 11.5, folhasRendidas: 39 },
+        ],
         folhasEnfesto: 10,
         rendimentoTotal: 120,
         rendimentoPorTamanhoCor: [
@@ -179,4 +186,139 @@ test("rolosCompradosPorCorDeCompra: conta pesosRolos como rolos — multi-fornec
 test("rolosCompradosPorCorDeCompra: payload null → mapa vazio", () => {
   const mapa = rolosCompradosPorCorDeCompra(null);
   assert.equal(mapa.size, 0);
+});
+
+// ── RITM-34: rolosRecebidos ──────────────────────────────────────────
+
+test("SubtaskCortePayload: aceita rolosRecebidos parcial em em_andamento", () => {
+  const r = SubtaskCortePayloadSchema.safeParse({
+    oficinas: [
+      {
+        oficinaId: "of1",
+        modoSeparacao: "por_cor",
+        rolosEnviadosPorCor: { azul: 10 },
+        rolosRecebidos: [
+          { corId: "azul", pesoCortador: 12.5, folhasRendidas: 40 },
+          { corId: "azul", pesoCortador: 12.8, folhasRendidas: 41 },
+          { corId: "azul", pesoCortador: 13.0, folhasRendidas: 42 },
+          { corId: "azul", pesoCortador: 13.1, folhasRendidas: 42 },
+          { corId: "azul", pesoCortador: 13.3, folhasRendidas: 43 },
+        ],
+      },
+    ],
+  });
+  assert.equal(r.success, true);
+});
+
+test("ConcluirSubtaskCorte: rejeita corId em rolosRecebidos fora de enviadosPorCor (RITM-34)", () => {
+  const r = ConcluirSubtaskCorteSchema.safeParse({
+    oficinas: [
+      {
+        oficinaId: "of1",
+        modoSeparacao: "por_cor",
+        rolosEnviadosPorCor: { azul: 1, branco: 1 },
+        rolosRecebidos: [
+          { corId: "azul", pesoCortador: 12, folhasRendidas: 40 },
+          { corId: "branco", pesoCortador: 11, folhasRendidas: 38 },
+          // Vermelho: não foi enviado pra essa oficina → erro
+          { corId: "vermelho", pesoCortador: 10, folhasRendidas: 35 },
+        ],
+        folhasEnfesto: 10,
+        rendimentoTotal: 80,
+        rendimentoPorTamanhoCor: [
+          { tamanho: "M", corId: "azul", quantidade: 40 },
+          { tamanho: "M", corId: "branco", quantidade: 40 },
+        ],
+        precoPorPeca: 2,
+      },
+    ],
+  });
+  assert.equal(r.success, false);
+  if (!r.success) {
+    assert.ok(r.error.issues.some((i) => /vermelho/i.test(i.message)));
+  }
+});
+
+test("ConcluirSubtaskCorte: exige count match por cor (RITM-34)", () => {
+  const r = ConcluirSubtaskCorteSchema.safeParse({
+    oficinas: [
+      {
+        oficinaId: "of1",
+        modoSeparacao: "por_cor",
+        rolosEnviadosPorCor: { azul: 10 },
+        rolosRecebidos: [
+          { corId: "azul", pesoCortador: 12, folhasRendidas: 40 },
+          { corId: "azul", pesoCortador: 12.5, folhasRendidas: 41 },
+          { corId: "azul", pesoCortador: 13, folhasRendidas: 42 },
+          { corId: "azul", pesoCortador: 13.2, folhasRendidas: 42 },
+          { corId: "azul", pesoCortador: 13.5, folhasRendidas: 43 },
+          { corId: "azul", pesoCortador: 13.7, folhasRendidas: 44 },
+          { corId: "azul", pesoCortador: 13.9, folhasRendidas: 44 },
+          { corId: "azul", pesoCortador: 14, folhasRendidas: 45 },
+          // só 8 rolos informados, mas enviados=10
+        ],
+        folhasEnfesto: 50,
+        rendimentoTotal: 400,
+        rendimentoPorTamanhoCor: [
+          { tamanho: "M", corId: "azul", quantidade: 400 },
+        ],
+        precoPorPeca: 2,
+      },
+    ],
+  });
+  assert.equal(r.success, false);
+  if (!r.success) {
+    assert.ok(
+      r.error.issues.some((i) =>
+        /faltam 2 rolo\(s\)/i.test(i.message),
+      ),
+    );
+  }
+});
+
+test("ConcluirSubtaskCorte: aceita oficina com rolosRecebidos completos (RITM-34)", () => {
+  const r = ConcluirSubtaskCorteSchema.safeParse({
+    oficinas: [
+      {
+        oficinaId: "of1",
+        modoSeparacao: "por_cor",
+        rolosEnviadosPorCor: { azul: 2, branco: 1 },
+        rolosRecebidos: [
+          { corId: "azul", pesoCortador: 12, folhasRendidas: 40 },
+          { corId: "azul", pesoCortador: 12.5, folhasRendidas: 41 },
+          { corId: "branco", pesoCortador: 11, folhasRendidas: 38 },
+        ],
+        folhasEnfesto: 10,
+        rendimentoTotal: 120,
+        rendimentoPorTamanhoCor: [
+          { tamanho: "M", corId: "azul", quantidade: 80 },
+          { tamanho: "M", corId: "branco", quantidade: 40 },
+        ],
+        precoPorPeca: 2.5,
+      },
+    ],
+  });
+  assert.equal(r.success, true);
+});
+
+test("ConcluirSubtaskCorte: rejeita pesoCortador <= 0 (RITM-34)", () => {
+  const r = ConcluirSubtaskCorteSchema.safeParse({
+    oficinas: [
+      {
+        oficinaId: "of1",
+        modoSeparacao: "por_cor",
+        rolosEnviadosPorCor: { azul: 1 },
+        rolosRecebidos: [
+          { corId: "azul", pesoCortador: 0, folhasRendidas: 40 },
+        ],
+        folhasEnfesto: 10,
+        rendimentoTotal: 40,
+        rendimentoPorTamanhoCor: [
+          { tamanho: "M", corId: "azul", quantidade: 40 },
+        ],
+        precoPorPeca: 2,
+      },
+    ],
+  });
+  assert.equal(r.success, false);
 });

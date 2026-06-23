@@ -58,6 +58,10 @@ export const SubtaskCompraPayloadSchema = z.object({
   gramaturaGM2: z.number().positive().finite().optional(),
   larguraRoloCm: z.number().positive().finite().max(500).optional(),
   observacoes: z.string().max(2000).optional(),
+  // RITM-34: tolerância (em %) pra view de matching fornecedor↔cortador.
+  // Pares com |diff%| > tolerancia ficam destacados como alerta.
+  // Default tratado no consumidor (TOLERANCIA_MATCHING_PADRAO).
+  toleranciaMatchingPct: z.number().nonnegative().finite().max(100).optional(),
 });
 export type SubtaskCompraPayload = z.infer<typeof SubtaskCompraPayloadSchema>;
 
@@ -231,6 +235,12 @@ export const ConcluirSubtaskCompraSchema = z
     gramaturaGM2: z.number().positive().finite(),
     larguraRoloCm: z.number().positive().finite().max(500),
     observacoes: z.string().max(2000).optional(),
+    toleranciaMatchingPct: z
+      .number()
+      .nonnegative()
+      .finite()
+      .max(100)
+      .optional(),
   })
   .superRefine((data, ctx) => {
     // Cores duplicadas DENTRO de um fornecedor.

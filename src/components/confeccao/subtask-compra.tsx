@@ -148,6 +148,11 @@ export function SubtaskCompra({
   const [gramaturaGM2, setGramaturaGM2] = useState(
     payload.gramaturaGM2 !== undefined ? String(payload.gramaturaGM2) : "",
   );
+  const [toleranciaMatchingPct, setToleranciaMatchingPct] = useState(
+    payload.toleranciaMatchingPct !== undefined
+      ? String(payload.toleranciaMatchingPct)
+      : "",
+  );
   const [larguraRoloCm, setLarguraRoloCm] = useState(
     payload.larguraRoloCm !== undefined ? String(payload.larguraRoloCm) : "",
   );
@@ -535,6 +540,8 @@ export function SubtaskCompra({
       out.distribuicaoOficinas = distribuicaoOficinas;
     if (gramaturaGM2.trim()) out.gramaturaGM2 = normalizarNumero(gramaturaGM2);
     if (larguraRoloCm.trim()) out.larguraRoloCm = normalizarNumero(larguraRoloCm);
+    if (toleranciaMatchingPct.trim())
+      out.toleranciaMatchingPct = normalizarNumero(toleranciaMatchingPct);
     if (observacoes.trim()) out.observacoes = observacoes;
     return out;
   }, [
@@ -543,6 +550,7 @@ export function SubtaskCompra({
     distribuicaoOficinas,
     gramaturaGM2,
     larguraRoloCm,
+    toleranciaMatchingPct,
     observacoes,
   ]);
 
@@ -794,6 +802,25 @@ export function SubtaskCompra({
               disabled={!podeEditar}
               placeholder="180"
             />
+          </div>
+          {/* RITM-34: tolerância usada na view Matching de Rolos */}
+          <div className="space-y-2">
+            <Label>Tolerância matching de rolos (%)</Label>
+            <Input
+              type="number"
+              step="0.1"
+              min="0"
+              max="100"
+              inputMode="decimal"
+              value={toleranciaMatchingPct}
+              onChange={(e) => setToleranciaMatchingPct(e.target.value)}
+              disabled={!podeEditar}
+              placeholder="5"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Diferença máxima permitida entre peso do fornecedor e do
+              cortador antes de marcar alerta. Default 5%.
+            </p>
           </div>
           <div className="md:col-span-2 space-y-2">
             <Label>Observações gerais</Label>

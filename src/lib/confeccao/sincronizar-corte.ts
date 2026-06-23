@@ -38,6 +38,9 @@ function camposPosCortePreenchidos(o: OficinaCorte): string[] {
   if (o.rolosDescartados !== undefined && o.rolosDescartados.length > 0)
     out.push("rolosDescartados");
   if (o.precoPorPeca !== undefined) out.push("precoPorPeca");
+  // RITM-34: rolosRecebidos é pós-corte (cortador pesou). Conta como perda.
+  if (o.rolosRecebidos !== undefined && o.rolosRecebidos.length > 0)
+    out.push("rolosRecebidos");
   return out;
 }
 
@@ -78,6 +81,10 @@ export function sincronizarCorteComCompra(
       oficinaId: d.oficinaId,
       modoSeparacao: existente?.modoSeparacao ?? "por_cor",
       rolosEnviadosPorCor: { ...d.rolosPorCor },
+      // RITM-34: preserva rolosRecebidos por oficina. Se enviadosPorCor
+      // mudou (cor adicionada/removida ou count diferente), conclusão
+      // vai recusar até cortador acertar os rolos manualmente.
+      rolosRecebidos: existente?.rolosRecebidos,
       folhasEnfesto: existente?.folhasEnfesto,
       rendimentoTotal: existente?.rendimentoTotal,
       rendimentoPorTamanhoCor: existente?.rendimentoPorTamanhoCor,

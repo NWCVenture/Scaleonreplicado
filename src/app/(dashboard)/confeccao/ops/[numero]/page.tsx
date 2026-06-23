@@ -4,7 +4,9 @@
 // URLs próprias por subtask via /confeccao/ops/[numero]/subtasks/[prefixo].
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Scale } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/lib/auth-client";
 import { usePapelAtivo } from "@/hooks/use-papel-ativo";
@@ -21,6 +23,8 @@ import { SubtaskCard } from "@/components/confeccao/subtask-card";
 import { NotasOP } from "@/components/confeccao/notas-op";
 import { FardosNoEstoque } from "@/components/confeccao/fardos-no-estoque";
 import { derivarKpisOp } from "@/lib/confeccao/dashboard-kpis";
+import { totalRolosRecebidos } from "@/lib/confeccao/matching-rolos";
+import type { SubtaskCortePayload } from "@/lib/confeccao/schemas/payloads/corte";
 import type { ConfeccaoSubtask } from "@/lib/db/schema";
 
 interface OPDetalhe {
@@ -212,7 +216,25 @@ export default function OPDetailPage({
         ))}
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between">
+        {(() => {
+          const cortePayload = data.subtasks.find(
+            (s) => s.prefixo === "OPCOR",
+          )?.payload as SubtaskCortePayload | undefined;
+          const nRolos = totalRolosRecebidos(cortePayload ?? null);
+          return nRolos > 0 ? (
+            <Button asChild variant="outline" size="sm">
+              <Link
+                href={`/confeccao/ops/${data.op.numero}/matching-rolos`}
+              >
+                <Scale className="size-3.5" />
+                Matching de Rolos ({nRolos} informado{nRolos === 1 ? "" : "s"})
+              </Link>
+            </Button>
+          ) : (
+            <span />
+          );
+        })()}
         <Button variant="ghost" size="sm" onClick={() => router.push("/confeccao")}>
           ← Voltar à lista
         </Button>

@@ -6,7 +6,7 @@
 // da Compra com validação em tempo real (alerta se excede saldo).
 // Cada oficina tem config (pré-corte) + resultado (pós-corte).
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -43,8 +43,10 @@ import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadas
 import { FormFornecedorRapido } from "@/components/confeccao/form-fornecedor-rapido";
 import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
+import { parsePesoFolhasColados } from "@/lib/confeccao/parse-peso-folhas-colados";
 import type {
   ModoSeparacaoCorte,
+  RoloRecebido,
   SubtaskCortePayload,
 } from "@/lib/confeccao/schemas/payloads/corte";
 import type {
@@ -70,6 +72,11 @@ interface OficinaState {
   oficinaNome: string;
   modoSeparacao: ModoSeparacaoCorte;
   rolosEnviadosPorCor: Record<string, string>;
+  // RITM-34: rolos pesados/folhados pelo cortador, indexados por corId.
+  // Cada entry da lista vai virar 1 item em payload.rolosRecebidos.
+  // Comprimento da lista por cor pode ser menor que enviadosPorCor[cor]
+  // enquanto cortador preenche; conclusão exige count match.
+  rolosRecebidos: Record<string, Array<{ peso: string; folhas: string }>>;
   folhasEnfesto: string;
   rendimentoTotal: string;
   rendimentoMatriz: Record<string, Record<TamanhoGradeRisco, string>>; // [corId][tamanho] = "qtd"
@@ -90,6 +97,7 @@ function novaOficina(): OficinaState {
     oficinaNome: "",
     modoSeparacao: "por_cor",
     rolosEnviadosPorCor: {},
+    rolosRecebidos: {},
     folhasEnfesto: "",
     rendimentoTotal: "",
     rendimentoMatriz: {},
@@ -150,12 +158,25 @@ export function SubtaskCorte({
       for (const [c, n] of Object.entries(o.rolosEnviadosPorCor)) {
         rolos[c] = String(n);
       }
+      // RITM-34: agrupa rolosRecebidos por corId, mantendo ordem original
+      const recebidos: Record<
+        string,
+        Array<{ peso: string; folhas: string }>
+      > = {};
+      for (const r of o.rolosRecebidos ?? []) {
+        if (!recebidos[r.corId]) recebidos[r.corId] = [];
+        recebidos[r.corId].push({
+          peso: String(r.pesoCortador),
+          folhas: String(r.folhasRendidas),
+        });
+      }
       return {
         id: Math.random().toString(36).slice(2),
         oficinaId: o.oficinaId,
         oficinaNome: "",
         modoSeparacao: o.modoSeparacao,
         rolosEnviadosPorCor: rolos,
+        rolosRecebidos: recebidos,
         folhasEnfesto:
           o.folhasEnfesto !== undefined ? String(o.folhasEnfesto) : "",
         rendimentoTotal:
@@ -319,6 +340,136 @@ export function SubtaskCorte({
     );
   }
 
+  // ── RITM-34: rolosRecebidos (peso/folhas pelo cortador) ────────────
+  // Refs pra nav teclado: key = `${idxOficina}-${corId}-${idxRolo}-${campo}`
+  const rrInputRefs = useRef<Map<string, HTMLInputElement | null>>(new Map());
+  const registerRrRef = useCallback(
+    (key: string, el: HTMLInputElement | null) => {
+      if (el) rrInputRefs.current.set(key, el);
+      else rrInputRefs.current.delete(key);
+    },
+    [],
+  );
+
+  /** Lê n esperado de uma cor a partir do state (parsing string → int). */
+  function nEsperadosCor(o: OficinaState, corId: string): number {
+    const v = Number(o.rolosEnviadosPorCor[corId] ?? "");
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+  }
+
+  /** Set 1 campo (peso ou folhas) de 1 rolo. Cresce a lista até o índice. */
+  function setRoloRecebidoCampo(
+    idxOficina: number,
+    corId: string,
+    idxRolo: number,
+    campo: "peso" | "folhas",
+    valor: string,
+  ) {
+    setOficinas((prev) =>
+      prev.map((o, i) => {
+        if (i !== idxOficina) return o;
+        const atual = o.rolosRecebidos[corId] ?? [];
+        const lista =
+          atual.length > idxRolo
+            ? [...atual]
+            : [
+                ...atual,
+                ...Array.from(
+                  { length: idxRolo - atual.length + 1 },
+                  () => ({ peso: "", folhas: "" }),
+                ),
+              ];
+        lista[idxRolo] = { ...lista[idxRolo], [campo]: valor };
+        return {
+          ...o,
+          rolosRecebidos: { ...o.rolosRecebidos, [corId]: lista },
+        };
+      }),
+    );
+  }
+
+  /** Substitui várias linhas a partir de idxRolo (paste do Excel). */
+  function colarRolosRecebidos(
+    idxOficina: number,
+    corId: string,
+    idxRoloInicial: number,
+    valores: Array<{ peso: number; folhas: number | null }>,
+  ) {
+    setOficinas((prev) =>
+      prev.map((o, i) => {
+        if (i !== idxOficina) return o;
+        const n = nEsperadosCor(o, corId);
+        const atual = o.rolosRecebidos[corId] ?? [];
+        // Pad até max(n, idxInicial+valores.length)
+        const tamFinal = Math.max(n, idxRoloInicial + valores.length);
+        const lista: Array<{ peso: string; folhas: string }> = [];
+        for (let k = 0; k < tamFinal; k++) {
+          lista.push(atual[k] ?? { peso: "", folhas: "" });
+        }
+        for (let k = 0; k < valores.length; k++) {
+          const dest = idxRoloInicial + k;
+          if (dest >= n) break; // não passa do esperado
+          const v = valores[k];
+          lista[dest] = {
+            peso: String(v.peso),
+            folhas: v.folhas !== null ? String(v.folhas) : lista[dest]?.folhas ?? "",
+          };
+        }
+        return {
+          ...o,
+          rolosRecebidos: { ...o.rolosRecebidos, [corId]: lista },
+        };
+      }),
+    );
+  }
+
+  /** Limpa todos os rolos de uma cor (preserva slots, zera valores). */
+  function limparRolosRecebidosCor(idxOficina: number, corId: string) {
+    setOficinas((prev) =>
+      prev.map((o, i) => {
+        if (i !== idxOficina) return o;
+        const n = nEsperadosCor(o, corId);
+        const lista = Array.from({ length: n }, () => ({
+          peso: "",
+          folhas: "",
+        }));
+        return {
+          ...o,
+          rolosRecebidos: { ...o.rolosRecebidos, [corId]: lista },
+        };
+      }),
+    );
+  }
+
+  /** Foca o próximo input dentro da mesma (oficina, cor). */
+  const focarRoloProximo = useCallback(
+    (
+      idxOficina: number,
+      corId: string,
+      idxRolo: number,
+      campo: "peso" | "folhas",
+      direcao: 1 | -1,
+    ) => {
+      const focar = (key: string) => {
+        const el = rrInputRefs.current.get(key);
+        if (el) {
+          el.focus();
+          el.select();
+        }
+      };
+      const prox = `${idxOficina}-${corId}-${idxRolo + direcao}-${campo}`;
+      if (rrInputRefs.current.has(prox)) {
+        focar(prox);
+        return;
+      }
+      const atual = rrInputRefs.current.get(
+        `${idxOficina}-${corId}-${idxRolo}-${campo}`,
+      );
+      atual?.blur();
+    },
+    [],
+  );
+
   function adicionarOficina() {
     setOficinas((prev) => [...prev, novaOficina()]);
   }
@@ -383,10 +534,30 @@ export function SubtaskCorte({
               }
             }
           }
+          // RITM-34: rolosRecebidos flat (filtrado: só com peso > 0).
+          const rolosRecebidos: RoloRecebido[] = [];
+          for (const [corId, lista] of Object.entries(o.rolosRecebidos)) {
+            for (const r of lista) {
+              const peso = Number(r.peso.replace(",", "."));
+              if (!Number.isFinite(peso) || peso <= 0) continue;
+              const folhasNum = Number(r.folhas);
+              const folhas =
+                Number.isFinite(folhasNum) && folhasNum >= 0
+                  ? Math.floor(folhasNum)
+                  : 0;
+              rolosRecebidos.push({
+                corId,
+                pesoCortador: peso,
+                folhasRendidas: folhas,
+              });
+            }
+          }
           return {
             oficinaId: o.oficinaId,
             modoSeparacao: o.modoSeparacao,
             rolosEnviadosPorCor: rolos,
+            rolosRecebidos:
+              rolosRecebidos.length > 0 ? rolosRecebidos : undefined,
             folhasEnfesto: o.folhasEnfesto
               ? Number(o.folhasEnfesto)
               : undefined,
@@ -441,6 +612,39 @@ export function SubtaskCorte({
     },
     [subtask.id, oficinas, onAlterado],
   );
+
+  // RITM-34: auto-save debounced (800ms) só pra rolosRecebidos.
+  // Outros campos continuam no fluxo manual "Salvar rascunho" pra manter
+  // compatibilidade. Trigger é mudança no fingerprint dos rolosRecebidos.
+  const rrFingerprint = useMemo(
+    () =>
+      oficinas
+        .map((o) =>
+          Object.entries(o.rolosRecebidos)
+            .map(
+              ([cor, lista]) =>
+                `${cor}:${lista.map((r) => `${r.peso}/${r.folhas}`).join("|")}`,
+            )
+            .join(";"),
+        )
+        .join("§"),
+    [oficinas],
+  );
+  const rrUltimoEnviadoRef = useRef<string>(rrFingerprint);
+  const rrDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!podeEditar) return;
+    if (rrFingerprint === rrUltimoEnviadoRef.current) return;
+    if (rrDebounceRef.current) clearTimeout(rrDebounceRef.current);
+    rrDebounceRef.current = setTimeout(() => {
+      void salvarPayload(true).then((ok) => {
+        if (ok) rrUltimoEnviadoRef.current = rrFingerprint;
+      });
+    }, 800);
+    return () => {
+      if (rrDebounceRef.current) clearTimeout(rrDebounceRef.current);
+    };
+  }, [rrFingerprint, podeEditar, salvarPayload]);
 
   async function iniciar() {
     if (oficinas.length === 0 || !oficinas[0].oficinaId) {
@@ -723,6 +927,214 @@ export function SubtaskCorte({
                 </div>
               )}
             </div>
+
+            {/* RITM-34: Rolos recebidos pelo cortador (1 linha por rolo) */}
+            {coresContext.length > 0 && (
+              <div className="border-t pt-4 space-y-3">
+                <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
+                  Rolos recebidos pelo cortador
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Cortador pesa cada rolo ao descer no enfesto e anota
+                  quantas folhas o rolo rendeu. Sem etiqueta física — a
+                  comparação com o peso do fornecedor é feita por ranking de
+                  peso dentro de cada cor.
+                </p>
+                {coresContext.map((c) => {
+                  const nEsperados = nEsperadosCor(o, c.id);
+                  if (nEsperados <= 0) return null;
+                  const lista = o.rolosRecebidos[c.id] ?? [];
+                  const preenchidos = lista.filter(
+                    (r) => r.peso.trim() !== "",
+                  ).length;
+                  return (
+                    <div
+                      key={c.id}
+                      className="rounded border bg-muted/20 p-3 space-y-2"
+                    >
+                      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                        <div className="text-xs font-medium text-muted-foreground">
+                          {c.nome} ·{" "}
+                          <span className="tabular-nums">
+                            {preenchidos}/{nEsperados}
+                          </span>{" "}
+                          informados
+                        </div>
+                        <div className="text-[10px] text-muted-foreground/70">
+                          Enter avança · ↑/↓ navega · Ctrl+V cola coluna ou
+                          matriz (peso[Tab]folhas) do Excel
+                        </div>
+                        {podeEditar && preenchidos > 0 && (
+                          <button
+                            type="button"
+                            className="text-[11px] text-muted-foreground hover:underline ml-auto"
+                            onClick={() =>
+                              limparRolosRecebidosCor(idx, c.id)
+                            }
+                          >
+                            Limpar
+                          </button>
+                        )}
+                      </div>
+                      <div
+                        className="flex flex-col gap-1"
+                        role="list"
+                        aria-label={`Rolos recebidos da cor ${c.nome}`}
+                      >
+                        {Array.from({ length: nEsperados }, (_, idxR) => {
+                          const rolo = lista[idxR] ?? {
+                            peso: "",
+                            folhas: "",
+                          };
+                          return (
+                            <div
+                              key={idxR}
+                              className="flex items-center gap-2"
+                              role="listitem"
+                            >
+                              <span className="text-xs text-muted-foreground tabular-nums w-10 text-right">
+                                R{idxR + 1}
+                              </span>
+                              <Input
+                                ref={(el) =>
+                                  registerRrRef(
+                                    `${idx}-${c.id}-${idxR}-peso`,
+                                    el,
+                                  )
+                                }
+                                type="number"
+                                step="0.01"
+                                inputMode="decimal"
+                                value={rolo.peso}
+                                placeholder="kg"
+                                onChange={(e) =>
+                                  setRoloRecebidoCampo(
+                                    idx,
+                                    c.id,
+                                    idxR,
+                                    "peso",
+                                    e.target.value,
+                                  )
+                                }
+                                onFocus={(e) => e.currentTarget.select()}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    // Enter no peso → folhas mesma linha
+                                    const folhasEl = rrInputRefs.current.get(
+                                      `${idx}-${c.id}-${idxR}-folhas`,
+                                    );
+                                    if (folhasEl) {
+                                      folhasEl.focus();
+                                      folhasEl.select();
+                                    }
+                                  } else if (e.key === "ArrowDown") {
+                                    e.preventDefault();
+                                    focarRoloProximo(
+                                      idx,
+                                      c.id,
+                                      idxR,
+                                      "peso",
+                                      1,
+                                    );
+                                  } else if (e.key === "ArrowUp") {
+                                    e.preventDefault();
+                                    focarRoloProximo(
+                                      idx,
+                                      c.id,
+                                      idxR,
+                                      "peso",
+                                      -1,
+                                    );
+                                  }
+                                }}
+                                onPaste={(e) => {
+                                  const texto =
+                                    e.clipboardData.getData("text/plain") ??
+                                    "";
+                                  const valores =
+                                    parsePesoFolhasColados(texto);
+                                  if (valores.length <= 1) return;
+                                  e.preventDefault();
+                                  colarRolosRecebidos(
+                                    idx,
+                                    c.id,
+                                    idxR,
+                                    valores,
+                                  );
+                                  toast.success(
+                                    `${valores.length} rolo(s) colados a partir de R${idxR + 1}`,
+                                  );
+                                }}
+                                disabled={!podeEditar}
+                                className="h-8 text-sm text-right tabular-nums w-24"
+                              />
+                              <Input
+                                ref={(el) =>
+                                  registerRrRef(
+                                    `${idx}-${c.id}-${idxR}-folhas`,
+                                    el,
+                                  )
+                                }
+                                type="number"
+                                min="0"
+                                step="1"
+                                inputMode="numeric"
+                                value={rolo.folhas}
+                                placeholder="folhas"
+                                onChange={(e) =>
+                                  setRoloRecebidoCampo(
+                                    idx,
+                                    c.id,
+                                    idxR,
+                                    "folhas",
+                                    e.target.value,
+                                  )
+                                }
+                                onFocus={(e) => e.currentTarget.select()}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    // Enter em folhas → peso próximo rolo
+                                    focarRoloProximo(
+                                      idx,
+                                      c.id,
+                                      idxR,
+                                      "peso",
+                                      1,
+                                    );
+                                  } else if (e.key === "ArrowDown") {
+                                    e.preventDefault();
+                                    focarRoloProximo(
+                                      idx,
+                                      c.id,
+                                      idxR,
+                                      "folhas",
+                                      1,
+                                    );
+                                  } else if (e.key === "ArrowUp") {
+                                    e.preventDefault();
+                                    focarRoloProximo(
+                                      idx,
+                                      c.id,
+                                      idxR,
+                                      "folhas",
+                                      -1,
+                                    );
+                                  }
+                                }}
+                                disabled={!podeEditar}
+                                className="h-8 text-sm text-right tabular-nums w-24"
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Pós-corte (resultado) */}
             <div className="border-t pt-4 space-y-4">
