@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  calcularRendimentoOficina,
   ConcluirSubtaskCorteSchema,
+  folhasRendidasPorCor,
   rolosCompradosPorCorDeCompra,
   SubtaskCortePayloadSchema,
   validarSaldoRolos,
@@ -293,6 +295,102 @@ test("ConcluirSubtaskCorte: aceita oficina com rolosRecebidos completos (RITM-34
         rendimentoPorTamanhoCor: [
           { tamanho: "M", corId: "azul", quantidade: 80 },
           { tamanho: "M", corId: "branco", quantidade: 40 },
+        ],
+        precoPorPeca: 2.5,
+      },
+    ],
+  });
+  assert.equal(r.success, true);
+});
+
+// ── RITM-34: pecasPorFolha × folhasRendidas ─────────────────────────
+
+test("folhasRendidasPorCor: soma folhas por cor (RITM-34)", () => {
+  const m = folhasRendidasPorCor({
+    rolosRecebidos: [
+      { corId: "azul", pesoCortador: 12, folhasRendidas: 40 },
+      { corId: "azul", pesoCortador: 13, folhasRendidas: 42 },
+      { corId: "branco", pesoCortador: 11, folhasRendidas: 35 },
+    ],
+  });
+  assert.equal(m.get("azul"), 82);
+  assert.equal(m.get("branco"), 35);
+});
+
+test("calcularRendimentoOficina: multiplica pecasPorFolha × folhas (RITM-34)", () => {
+  const r = calcularRendimentoOficina({
+    oficinaId: "of1",
+    modoSeparacao: "por_cor",
+    rolosEnviadosPorCor: { azul: 2 },
+    rolosRecebidos: [
+      { corId: "azul", pesoCortador: 12, folhasRendidas: 50 },
+      { corId: "azul", pesoCortador: 13, folhasRendidas: 50 },
+    ],
+    // 5M + 3G + 4GG = 12 peças/folha; 100 folhas → 1200 peças total
+    rendimentoPorTamanhoCor: [
+      { tamanho: "M", corId: "azul", quantidade: 500, pecasPorFolha: 5 },
+      { tamanho: "G", corId: "azul", quantidade: 300, pecasPorFolha: 3 },
+      { tamanho: "GG", corId: "azul", quantidade: 400, pecasPorFolha: 4 },
+    ],
+  });
+  assert.equal(r.rendimentoTotal, 1200);
+  assert.equal(r.quantidadePorTamCor.get("M|azul"), 500);
+  assert.equal(r.quantidadePorTamCor.get("G|azul"), 300);
+  assert.equal(r.quantidadePorTamCor.get("GG|azul"), 400);
+});
+
+test("calcularRendimentoOficina: legacy sem pecasPorFolha usa quantidade direta", () => {
+  const r = calcularRendimentoOficina({
+    oficinaId: "of1",
+    modoSeparacao: "por_cor",
+    rolosEnviadosPorCor: { azul: 1 },
+    rendimentoPorTamanhoCor: [
+      { tamanho: "M", corId: "azul", quantidade: 100 },
+      { tamanho: "G", corId: "azul", quantidade: 50 },
+    ],
+  });
+  assert.equal(r.rendimentoTotal, 150);
+});
+
+test("calcularRendimentoOficina: total por cor distinto (RITM-34)", () => {
+  const r = calcularRendimentoOficina({
+    oficinaId: "of1",
+    modoSeparacao: "por_cor",
+    rolosEnviadosPorCor: { azul: 1, branco: 1 },
+    rolosRecebidos: [
+      { corId: "azul", pesoCortador: 12, folhasRendidas: 100 },
+      { corId: "branco", pesoCortador: 12, folhasRendidas: 80 },
+    ],
+    rendimentoPorTamanhoCor: [
+      { tamanho: "M", corId: "azul", quantidade: 0, pecasPorFolha: 5 },
+      { tamanho: "M", corId: "branco", quantidade: 0, pecasPorFolha: 5 },
+    ],
+  });
+  // azul: 5 × 100 = 500; branco: 5 × 80 = 400; total 900
+  assert.equal(r.quantidadePorTamCor.get("M|azul"), 500);
+  assert.equal(r.quantidadePorTamCor.get("M|branco"), 400);
+  assert.equal(r.rendimentoTotal, 900);
+});
+
+test("ConcluirSubtaskCorte: aceita conclusão SEM folhasEnfesto (RITM-34)", () => {
+  const r = ConcluirSubtaskCorteSchema.safeParse({
+    oficinas: [
+      {
+        oficinaId: "of1",
+        modoSeparacao: "por_cor",
+        rolosEnviadosPorCor: { azul: 1 },
+        rolosRecebidos: [
+          { corId: "azul", pesoCortador: 12, folhasRendidas: 50 },
+        ],
+        // sem folhasEnfesto
+        rendimentoTotal: 600,
+        rendimentoPorTamanhoCor: [
+          {
+            tamanho: "M",
+            corId: "azul",
+            quantidade: 600,
+            pecasPorFolha: 12,
+          },
         ],
         precoPorPeca: 2.5,
       },

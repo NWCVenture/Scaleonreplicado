@@ -77,8 +77,18 @@ interface OficinaState {
   // enquanto cortador preenche; conclusão exige count match.
   rolosRecebidos: Record<string, Array<{ peso: string; folhas: string }>>;
   folhasEnfesto: string;
+  /**
+   * Rendimento total da oficina. Auto-computado a partir de
+   * rendimentoMatriz × folhasRendidas; pode ser override manual.
+   */
   rendimentoTotal: string;
-  rendimentoMatriz: Record<string, Record<TamanhoGradeRisco, string>>; // [corId][tamanho] = "qtd"
+  /**
+   * RITM-34: peças POR FOLHA (não mais total) por (corId, tamanho).
+   * Total = pecasPorFolha × soma(folhasRendidas dos rolos dessa cor).
+   * Para payloads legados sem pecasPorFolha, init a partir do total
+   * dividido pelas folhas (back-derive) — vide useState init.
+   */
+  rendimentoMatriz: Record<string, Record<TamanhoGradeRisco, string>>; // [corId][tamanho] = "peças/folha"
   descartes: Array<{ corId: string; qtdRolos: string; justificativa: string }>;
   precoPorPeca: string;
   observacoes: string;
@@ -145,13 +155,33 @@ export function SubtaskCorte({
     if (!payload.oficinas || payload.oficinas.length === 0)
       return [novaOficina()];
     return payload.oficinas.map((o) => {
+      // RITM-34: matriz armazena PEÇAS POR FOLHA. Se payload já vem com
+      // pecasPorFolha, usa direto. Senão, back-derive de quantidade ÷
+      // folhasDaCor (best effort pra payloads legados).
+      const folhasInitPorCor = new Map<string, number>();
+      for (const r of o.rolosRecebidos ?? []) {
+        folhasInitPorCor.set(
+          r.corId,
+          (folhasInitPorCor.get(r.corId) ?? 0) + r.folhasRendidas,
+        );
+      }
       const matriz: OficinaState["rendimentoMatriz"] = {};
       for (const entry of o.rendimentoPorTamanhoCor ?? []) {
         matriz[entry.corId] = matriz[entry.corId] ?? ({} as Record<
           TamanhoGradeRisco,
           string
         >);
-        matriz[entry.corId][entry.tamanho] = String(entry.quantidade);
+        let valor: string;
+        if (entry.pecasPorFolha !== undefined) {
+          valor = String(entry.pecasPorFolha);
+        } else {
+          const folhas = folhasInitPorCor.get(entry.corId) ?? 0;
+          valor =
+            folhas > 0
+              ? String(Math.round(entry.quantidade / folhas))
+              : String(entry.quantidade);
+        }
+        matriz[entry.corId][entry.tamanho] = valor;
       }
       const rolos: Record<string, string> = {};
       for (const [c, n] of Object.entries(o.rolosEnviadosPorCor)) {
@@ -271,6 +301,50 @@ export function SubtaskCorte({
       cancelled = true;
     };
   }, [opNumero]);
+
+  // RITM-34: cálculo derivado do pós-corte por oficina.
+  //   - folhasPorCor:  soma folhasRendidas dos rolosRecebidos dessa cor
+  //   - somaPecasPorFolha[cor]: 5M + 3G + 4GG (peças por folha p/ essa cor)
+  //   - rendimentoCalc: sum por cor de (somaPecasPorFolha × folhas)
+  // Quando matriz não tem nada de cor com folhas > 0, rendimentoCalc = 0 e
+  // o input manual de rendimentoTotal volta a valer.
+  function computarRendimento(o: OficinaState): {
+    folhasPorCor: Map<string, number>;
+    pecasPorFolhaPorCor: Map<string, number>;
+    rendimentoCalc: number;
+    temBase: boolean;
+  } {
+    const folhasPorCor = new Map<string, number>();
+    for (const lista of Object.values(o.rolosRecebidos)) {
+      for (const r of lista) {
+        const f = Number(r.folhas);
+        if (!Number.isFinite(f) || f <= 0) continue;
+      }
+    }
+    for (const [corId, lista] of Object.entries(o.rolosRecebidos)) {
+      let s = 0;
+      for (const r of lista) {
+        const f = Number(r.folhas);
+        if (Number.isFinite(f) && f > 0) s += Math.floor(f);
+      }
+      if (s > 0) folhasPorCor.set(corId, s);
+    }
+    const pecasPorFolhaPorCor = new Map<string, number>();
+    for (const [corId, mapaTam] of Object.entries(o.rendimentoMatriz)) {
+      let s = 0;
+      for (const v of Object.values(mapaTam)) {
+        const n = Number(v);
+        if (Number.isFinite(n) && n >= 0) s += Math.floor(n);
+      }
+      if (s > 0) pecasPorFolhaPorCor.set(corId, s);
+    }
+    let rendimentoCalc = 0;
+    for (const [corId, pf] of pecasPorFolhaPorCor) {
+      rendimentoCalc += pf * (folhasPorCor.get(corId) ?? 0);
+    }
+    const temBase = folhasPorCor.size > 0 && pecasPorFolhaPorCor.size > 0;
+    return { folhasPorCor, pecasPorFolhaPorCor, rendimentoCalc, temBase };
+  }
 
   // Soma de rolos enviados por cor (todas as oficinas)
   function totalEnviadoPorCor(corId: string): number {
@@ -514,23 +588,6 @@ export function SubtaskCorte({
             const n = Number(v);
             if (n > 0) rolos[c] = n;
           }
-          const rendimentoArr: Array<{
-            tamanho: TamanhoGradeRisco;
-            corId: string;
-            quantidade: number;
-          }> = [];
-          for (const [corId, mapaTam] of Object.entries(o.rendimentoMatriz)) {
-            for (const [t, qtd] of Object.entries(mapaTam)) {
-              const n = Number(qtd);
-              if (qtd.trim() && n >= 0) {
-                rendimentoArr.push({
-                  tamanho: t as TamanhoGradeRisco,
-                  corId,
-                  quantidade: n,
-                });
-              }
-            }
-          }
           // RITM-34: rolosRecebidos flat (filtrado: só com peso > 0).
           const rolosRecebidos: RoloRecebido[] = [];
           for (const [corId, lista] of Object.entries(o.rolosRecebidos)) {
@@ -549,6 +606,46 @@ export function SubtaskCorte({
               });
             }
           }
+          // RITM-34: matriz tem PEÇAS POR FOLHA. Total por (cor) =
+          // pecasPorFolha × soma das folhasRendidas dessa cor.
+          const folhasPorCor = new Map<string, number>();
+          for (const r of rolosRecebidos) {
+            folhasPorCor.set(
+              r.corId,
+              (folhasPorCor.get(r.corId) ?? 0) + r.folhasRendidas,
+            );
+          }
+          const rendimentoArr: Array<{
+            tamanho: TamanhoGradeRisco;
+            corId: string;
+            quantidade: number;
+            pecasPorFolha?: number;
+          }> = [];
+          let rendimentoTotalCalc = 0;
+          for (const [corId, mapaTam] of Object.entries(o.rendimentoMatriz)) {
+            for (const [t, pf] of Object.entries(mapaTam)) {
+              const n = Number(pf);
+              if (!pf.trim() || !Number.isFinite(n) || n < 0) continue;
+              const pecasPorFolha = Math.floor(n);
+              const folhas = folhasPorCor.get(corId) ?? 0;
+              const quantidade = pecasPorFolha * folhas;
+              rendimentoArr.push({
+                tamanho: t as TamanhoGradeRisco,
+                corId,
+                quantidade,
+                pecasPorFolha,
+              });
+              rendimentoTotalCalc += quantidade;
+            }
+          }
+          // Total computado prevalece; manual override usa o input só
+          // se a matriz estiver vazia (sem rolosRecebidos / pecasPorFolha).
+          const rendimentoTotal =
+            rendimentoArr.length > 0
+              ? rendimentoTotalCalc
+              : o.rendimentoTotal
+                ? Number(o.rendimentoTotal)
+                : undefined;
           return {
             oficinaId: o.oficinaId,
             modoSeparacao: o.modoSeparacao,
@@ -558,9 +655,7 @@ export function SubtaskCorte({
             folhasEnfesto: o.folhasEnfesto
               ? Number(o.folhasEnfesto)
               : undefined,
-            rendimentoTotal: o.rendimentoTotal
-              ? Number(o.rendimentoTotal)
-              : undefined,
+            rendimentoTotal,
             rendimentoPorTamanhoCor:
               rendimentoArr.length > 0 ? rendimentoArr : undefined,
             rolosDescartados:
@@ -1085,58 +1180,105 @@ export function SubtaskCorte({
             )}
 
             {/* Pós-corte (resultado) */}
-            <div className="border-t pt-4 space-y-4">
-              <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
-                Resultado (pós-corte)
-              </div>
+            {(() => {
+              const calc = computarRendimento(o);
+              return (
+                <div className="border-t pt-4 space-y-4">
+                  <div className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
+                    Resultado (pós-corte)
+                  </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-2">
-                  <Label>Folhas do enfesto (papagaio)</Label>
-                  <Input
-                    type="number"
-                    min="1"
-                    value={o.folhasEnfesto}
-                    onChange={(e) =>
-                      setOficinaCampo(idx, "folhasEnfesto", e.target.value)
-                    }
-                    disabled={!podeEditar}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Rendimento total (peças)</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    value={o.rendimentoTotal}
-                    onChange={(e) =>
-                      setOficinaCampo(idx, "rendimentoTotal", e.target.value)
-                    }
-                    disabled={!podeEditar}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Preço por peça (R$)</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={o.precoPorPeca}
-                    onChange={(e) =>
-                      setOficinaCampo(idx, "precoPorPeca", e.target.value)
-                    }
-                    disabled={!podeEditar}
-                  />
-                </div>
-              </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="space-y-2">
+                      <Label>
+                        Folhas do enfesto (papagaio){" "}
+                        <span className="text-[10px] font-normal text-muted-foreground">
+                          opcional
+                        </span>
+                      </Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        value={o.folhasEnfesto}
+                        onChange={(e) =>
+                          setOficinaCampo(
+                            idx,
+                            "folhasEnfesto",
+                            e.target.value,
+                          )
+                        }
+                        disabled={!podeEditar}
+                        placeholder="só se houver divergência"
+                      />
+                      <p className="text-[11px] text-muted-foreground">
+                        Conta da amostra. Preencha apenas pra investigar
+                        divergência — o nº oficial vem das folhas que o
+                        cortador anotou nos rolos recebidos.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Rendimento total (peças)</Label>
+                      {calc.temBase ? (
+                        <>
+                          <div className="h-9 px-3 flex items-center rounded border bg-muted/30 text-sm tabular-nums font-medium">
+                            {calc.rendimentoCalc.toLocaleString("pt-BR")}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            {Array.from(calc.pecasPorFolhaPorCor.entries())
+                              .map(([corId, pf]) => {
+                                const nome =
+                                  coresContext.find((c) => c.id === corId)
+                                    ?.nome ?? "?";
+                                const f =
+                                  calc.folhasPorCor.get(corId) ?? 0;
+                                return `${nome}: ${pf} × ${f}`;
+                              })
+                              .join(" · ")}
+                          </p>
+                        </>
+                      ) : (
+                        <Input
+                          type="number"
+                          min="0"
+                          value={o.rendimentoTotal}
+                          onChange={(e) =>
+                            setOficinaCampo(
+                              idx,
+                              "rendimentoTotal",
+                              e.target.value,
+                            )
+                          }
+                          disabled={!podeEditar}
+                          placeholder="auto a partir de peças/folha × folhas"
+                        />
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Preço por peça (R$)</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={o.precoPorPeca}
+                        onChange={(e) =>
+                          setOficinaCampo(
+                            idx,
+                            "precoPorPeca",
+                            e.target.value,
+                          )
+                        }
+                        disabled={!podeEditar}
+                      />
+                    </div>
+                  </div>
 
-              {/* Matriz tamanho × cor */}
-              {tamanhosDoRisco.length > 0 && coresContext.length > 0 && (
+                  {/* Matriz tamanho × cor — peças POR FOLHA */}
+                  {tamanhosDoRisco.length > 0 && coresContext.length > 0 && (
                 <div className="space-y-2">
-                  <Label>Rendimento por tamanho × cor (peças)</Label>
+                  <Label>Rendimento por tamanho × cor (peças por folha)</Label>
                   <p className="text-xs text-muted-foreground">
-                    Dados informados pela oficina. É o número oficial — não é
-                    estimativa.
+                    Quantas peças cada folha do enfesto rende, por cor. O
+                    total é multiplicado pelas folhas que cada rolo rendeu.
                   </p>
                   <div className="overflow-x-auto">
                     <table className="text-sm w-full">
@@ -1153,37 +1295,60 @@ export function SubtaskCorte({
                               {t}
                             </th>
                           ))}
+                          <th className="p-1 text-xs text-muted-foreground text-right">
+                            /folha
+                          </th>
+                          <th className="p-1 text-xs text-muted-foreground text-right">
+                            × folhas
+                          </th>
+                          <th className="p-1 text-xs text-muted-foreground text-right">
+                            = total
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
-                        {coresContext.map((c) => (
-                          <tr key={c.id}>
-                            <td className="p-1 text-xs font-medium">
-                              {c.nome}
-                            </td>
-                            {tamanhosDoRisco.map((t) => (
-                              <td key={t} className="p-1">
-                                <Input
-                                  type="number"
-                                  min="0"
-                                  value={
-                                    o.rendimentoMatriz[c.id]?.[t] ?? ""
-                                  }
-                                  onChange={(e) =>
-                                    setRendimentoCelula(
-                                      idx,
-                                      c.id,
-                                      t,
-                                      e.target.value,
-                                    )
-                                  }
-                                  disabled={!podeEditar}
-                                  className="h-7 text-xs w-16 text-center px-1"
-                                />
+                        {coresContext.map((c) => {
+                          const pf = calc.pecasPorFolhaPorCor.get(c.id) ?? 0;
+                          const folhas = calc.folhasPorCor.get(c.id) ?? 0;
+                          const total = pf * folhas;
+                          return (
+                            <tr key={c.id}>
+                              <td className="p-1 text-xs font-medium">
+                                {c.nome}
                               </td>
-                            ))}
-                          </tr>
-                        ))}
+                              {tamanhosDoRisco.map((t) => (
+                                <td key={t} className="p-1">
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    value={
+                                      o.rendimentoMatriz[c.id]?.[t] ?? ""
+                                    }
+                                    onChange={(e) =>
+                                      setRendimentoCelula(
+                                        idx,
+                                        c.id,
+                                        t,
+                                        e.target.value,
+                                      )
+                                    }
+                                    disabled={!podeEditar}
+                                    className="h-7 text-xs w-14 text-center px-1"
+                                  />
+                                </td>
+                              ))}
+                              <td className="p-1 text-xs tabular-nums text-right font-medium">
+                                {pf || "—"}
+                              </td>
+                              <td className="p-1 text-xs tabular-nums text-right text-muted-foreground">
+                                {folhas || "—"}
+                              </td>
+                              <td className="p-1 text-xs tabular-nums text-right font-medium">
+                                {total > 0 ? total.toLocaleString("pt-BR") : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1334,6 +1499,8 @@ export function SubtaskCorte({
                 />
               </div>
             </div>
+              );
+            })()}
           </CardContent>
         </Card>
       ))}

@@ -20,11 +20,18 @@ export const ModoSeparacaoCorteSchema = z.enum(["por_cor", "sem_separacao"]);
 export type ModoSeparacaoCorte = z.infer<typeof ModoSeparacaoCorteSchema>;
 
 // Rendimento por tamanho × cor de uma oficina:
-// [{ tamanho: "M", corId: "co1", quantidade: 100 }, ...]
+// [{ tamanho: "M", corId: "co1", quantidade: 100, pecasPorFolha: 5 }, ...]
+//
+// `quantidade` = total de peças (consumido por Costura/dashboards).
+// `pecasPorFolha` (RITM-34+) = peças por folha do risco. Quando presente,
+// `quantidade` deve refletir pecasPorFolha × (soma de folhasRendidas dos
+// rolosRecebidos dessa cor). Conta direta do papagaio (folhasEnfesto)
+// só é necessária em caso de divergência — investigação.
 export const RendimentoTamanhoCorSchema = z.object({
   tamanho: TamanhoGradeRiscoSchema,
   corId: z.string().min(1),
   quantidade: z.number().int().nonnegative(),
+  pecasPorFolha: z.number().int().nonnegative().optional(),
 });
 
 export const RoloDescartadoSchema = z.object({
@@ -83,8 +90,10 @@ export const ConcluirSubtaskCorteSchema = z
     oficinas: z
       .array(
         OficinaCorteSchema.extend({
-          // Tudo obrigatório na conclusão
-          folhasEnfesto: z.number().int().positive(),
+          // Pós-corte mínimo obrigatório na conclusão.
+          // folhasEnfesto NÃO é obrigatório (contagem do papagaio é só
+          // investigativa — o número de folhas vem dos rolosRecebidos).
+          folhasEnfesto: z.number().int().positive().optional(),
           rendimentoTotal: z.number().int().nonnegative(),
           rendimentoPorTamanhoCor: z.array(RendimentoTamanhoCorSchema).min(1),
           precoPorPeca: z.number().nonnegative().finite(),
@@ -190,6 +199,48 @@ export function validarSaldoRolos(
     }
   }
   return { ok: true };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Helpers de rendimento (RITM-34: pecasPorFolha × folhasRendidas)
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Soma folhas rendidas por cor a partir de `rolosRecebidos`. Cada rolo
+ * pode render N folhas (variável por peso) — total por cor = soma dessas.
+ */
+export function folhasRendidasPorCor(
+  oficina: Pick<OficinaCorte, "rolosRecebidos">,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of oficina.rolosRecebidos ?? []) {
+    out.set(r.corId, (out.get(r.corId) ?? 0) + r.folhasRendidas);
+  }
+  return out;
+}
+
+/**
+ * Calcula peças totais por (tamanho, cor) e rendimento total da oficina
+ * usando pecasPorFolha × folhas dessa cor. Quando `pecasPorFolha` não
+ * está preenchido (legacy), cai pra `quantidade` direta.
+ */
+export function calcularRendimentoOficina(oficina: OficinaCorte): {
+  quantidadePorTamCor: Map<string, number>;
+  rendimentoTotal: number;
+} {
+  const folhasPorCor = folhasRendidasPorCor(oficina);
+  const quantidadePorTamCor = new Map<string, number>();
+  let rendimentoTotal = 0;
+  for (const r of oficina.rendimentoPorTamanhoCor ?? []) {
+    const k = `${r.tamanho}|${r.corId}`;
+    const qtd =
+      r.pecasPorFolha !== undefined
+        ? r.pecasPorFolha * (folhasPorCor.get(r.corId) ?? 0)
+        : r.quantidade;
+    quantidadePorTamCor.set(k, qtd);
+    rendimentoTotal += qtd;
+  }
+  return { quantidadePorTamCor, rendimentoTotal };
 }
 
 /**
