@@ -10,6 +10,7 @@ import { withContaAtiva } from "@/lib/tenancy";
 import {
   confeccaoOrdemProducao,
   confeccaoRetirada,
+  confeccaoSubconferencia,
   confeccaoSubtask,
 } from "@/lib/db/schema";
 import { calcularSaldosOP } from "@/lib/confeccao/saldos";
@@ -71,8 +72,13 @@ export async function GET(
               oficinaId: confeccaoRetirada.oficinaId,
               pecasPorTamanhoCor: confeccaoRetirada.pecasPorTamanhoCor,
               canceladaEm: confeccaoRetirada.canceladaEm,
+              pecasRecebidasSubconf: confeccaoSubconferencia.pecasRecebidas,
             })
             .from(confeccaoRetirada)
+            .leftJoin(
+              confeccaoSubconferencia,
+              eq(confeccaoSubconferencia.retiradaId, confeccaoRetirada.id),
+            )
             .where(eq(confeccaoRetirada.subtaskCosturaId, subtaskCostura.id))
         : [];
 
@@ -86,6 +92,10 @@ export async function GET(
             string,
             Record<string, number>
           >,
+          pecasRecebidasSubconf: r.pecasRecebidasSubconf as Record<
+            string,
+            Record<string, number>
+          > | null,
           canceladaEm: r.canceladaEm,
         })),
       });

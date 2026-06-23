@@ -33,10 +33,14 @@ function isTenancyAuthError(err: unknown): boolean {
 const CriarRetiradaPayloadSchema = z.object({
   oficinaId: z.string().min(1),
   tipo: z.enum(["parcial", "final"]),
-  pecasPorTamanhoCor: z.record(
-    z.string(),
-    z.record(z.string(), z.number().int().nonnegative()),
-  ),
+  // Opcional — fluxo novo cria retirada sem informar peças; a contagem
+  // real é registrada na subconferência depois (pecasRecebidas).
+  pecasPorTamanhoCor: z
+    .record(
+      z.string(),
+      z.record(z.string(), z.number().int().nonnegative()),
+    )
+    .default({}),
   dataRetirada: z.string().datetime(),
 });
 

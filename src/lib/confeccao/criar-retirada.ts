@@ -57,7 +57,14 @@ export interface CriarRetiradaInput {
   subtaskCosturaId: string;
   oficinaId: string;
   tipo: ConfeccaoRetiradaTipo;
-  pecasPorTamanhoCor: Record<string, Record<string, number>>;
+  /**
+   * Esperado de peças por (tamanho × cor). No fluxo atual o contratante
+   * NÃO informa esse número — a retirada nasce com `{}` e a quantidade
+   * real é registrada no momento da conferência (subconferência.
+   * pecasRecebidas). Permitir não-vazio mantém compat com chamadores
+   * legados (testes, importadores).
+   */
+  pecasPorTamanhoCor?: Record<string, Record<string, number>>;
   dataRetirada: Date;
   usuarioId: string;
 }
@@ -150,47 +157,62 @@ export async function criarRetirada(
     );
   }
 
-  // 3.5. Valida saldo: peças retiradas (incluindo retiradas anteriores não
-  // canceladas) ≤ peças enviadas pra oficina (RITM-14).
-  const subtasksOP = await tx
-    .select({
-      prefixo: confeccaoSubtask.prefixo,
-      payload: confeccaoSubtask.payload,
-    })
-    .from(confeccaoSubtask)
-    .where(eq(confeccaoSubtask.ordemProducaoId, stCostura.ordemProducaoId));
-  const compraPayload = subtasksOP.find((s) => s.prefixo === "OPBUY")
-    ?.payload as SubtaskCompraPayload | undefined;
-  const cortePayload = subtasksOP.find((s) => s.prefixo === "OPCOR")
-    ?.payload as SubtaskCortePayload | undefined;
-  const retiradasExistentes = await tx
-    .select({
-      oficinaId: confeccaoRetirada.oficinaId,
-      pecasPorTamanhoCor: confeccaoRetirada.pecasPorTamanhoCor,
-      canceladaEm: confeccaoRetirada.canceladaEm,
-    })
-    .from(confeccaoRetirada)
-    .where(eq(confeccaoRetirada.subtaskCosturaId, input.subtaskCosturaId));
-  const saldos = calcularSaldosOP({
-    compra: compraPayload,
-    corte: cortePayload,
-    costura: payload,
-    retiradas: retiradasExistentes.map((r) => ({
-      oficinaId: r.oficinaId,
-      pecasPorTamanhoCor: r.pecasPorTamanhoCor as Record<
-        string,
-        Record<string, number>
-      >,
-      canceladaEm: r.canceladaEm,
-    })),
-  });
-  const valSaldo = validarSaldoRetirada({
-    oficinaId: input.oficinaId,
-    pecasNovaRetirada: input.pecasPorTamanhoCor,
-    saldoCostura: saldos.costura,
-  });
-  if (!valSaldo.ok) {
-    throw new RetiradaError("saldo_insuficiente", valSaldo.mensagem);
+  // 3.5. Valida saldo (RITM-14): só faz sentido quando o caller informou
+  // pecasPorTamanhoCor não-vazio (fluxo legado). No fluxo novo, a matriz
+  // é vazia e o saldo só é validado quando a conferência registra
+  // pecasRecebidas.
+  const pecasNovaRetirada = input.pecasPorTamanhoCor ?? {};
+  const pecasInformadas = Object.keys(pecasNovaRetirada).length > 0;
+  if (pecasInformadas) {
+    const subtasksOP = await tx
+      .select({
+        prefixo: confeccaoSubtask.prefixo,
+        payload: confeccaoSubtask.payload,
+      })
+      .from(confeccaoSubtask)
+      .where(eq(confeccaoSubtask.ordemProducaoId, stCostura.ordemProducaoId));
+    const compraPayload = subtasksOP.find((s) => s.prefixo === "OPBUY")
+      ?.payload as SubtaskCompraPayload | undefined;
+    const cortePayload = subtasksOP.find((s) => s.prefixo === "OPCOR")
+      ?.payload as SubtaskCortePayload | undefined;
+    const retiradasExistentes = await tx
+      .select({
+        oficinaId: confeccaoRetirada.oficinaId,
+        pecasPorTamanhoCor: confeccaoRetirada.pecasPorTamanhoCor,
+        canceladaEm: confeccaoRetirada.canceladaEm,
+        pecasRecebidasSubconf: confeccaoSubconferencia.pecasRecebidas,
+      })
+      .from(confeccaoRetirada)
+      .leftJoin(
+        confeccaoSubconferencia,
+        eq(confeccaoSubconferencia.retiradaId, confeccaoRetirada.id),
+      )
+      .where(eq(confeccaoRetirada.subtaskCosturaId, input.subtaskCosturaId));
+    const saldos = calcularSaldosOP({
+      compra: compraPayload,
+      corte: cortePayload,
+      costura: payload,
+      retiradas: retiradasExistentes.map((r) => ({
+        oficinaId: r.oficinaId,
+        pecasPorTamanhoCor: r.pecasPorTamanhoCor as Record<
+          string,
+          Record<string, number>
+        >,
+        pecasRecebidasSubconf: r.pecasRecebidasSubconf as Record<
+          string,
+          Record<string, number>
+        > | null,
+        canceladaEm: r.canceladaEm,
+      })),
+    });
+    const valSaldo = validarSaldoRetirada({
+      oficinaId: input.oficinaId,
+      pecasNovaRetirada,
+      saldoCostura: saldos.costura,
+    });
+    if (!valSaldo.ok) {
+      throw new RetiradaError("saldo_insuficiente", valSaldo.mensagem);
+    }
   }
 
   // 4. Numera retirada e INSERT
@@ -208,7 +230,7 @@ export async function criarRetirada(
     oficinaId: input.oficinaId,
     numero: numeroRetirada,
     tipo: input.tipo,
-    pecasPorTamanhoCor: input.pecasPorTamanhoCor,
+    pecasPorTamanhoCor: pecasNovaRetirada,
     dataRetirada: input.dataRetirada,
   });
 

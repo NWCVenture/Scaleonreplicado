@@ -44,8 +44,34 @@ export interface SaldosOP {
 
 export interface RetiradaParaSaldo {
   oficinaId: string;
+  /**
+   * Legacy "esperado" — quando a retirada foi criada com matriz
+   * pré-informada (fluxo antigo). Novas retiradas vêm com `{}` e o
+   * número real só aparece em `pecasRecebidasSubconf` (contagem da
+   * Conferência).
+   */
   pecasPorTamanhoCor: Record<string, Record<string, number>>;
+  /**
+   * Peças realmente recebidas, vindo da subconferência vinculada.
+   * Quando presente, prevalece sobre `pecasPorTamanhoCor` no cálculo
+   * de saldos (é a fonte da verdade — contagem física).
+   */
+  pecasRecebidasSubconf?: Record<string, Record<string, number>> | null;
   canceladaEm: Date | null;
+}
+
+/**
+ * Devolve o que deve descontar do saldo desta retirada. Prefere a
+ * contagem real (subconferência); cai pro "esperado" da retirada
+ * (compat com retiradas antigas que tinham matriz preenchida).
+ */
+function pecasParaDescontar(
+  r: RetiradaParaSaldo,
+): Record<string, Record<string, number>> {
+  if (r.pecasRecebidasSubconf && Object.keys(r.pecasRecebidasSubconf).length > 0) {
+    return r.pecasRecebidasSubconf;
+  }
+  return r.pecasPorTamanhoCor ?? {};
 }
 
 /**
@@ -153,7 +179,8 @@ export function calcularSaldosCostura(
     }
   }
 
-  // Retiradas não canceladas
+  // Retiradas não canceladas — desconta a contagem REAL (subconferência)
+  // quando disponível; senão usa o esperado (legacy / retiradas antigas).
   const pecasRetiradasPorOficina: Record<
     string,
     Record<string, Record<string, number>>
@@ -163,7 +190,8 @@ export function calcularSaldosCostura(
     if (r.canceladaEm !== null) continue;
     pecasRetiradasPorOficina[r.oficinaId] =
       pecasRetiradasPorOficina[r.oficinaId] ?? {};
-    for (const [tam, mapaCor] of Object.entries(r.pecasPorTamanhoCor ?? {})) {
+    const pecas = pecasParaDescontar(r);
+    for (const [tam, mapaCor] of Object.entries(pecas)) {
       for (const [cor, qtd] of Object.entries(mapaCor)) {
         pecasRetiradasPorOficina[r.oficinaId][tam] =
           pecasRetiradasPorOficina[r.oficinaId][tam] ?? {};

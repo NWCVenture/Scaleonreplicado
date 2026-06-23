@@ -823,8 +823,6 @@ export function SubtaskCostura({
           oficina={oficinas[retiradaModal.idxOficina]}
           subtaskId={subtask.id}
           tipo={retiradaModal.tipo}
-          cores={cores}
-          tamanhos={tamanhosDoRisco}
           onCriada={async () => {
             setRetiradaModal(null);
             await fetchRetiradas();
@@ -1061,53 +1059,21 @@ function RetiradaDialog({
   oficina,
   subtaskId,
   tipo,
-  cores,
-  tamanhos,
   onCriada,
   onCancel,
 }: {
   oficina: OficinaState;
   subtaskId: string;
   tipo: ConfeccaoRetiradaTipo;
-  cores: CorRef[];
-  tamanhos: TamanhoGradeRisco[];
   onCriada: () => void;
   onCancel: () => void;
 }) {
-  const [matriz, setMatriz] = useState<
-    Record<string, Record<TamanhoGradeRisco, string>>
-  >({});
   const [data, setData] = useState(new Date().toISOString().slice(0, 16));
   const [criando, setCriando] = useState(false);
-
-  function setCelula(corId: string, tam: TamanhoGradeRisco, v: string) {
-    setMatriz((prev) => ({
-      ...prev,
-      [corId]: {
-        ...(prev[corId] ?? ({} as Record<TamanhoGradeRisco, string>)),
-        [tam]: v,
-      },
-    }));
-  }
 
   async function submit() {
     setCriando(true);
     try {
-      // Converte string → number; pula zeros
-      const pecasNum: Record<string, Record<string, number>> = {};
-      for (const [corId, m] of Object.entries(matriz)) {
-        for (const [t, v] of Object.entries(m)) {
-          const n = Number(v);
-          if (n > 0) {
-            pecasNum[t] = pecasNum[t] ?? {};
-            pecasNum[t][corId] = n;
-          }
-        }
-      }
-      if (Object.keys(pecasNum).length === 0) {
-        toast.error("Informe ao menos uma peça");
-        return;
-      }
       const res = await fetch(
         `/api/confeccao/subtasks/${subtaskId}/retiradas`,
         {
@@ -1116,7 +1082,8 @@ function RetiradaDialog({
           body: JSON.stringify({
             oficinaId: oficina.oficinaId,
             tipo,
-            pecasPorTamanhoCor: pecasNum,
+            // Retirada nasce sem matriz — quantidade real vem da conferência.
+            pecasPorTamanhoCor: {},
             dataRetirada: new Date(data).toISOString(),
           }),
         },
@@ -1128,8 +1095,8 @@ function RetiradaDialog({
       }
       toast.success(
         dados.opConfDesbloqueada
-          ? `Retirada ${dados.retirada.numero} criada. Conferência desbloqueada.`
-          : `Retirada ${dados.retirada.numero} criada.`,
+          ? `Retirada ${dados.retirada.numero} aberta. Conferência desbloqueada.`
+          : `Retirada ${dados.retirada.numero} aberta.`,
       );
       onCriada();
     } finally {
@@ -1139,15 +1106,16 @@ function RetiradaDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onCancel()}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
             Nova retirada {tipo === "final" ? "FINAL" : "parcial"}
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-foreground">
-          Informe a quantidade retirada por tamanho × cor. Uma subconferência
-          será criada automaticamente.
+          A retirada abre uma subconferência onde o conferente vai contar
+          as peças que chegaram. A quantidade real (por tamanho × cor) é
+          registrada lá — não nesse formulário.
         </p>
 
         <div className="space-y-2">
@@ -1160,52 +1128,12 @@ function RetiradaDialog({
           />
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="text-sm w-full">
-            <thead>
-              <tr>
-                <th className="text-left p-1 text-xs text-muted-foreground">
-                  Cor / Tam
-                </th>
-                {tamanhos.map((t) => (
-                  <th
-                    key={t}
-                    className="p-1 text-xs text-muted-foreground text-center"
-                  >
-                    {t}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {cores.map((c) => (
-                <tr key={c.id}>
-                  <td className="p-1 text-xs font-medium">{c.nome}</td>
-                  {tamanhos.map((t) => (
-                    <td key={t} className="p-1">
-                      <Input
-                        type="number"
-                        min="0"
-                        value={matriz[c.id]?.[t] ?? ""}
-                        onChange={(e) =>
-                          setCelula(c.id, t, e.target.value)
-                        }
-                        className="h-7 text-xs w-16 text-center px-1"
-                      />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
         <DialogFooter>
           <Button variant="outline" onClick={onCancel}>
             Cancelar
           </Button>
           <Button onClick={submit} disabled={criando}>
-            {criando ? "Criando…" : "Criar retirada"}
+            {criando ? "Abrindo…" : "Abrir retirada"}
           </Button>
         </DialogFooter>
       </DialogContent>

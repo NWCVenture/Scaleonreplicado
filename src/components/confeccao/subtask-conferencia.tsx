@@ -408,14 +408,17 @@ function Bloco1Contagem({
     onAlterada();
   }
 
-  // Esperado = peças da retirada
+  // Esperado = peças da retirada. Vazio = fluxo novo (retirada não
+  // informa "esperado"; conferência é a única fonte da contagem).
   const esperado = sc.retiradaPecasPorTamanhoCor;
-  const divergencias = sc.pecasRecebidas
-    ? compararMatrizes(sc.pecasRecebidas, esperado)
-    : [];
+  const temEsperado = Object.keys(esperado).length > 0;
+  const divergencias =
+    sc.pecasRecebidas && temEsperado
+      ? compararMatrizes(sc.pecasRecebidas, esperado)
+      : [];
 
   const contagemFeita = !!sc.pecasRecebidas;
-  const podeRevelar = contagemFeita && !sc.quantidadeRevelada;
+  const podeRevelar = temEsperado && contagemFeita && !sc.quantidadeRevelada;
 
   return (
     <div className="space-y-3">
@@ -423,7 +426,7 @@ function Bloco1Contagem({
         <Label className="text-sm font-semibold">
           Bloco 1 — Conferência quantitativa
         </Label>
-        {contagemFeita && (
+        {temEsperado && contagemFeita && (
           <Badge variant={sc.quantidadeRevelada ? "secondary" : "outline"}>
             {sc.quantidadeRevelada ? (
               <>
@@ -442,8 +445,9 @@ function Bloco1Contagem({
 
       {!contagemFeita && (
         <p className="text-xs text-muted-foreground">
-          Conte as peças sem ver o esperado. Após confirmar, o sistema vai
-          mostrar se há divergência (com opção de recontagem antes de revelar).
+          {temEsperado
+            ? "Conte as peças sem ver o esperado. Após confirmar, o sistema vai mostrar se há divergência (com opção de recontagem antes de revelar)."
+            : "Conte as peças que chegaram. A retirada não tem quantidade esperada — esta contagem é o número oficial."}
         </p>
       )}
 
@@ -487,7 +491,7 @@ function Bloco1Contagem({
                             mostrarDiverg && "border-red-400 bg-red-50",
                           )}
                         />
-                        {sc.quantidadeRevelada && (
+                        {temEsperado && sc.quantidadeRevelada && (
                           <span
                             className={cn(
                               "text-[10px] tabular-nums",
