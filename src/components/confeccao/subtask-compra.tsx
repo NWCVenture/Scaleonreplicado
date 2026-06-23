@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,7 @@ import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
 import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
 import { ModalDistribuicaoCompra } from "@/components/confeccao/modal-distribuicao-compra";
+import { SubtaskStatusSelect } from "@/components/confeccao/subtask-status-select";
 import type { ConfeccaoSubtask } from "@/lib/db/schema";
 import type {
   CorContratada,
@@ -247,7 +248,6 @@ export function SubtaskCompra({
 
   // Loading flags
   const [salvando, setSalvando] = useState(false);
-  const [concluindo, setConcluindo] = useState(false);
 
   // ── Hidrata nomes de cor a partir do API ─────────────────────────
   useEffect(() => {
@@ -598,34 +598,6 @@ export function SubtaskCompra({
     [subtask.id],
   );
 
-  // ── Conclusão ─────────────────────────────────────────────────────
-  async function concluir() {
-    setConcluindo(true);
-    try {
-      // Garante último estado salvo antes de concluir
-      const ok = await salvarPayload(payloadAtual);
-      if (!ok) return;
-      const res = await fetch(
-        `/api/confeccao/subtasks/${subtask.id}/concluir`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Erro ao concluir");
-        return;
-      }
-      toast.success(
-        data.subtask?.proximaDesbloqueada
-          ? `Concluída. Próxima desbloqueada: ${data.subtask.proximaDesbloqueada.numero}`
-          : "Subtask concluída",
-      );
-      onAlterado();
-      router.refresh();
-    } finally {
-      setConcluindo(false);
-    }
-  }
-
   // ── Mapa corId → nome (pra passar ao modal de distribuição) ──────
   const coresNomes = useMemo(() => {
     const m = new Map<string, string>();
@@ -721,28 +693,33 @@ export function SubtaskCompra({
               )}
             </Button>
           )}
-          {podeEditar && (
-            <Button
-              onClick={concluir}
-              disabled={
-                concluindo ||
-                salvando ||
-                !temContratado ||
-                !distribuicaoCompleta
+          <SubtaskStatusSelect
+            subtaskId={subtask.id}
+            subtaskNumero={subtask.numero}
+            status={subtask.status}
+            onAntesDeMudar={async (alvo) => {
+              if (alvo === "concluida") {
+                if (!temContratado) {
+                  toast.error(
+                    "Adicione cores e qtd. de rolos antes de concluir",
+                  );
+                  return false;
+                }
+                if (!distribuicaoCompleta) {
+                  toast.error(
+                    "Distribua todos os rolos entre oficinas antes de concluir",
+                  );
+                  return false;
+                }
               }
-              size="sm"
-              title={
-                !temContratado
-                  ? "Adicione cores e qtd. de rolos antes de concluir"
-                  : !distribuicaoCompleta
-                    ? "Distribua todos os rolos entre oficinas antes de concluir"
-                    : undefined
-              }
-            >
-              <CheckCircle2 className="size-3.5" />
-              {concluindo ? "Concluindo…" : "Concluir"}
-            </Button>
-          )}
+              const ok = await salvarPayload(payloadAtual);
+              return ok;
+            }}
+            onMudou={() => {
+              onAlterado();
+              router.refresh();
+            }}
+          />
         </div>
       </div>
 

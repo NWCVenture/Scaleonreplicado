@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CheckCircle2, Info, Play } from "lucide-react";
+import { AlertTriangle, Info } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +27,7 @@ import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadas
 import { FormFornecedorRapido } from "@/components/confeccao/form-fornecedor-rapido";
 import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
+import { SubtaskStatusSelect } from "@/components/confeccao/subtask-status-select";
 import {
   TAMANHOS_GRADE_RISCO,
   type SubtaskRiscoPayload,
@@ -95,8 +96,6 @@ export function SubtaskRisco({
 
   const [larguraRoloCm, setLarguraRoloCm] = useState<number | null>(null);
   const [salvando, setSalvando] = useState(false);
-  const [iniciando, setIniciando] = useState(false);
-  const [concluindo, setConcluindo] = useState(false);
 
   // Busca largura do rolo na subtask Compra (OPBUY) da mesma OP
   useEffect(() => {
@@ -188,64 +187,6 @@ export function SubtaskRisco({
     onAlterado,
   ]);
 
-  async function iniciar() {
-    if (!fornecedorRiscoId) {
-      toast.error("Defina o fornecedor de risco antes de iniciar");
-      return;
-    }
-    setIniciando(true);
-    try {
-      await salvarPayload();
-      const res = await fetch(
-        `/api/confeccao/subtasks/${subtask.id}/iniciar`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Erro ao iniciar");
-        return;
-      }
-      toast.success("Subtask iniciada");
-      onAlterado();
-    } finally {
-      setIniciando(false);
-    }
-  }
-
-  async function concluir() {
-    // Validação client-side rápida da largura (defesa em profundidade)
-    const larguraNum = Number(larguraCm);
-    if (larguraRoloCm !== null && larguraNum > larguraRoloCm) {
-      toast.error(
-        `Largura do risco (${larguraNum}cm) excede a largura do rolo (${larguraRoloCm}cm)`,
-      );
-      return;
-    }
-    setConcluindo(true);
-    try {
-      const ok = await salvarPayload();
-      if (!ok) return;
-      const res = await fetch(
-        `/api/confeccao/subtasks/${subtask.id}/concluir`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Erro ao concluir");
-        return;
-      }
-      toast.success(
-        data.subtask?.proximaDesbloqueada
-          ? `Concluída. Próxima desbloqueada: ${data.subtask.proximaDesbloqueada.numero}`
-          : "Subtask concluída",
-      );
-      onAlterado();
-      router.refresh();
-    } finally {
-      setConcluindo(false);
-    }
-  }
-
   const larguraExcedeu =
     larguraRoloCm !== null && larguraCm && Number(larguraCm) > larguraRoloCm;
 
@@ -259,20 +200,32 @@ export function SubtaskRisco({
             risco e arquivo digital.
           </p>
         </div>
-        <div className="flex gap-2">
-          {subtask.status === "pendente" && (
-            <Button onClick={iniciar} disabled={iniciando} size="sm">
-              <Play className="size-3.5" />
-              {iniciando ? "Iniciando…" : "Iniciar"}
-            </Button>
-          )}
-          {subtask.status === "em_andamento" && (
-            <Button onClick={concluir} disabled={concluindo} size="sm">
-              <CheckCircle2 className="size-3.5" />
-              {concluindo ? "Concluindo…" : "Concluir"}
-            </Button>
-          )}
-        </div>
+        <SubtaskStatusSelect
+          subtaskId={subtask.id}
+          subtaskNumero={subtask.numero}
+          status={subtask.status}
+          onAntesDeMudar={async (alvo) => {
+            if (alvo === "em_andamento" && !fornecedorRiscoId) {
+              toast.error("Defina o fornecedor de risco antes de iniciar");
+              return false;
+            }
+            if (alvo === "concluida") {
+              const larguraNum = Number(larguraCm);
+              if (larguraRoloCm !== null && larguraNum > larguraRoloCm) {
+                toast.error(
+                  `Largura do risco (${larguraNum}cm) excede a largura do rolo (${larguraRoloCm}cm)`,
+                );
+                return false;
+              }
+            }
+            const ok = await salvarPayload();
+            return ok;
+          }}
+          onMudou={() => {
+            onAlterado();
+            router.refresh();
+          }}
+        />
       </div>
 
       {/* Banner com largura do rolo (vindo da Compra) */}

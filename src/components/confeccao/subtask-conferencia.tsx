@@ -17,7 +17,6 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
-  Play,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -42,6 +41,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { LookupUsuarioConta } from "@/components/confeccao/lookup-usuario-conta";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
+import { SubtaskStatusSelect } from "@/components/confeccao/subtask-status-select";
 import {
   compararMatrizes,
   somarMatriz,
@@ -105,8 +105,6 @@ export function SubtaskConferencia({
   const [cores, setCores] = useState<CorRef[]>([]);
   const [tamanhos, setTamanhos] = useState<TamanhoGradeRisco[]>([]);
   const [loading, setLoading] = useState(true);
-  const [iniciando, setIniciando] = useState(false);
-  const [concluindo, setConcluindo] = useState(false);
   const [expandidas, setExpandidas] = useState<Set<string>>(new Set());
 
   const fetchTudo = useCallback(async () => {
@@ -174,45 +172,6 @@ export function SubtaskConferencia({
     });
   }
 
-  async function iniciar() {
-    setIniciando(true);
-    try {
-      const res = await fetch(
-        `/api/confeccao/subtasks/${subtask.id}/iniciar`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Erro ao iniciar");
-        return;
-      }
-      toast.success("Subtask iniciada");
-      onAlterado();
-    } finally {
-      setIniciando(false);
-    }
-  }
-
-  async function concluir() {
-    setConcluindo(true);
-    try {
-      const res = await fetch(
-        `/api/confeccao/subtasks/${subtask.id}/concluir`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Erro ao concluir");
-        return;
-      }
-      toast.success("Conferência concluída — OP avançou pra próxima etapa");
-      onAlterado();
-      router.refresh();
-    } finally {
-      setConcluindo(false);
-    }
-  }
-
   if (loading) {
     return (
       <div className="text-sm text-muted-foreground p-4">Carregando…</div>
@@ -229,20 +188,15 @@ export function SubtaskConferencia({
             uma tem 3 blocos: quantitativa, inspeção visual, destinação.
           </p>
         </div>
-        <div className="flex gap-2">
-          {subtask.status === "pendente" && (
-            <Button onClick={iniciar} disabled={iniciando} size="sm">
-              <Play className="size-3.5" />
-              {iniciando ? "Iniciando…" : "Iniciar"}
-            </Button>
-          )}
-          {subtask.status === "em_andamento" && (
-            <Button onClick={concluir} disabled={concluindo} size="sm">
-              <CheckCircle2 className="size-3.5" />
-              {concluindo ? "Concluindo…" : "Concluir Conferência"}
-            </Button>
-          )}
-        </div>
+        <SubtaskStatusSelect
+          subtaskId={subtask.id}
+          subtaskNumero={subtask.numero}
+          status={subtask.status}
+          onMudou={() => {
+            onAlterado();
+            router.refresh();
+          }}
+        />
       </div>
 
       {subconfs.length === 0 ? (

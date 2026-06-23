@@ -8,14 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Info,
-  Play,
-  Plus,
-  Trash2,
-} from "lucide-react";
+import { AlertTriangle, Info, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,6 +41,7 @@ import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadas
 import { FormFornecedorRapido } from "@/components/confeccao/form-fornecedor-rapido";
 import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
+import { SubtaskStatusSelect } from "@/components/confeccao/subtask-status-select";
 import type {
   EtiquetagemLinha,
   OficinaCostura,
@@ -193,8 +187,6 @@ export function SubtaskCostura({
 
   const [retiradas, setRetiradas] = useState<RetiradaItem[]>([]);
   const [salvando, setSalvando] = useState(false);
-  const [iniciando, setIniciando] = useState(false);
-  const [concluindo, setConcluindo] = useState(false);
 
   // Modal de etiquetagem
   const [etiquetagemModalIdx, setEtiquetagemModalIdx] = useState<number | null>(
@@ -404,57 +396,6 @@ export function SubtaskCostura({
     [subtask.id, oficinas, onAlterado],
   );
 
-  async function iniciar() {
-    if (oficinas.length === 0 || !oficinas[0].oficinaId) {
-      toast.error("Adicione ao menos uma oficina antes de iniciar");
-      return;
-    }
-    setIniciando(true);
-    try {
-      const ok = await salvarPayload(true);
-      if (!ok) return;
-      const res = await fetch(
-        `/api/confeccao/subtasks/${subtask.id}/iniciar`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Erro ao iniciar");
-        return;
-      }
-      toast.success("Subtask iniciada");
-      onAlterado();
-    } finally {
-      setIniciando(false);
-    }
-  }
-
-  async function concluir() {
-    setConcluindo(true);
-    try {
-      const ok = await salvarPayload(true);
-      if (!ok) return;
-      const res = await fetch(
-        `/api/confeccao/subtasks/${subtask.id}/concluir`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Erro ao concluir");
-        return;
-      }
-      toast.success(
-        data.subtask?.proximaDesbloqueada
-          ? `Concluída. Próxima desbloqueada: ${data.subtask.proximaDesbloqueada.numero}`
-          : "Subtask concluída",
-      );
-      onAlterado();
-      router.refresh();
-    } finally {
-      setConcluindo(false);
-    }
-  }
-
   function abrirRetiradaModal(
     idxOficina: number,
     tipo: ConfeccaoRetiradaTipo,
@@ -473,20 +414,25 @@ export function SubtaskCostura({
             subtask Conferência.
           </p>
         </div>
-        <div className="flex gap-2">
-          {subtask.status === "pendente" && (
-            <Button onClick={iniciar} disabled={iniciando} size="sm">
-              <Play className="size-3.5" />
-              {iniciando ? "Iniciando…" : "Iniciar"}
-            </Button>
-          )}
-          {subtask.status === "em_andamento" && (
-            <Button onClick={concluir} disabled={concluindo} size="sm">
-              <CheckCircle2 className="size-3.5" />
-              {concluindo ? "Concluindo…" : "Concluir"}
-            </Button>
-          )}
-        </div>
+        <SubtaskStatusSelect
+          subtaskId={subtask.id}
+          subtaskNumero={subtask.numero}
+          status={subtask.status}
+          onAntesDeMudar={async (alvo) => {
+            if (alvo === "em_andamento") {
+              if (oficinas.length === 0 || !oficinas[0].oficinaId) {
+                toast.error("Adicione ao menos uma oficina antes de iniciar");
+                return false;
+              }
+            }
+            const ok = await salvarPayload(true);
+            return ok;
+          }}
+          onMudou={() => {
+            onAlterado();
+            router.refresh();
+          }}
+        />
       </div>
 
       {/* Saldo do Corte */}

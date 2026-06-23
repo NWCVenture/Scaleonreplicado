@@ -11,10 +11,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
-  CheckCircle2,
   ExternalLink,
   Info,
-  Play,
   Plus,
   Trash2,
 } from "lucide-react";
@@ -43,6 +41,7 @@ import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadas
 import { FormFornecedorRapido } from "@/components/confeccao/form-fornecedor-rapido";
 import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
+import { SubtaskStatusSelect } from "@/components/confeccao/subtask-status-select";
 import { parsePesoFolhasColados } from "@/lib/confeccao/parse-peso-folhas-colados";
 import type {
   ModoSeparacaoCorte,
@@ -195,8 +194,6 @@ export function SubtaskCorte({
   });
 
   const [salvando, setSalvando] = useState(false);
-  const [iniciando, setIniciando] = useState(false);
-  const [concluindo, setConcluindo] = useState(false);
 
   // Busca contexto da OP (cores+rolos da Compra, tamanhos do Risco)
   useEffect(() => {
@@ -646,65 +643,6 @@ export function SubtaskCorte({
     };
   }, [rrFingerprint, podeEditar, salvarPayload]);
 
-  async function iniciar() {
-    if (oficinas.length === 0 || !oficinas[0].oficinaId) {
-      toast.error("Adicione ao menos uma oficina antes de iniciar");
-      return;
-    }
-    setIniciando(true);
-    try {
-      const ok = await salvarPayload(true);
-      if (!ok) return;
-      const res = await fetch(
-        `/api/confeccao/subtasks/${subtask.id}/iniciar`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Erro ao iniciar");
-        return;
-      }
-      toast.success("Subtask iniciada");
-      onAlterado();
-    } finally {
-      setIniciando(false);
-    }
-  }
-
-  async function concluir() {
-    // Validação client-side rápida de saldo
-    const corExcedida = coresContext.find((c) => corExcede(c.id));
-    if (corExcedida) {
-      toast.error(
-        `Saldo excedido na cor ${corExcedida.nome}: ${totalEnviadoPorCor(corExcedida.id)} > ${corExcedida.rolosDisponiveis} disponíveis`,
-      );
-      return;
-    }
-    setConcluindo(true);
-    try {
-      const ok = await salvarPayload(true);
-      if (!ok) return;
-      const res = await fetch(
-        `/api/confeccao/subtasks/${subtask.id}/concluir`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Erro ao concluir");
-        return;
-      }
-      toast.success(
-        data.subtask?.proximaDesbloqueada
-          ? `Concluída. Próxima desbloqueada: ${data.subtask.proximaDesbloqueada.numero}`
-          : "Subtask concluída",
-      );
-      onAlterado();
-      router.refresh();
-    } finally {
-      setConcluindo(false);
-    }
-  }
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -716,20 +654,30 @@ export function SubtaskCorte({
             após conclusão.
           </p>
         </div>
-        <div className="flex gap-2">
-          {subtask.status === "pendente" && (
-            <Button onClick={iniciar} disabled={iniciando} size="sm">
-              <Play className="size-3.5" />
-              {iniciando ? "Iniciando…" : "Iniciar"}
-            </Button>
-          )}
-          {subtask.status === "em_andamento" && (
-            <Button onClick={concluir} disabled={concluindo} size="sm">
-              <CheckCircle2 className="size-3.5" />
-              {concluindo ? "Concluindo…" : "Concluir"}
-            </Button>
-          )}
-        </div>
+        <SubtaskStatusSelect
+          subtaskId={subtask.id}
+          subtaskNumero={subtask.numero}
+          status={subtask.status}
+          onAntesDeMudar={async (alvo) => {
+            // Antes de concluir: pre-save + validação client-side de saldo.
+            if (alvo === "concluida") {
+              const corExcedida = coresContext.find((c) => corExcede(c.id));
+              if (corExcedida) {
+                toast.error(
+                  `Saldo excedido na cor ${corExcedida.nome}: ${totalEnviadoPorCor(corExcedida.id)} > ${corExcedida.rolosDisponiveis} disponíveis`,
+                );
+                return false;
+              }
+            }
+            // Pre-save geral: garante que o servidor vê o rascunho atual
+            const ok = await salvarPayload(true);
+            return ok;
+          }}
+          onMudou={() => {
+            onAlterado();
+            router.refresh();
+          }}
+        />
       </div>
 
       {/* RITM-33: banner top sobre origem do plano */}

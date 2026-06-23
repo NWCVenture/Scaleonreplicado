@@ -7,7 +7,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, Play } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +24,7 @@ import { LookupComCadastroInline } from "@/components/confeccao/lookup-com-cadas
 import { FormFornecedorRapido } from "@/components/confeccao/form-fornecedor-rapido";
 import { BlocoLalamove } from "@/components/confeccao/bloco-lalamove";
 import { WhatsappTemplatePicker } from "@/components/confeccao/whatsapp-template-picker";
+import { SubtaskStatusSelect } from "@/components/confeccao/subtask-status-select";
 import {
   calcularCustoVies,
   type SubtaskViesPayload,
@@ -82,8 +82,6 @@ export function SubtaskVies({
 
   const [fornecedor, setFornecedor] = useState<FornecedorRef | null>(null);
   const [salvando, setSalvando] = useState(false);
-  const [iniciando, setIniciando] = useState(false);
-  const [concluindo, setConcluindo] = useState(false);
 
   // Pré-preenche tipo de tecido e cor da Compra na primeira carga
   useEffect(() => {
@@ -194,57 +192,6 @@ export function SubtaskVies({
     ],
   );
 
-  async function iniciar() {
-    if (!fornecedorViesId) {
-      toast.error("Defina a fábrica de viés antes de iniciar");
-      return;
-    }
-    setIniciando(true);
-    try {
-      const ok = await salvarPayload(true);
-      if (!ok) return;
-      const res = await fetch(
-        `/api/confeccao/subtasks/${subtask.id}/iniciar`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Erro ao iniciar");
-        return;
-      }
-      toast.success("Subtask iniciada");
-      onAlterado();
-    } finally {
-      setIniciando(false);
-    }
-  }
-
-  async function concluir() {
-    setConcluindo(true);
-    try {
-      const ok = await salvarPayload(true);
-      if (!ok) return;
-      const res = await fetch(
-        `/api/confeccao/subtasks/${subtask.id}/concluir`,
-        { method: "POST" },
-      );
-      const data = await res.json();
-      if (!res.ok) {
-        toast.error(data.error ?? "Erro ao concluir");
-        return;
-      }
-      toast.success(
-        data.subtask?.proximaDesbloqueada
-          ? `Concluída. Próxima desbloqueada: ${data.subtask.proximaDesbloqueada.numero}`
-          : "Subtask concluída",
-      );
-      onAlterado();
-      router.refresh();
-    } finally {
-      setConcluindo(false);
-    }
-  }
-
   const custoTotal =
     metragemProduzidaM && precoPorMetro
       ? calcularCustoVies({
@@ -264,20 +211,23 @@ export function SubtaskVies({
             volta (Fábrica→Costura).
           </p>
         </div>
-        <div className="flex gap-2">
-          {subtask.status === "pendente" && (
-            <Button onClick={iniciar} disabled={iniciando} size="sm">
-              <Play className="size-3.5" />
-              {iniciando ? "Iniciando…" : "Iniciar"}
-            </Button>
-          )}
-          {subtask.status === "em_andamento" && (
-            <Button onClick={concluir} disabled={concluindo} size="sm">
-              <CheckCircle2 className="size-3.5" />
-              {concluindo ? "Concluindo…" : "Concluir"}
-            </Button>
-          )}
-        </div>
+        <SubtaskStatusSelect
+          subtaskId={subtask.id}
+          subtaskNumero={subtask.numero}
+          status={subtask.status}
+          onAntesDeMudar={async (alvo) => {
+            if (alvo === "em_andamento" && !fornecedorViesId) {
+              toast.error("Defina a fábrica de viés antes de iniciar");
+              return false;
+            }
+            const ok = await salvarPayload(true);
+            return ok;
+          }}
+          onMudou={() => {
+            onAlterado();
+            router.refresh();
+          }}
+        />
       </div>
 
       <Card>
