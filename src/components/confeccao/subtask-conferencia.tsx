@@ -7,7 +7,13 @@
 // destinação. Subtask só fecha quando todas concluídas + todas
 // oficinas da Costura finalizadas.
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -17,6 +23,7 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -352,20 +359,29 @@ function SubconferenciaCard({
 // Bloco 1 — Conferência quantitativa (contagem oculta)
 // ============================================================
 
-// Espelho digital da ficha física de conferência: grade fixa com tamanhos
-// nas linhas e cores nas colunas. O operador anota fardo a fardo somando
-// na própria célula ("60+60+47") e o sistema calcula o total. Aceita
-// separadores + , ; e espaço. Vazio → null; inválido → NaN.
-function somarExpressaoFardos(v: string): number | null {
-  const s = v.trim();
-  if (!s) return null;
-  const partes = s.split(/[+,;\s]+/).filter(Boolean);
-  let total = 0;
-  for (const p of partes) {
-    if (!/^\d+$/.test(p)) return NaN;
-    total += Number(p);
-  }
-  return total;
+// Grade de contagem estilo planilha, espelhando a ficha física: cores nas
+// colunas e uma linha por lançamento (fardo/anotação) com tamanho + qtd
+// por cor. Linhas com o mesmo tamanho são somadas na matriz salva.
+// Preencheu a última linha disponível, o sistema cria outra abaixo.
+interface LinhaContagem {
+  id: string;
+  tamanho: TamanhoGradeRisco | "";
+  valores: Record<string, string>; // corId → qtd
+}
+
+const LINHAS_INICIAIS = 5;
+
+function novaLinhaContagem(
+  tamanho: TamanhoGradeRisco | "" = "",
+): LinhaContagem {
+  return { id: Math.random().toString(36).slice(2), tamanho, valores: {} };
+}
+
+// Linha conta como "preenchida" quando tem quantidade digitada. O tamanho
+// sozinho não conta — a linha nova herda o tamanho da anterior, e isso
+// não pode disparar outra linha em cascata.
+function linhaPreenchida(l: LinhaContagem): boolean {
+  return Object.values(l.valores).some((v) => v.trim() !== "");
 }
 
 function Bloco1Contagem({
@@ -379,64 +395,115 @@ function Bloco1Contagem({
   editavel: boolean;
   onAlterada: () => void;
 }) {
-  // [tamanho][corId] = expressão ("60+60+47"). Contagem já salva volta
-  // consolidada (só o total); o detalhe fardo a fardo vive na digitação.
-  const [matriz, setMatriz] = useState<Record<string, Record<string, string>>>(
-    () => {
-      const r: Record<string, Record<string, string>> = {};
-      if (sc.pecasRecebidas) {
-        for (const [t, m] of Object.entries(sc.pecasRecebidas)) {
-          for (const [c, n] of Object.entries(m)) {
-            r[t] = r[t] ?? {};
-            r[t][c] = String(n);
-          }
-        }
+  const [linhas, setLinhas] = useState<LinhaContagem[]>(() => {
+    // Contagem já salva volta como uma linha por tamanho (a soma); o
+    // detalhe lançamento-a-lançamento vive só durante a digitação.
+    const iniciais: LinhaContagem[] = [];
+    if (sc.pecasRecebidas) {
+      for (const t of TAMANHOS_TODOS) {
+        const porCor = sc.pecasRecebidas[t];
+        if (!porCor || Object.keys(porCor).length === 0) continue;
+        const valores: Record<string, string> = {};
+        for (const [c, n] of Object.entries(porCor)) valores[c] = String(n);
+        iniciais.push({
+          id: Math.random().toString(36).slice(2),
+          tamanho: t,
+          valores,
+        });
       }
-      return r;
-    },
-  );
+    }
+    while (
+      iniciais.length < LINHAS_INICIAIS ||
+      linhaPreenchida(iniciais[iniciais.length - 1])
+    ) {
+      iniciais.push(
+        novaLinhaContagem(iniciais[iniciais.length - 1]?.tamanho ?? ""),
+      );
+    }
+    return iniciais;
+  });
   const [salvando, setSalvando] = useState(false);
+  const corpoRef = useRef<HTMLTableSectionElement>(null);
 
-  function setCelula(t: TamanhoGradeRisco, c: string, v: string) {
-    setMatriz((prev) => ({
-      ...prev,
-      [t]: { ...(prev[t] ?? {}), [c]: v },
-    }));
+  // Toda mutação passa por aqui: preencheu a última linha disponível,
+  // uma nova linha vazia nasce abaixo (herdando o tamanho).
+  function atualizarLinhas(
+    updater: (prev: LinhaContagem[]) => LinhaContagem[],
+  ) {
+    setLinhas((prev) => {
+      const next = updater(prev);
+      if (next.length === 0 || linhaPreenchida(next[next.length - 1])) {
+        return [
+          ...next,
+          novaLinhaContagem(next[next.length - 1]?.tamanho ?? ""),
+        ];
+      }
+      return next;
+    });
   }
 
-  function somaCelula(t: string, c: string): number | null {
-    return somarExpressaoFardos(matriz[t]?.[c] ?? "");
+  function setLinhaTamanho(id: string, t: TamanhoGradeRisco) {
+    atualizarLinhas((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, tamanho: t } : l)),
+    );
   }
 
-  function totalTamanho(t: string): number {
-    return cores.reduce((s, c) => {
-      const n = somaCelula(t, c.id);
-      return s + (n !== null && !isNaN(n) ? n : 0);
+  function setLinhaValor(id: string, corId: string, v: string) {
+    atualizarLinhas((prev) =>
+      prev.map((l) =>
+        l.id === id ? { ...l, valores: { ...l.valores, [corId]: v } } : l,
+      ),
+    );
+  }
+
+  function removerLinha(id: string) {
+    atualizarLinhas((prev) => prev.filter((l) => l.id !== id));
+  }
+
+  // Enter desce pra mesma coluna da linha de baixo, estilo planilha.
+  // rAF espera o render — a linha de baixo pode ter acabado de nascer.
+  function aoTeclarEnter(
+    e: KeyboardEvent<HTMLInputElement>,
+    linhaIdx: number,
+    corIdx: number,
+  ) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    requestAnimationFrame(() => {
+      const alvo = corpoRef.current?.querySelector<HTMLInputElement>(
+        `input[data-celula="${linhaIdx + 1}-${corIdx}"]`,
+      );
+      if (alvo) {
+        alvo.focus();
+        alvo.select();
+      }
+    });
+  }
+
+  function totalLinha(l: LinhaContagem): number {
+    return Object.values(l.valores).reduce((s, v) => {
+      const n = Number(v);
+      return s + (v.trim() && n > 0 ? n : 0);
     }, 0);
   }
 
   function totalCor(corId: string): number {
-    return TAMANHOS_TODOS.reduce((s, t) => {
-      const n = somaCelula(t, corId);
-      return s + (n !== null && !isNaN(n) ? n : 0);
+    return linhas.reduce((s, l) => {
+      const v = l.valores[corId] ?? "";
+      const n = Number(v);
+      return s + (v.trim() && n > 0 ? n : 0);
     }, 0);
   }
 
-  const temCelulaInvalida = Object.values(matriz).some((m) =>
-    Object.values(m).some((v) => {
-      const n = somarExpressaoFardos(v);
-      return n !== null && isNaN(n);
-    }),
-  );
-
   function montarMatriz(): MatrizPecas {
     const out: MatrizPecas = {};
-    for (const [t, m] of Object.entries(matriz)) {
-      for (const [c, v] of Object.entries(m)) {
-        const n = somarExpressaoFardos(v);
-        if (n !== null && !isNaN(n)) {
-          out[t] = out[t] ?? {};
-          out[t][c] = n;
+    for (const l of linhas) {
+      if (!l.tamanho) continue;
+      for (const [c, v] of Object.entries(l.valores)) {
+        const n = Number(v);
+        if (v.trim() && n >= 0) {
+          out[l.tamanho] = out[l.tamanho] ?? {};
+          out[l.tamanho][c] = (out[l.tamanho][c] ?? 0) + n;
         }
       }
     }
@@ -444,10 +511,11 @@ function Bloco1Contagem({
   }
 
   async function confirmarContagem() {
-    if (temCelulaInvalida) {
-      toast.error(
-        "Há célula com valor inválido — use números somados, ex.: 60+60+47",
-      );
+    const orfa = linhas.some(
+      (l) => !l.tamanho && Object.values(l.valores).some((v) => v.trim()),
+    );
+    if (orfa) {
+      toast.error("Há linha com quantidade preenchida sem tamanho selecionado");
       return;
     }
     setSalvando(true);
@@ -526,17 +594,18 @@ function Bloco1Contagem({
         </p>
       )}
       <p className="text-xs text-muted-foreground">
-        A grade espelha a ficha física: anote fardo a fardo somando na
-        própria célula — ex.: <span className="font-mono">60+60+47</span> —
-        e o sistema calcula o total.
+        Cada linha é um lançamento da ficha (ex.: um fardo): escolha o
+        tamanho e digite a quantidade na coluna da cor. Linhas com o mesmo
+        tamanho são somadas. Preencheu a última linha, uma nova nasce
+        embaixo já com o tamanho herdado. Enter desce pra linha de baixo.
       </p>
 
       <div className="overflow-x-auto">
         <table className="text-sm w-full">
           <thead>
             <tr>
-              <th className="text-left p-1 text-xs text-muted-foreground w-16">
-                Tam / Cor
+              <th className="text-left p-1 text-xs text-muted-foreground w-24">
+                Tamanho
               </th>
               {cores.map((c) => (
                 <th
@@ -549,49 +618,62 @@ function Bloco1Contagem({
               <th className="p-1 text-xs text-muted-foreground text-right w-14">
                 Total
               </th>
+              <th className="w-8" />
             </tr>
           </thead>
-          <tbody>
-            {TAMANHOS_TODOS.map((t) => (
-              <tr key={t}>
-                <td className="p-1 text-xs font-medium">{t}</td>
-                {cores.map((c) => {
-                  const valor = matriz[t]?.[c.id] ?? "";
-                  const soma = somarExpressaoFardos(valor);
-                  const invalida = soma !== null && isNaN(soma);
-                  const composta =
-                    valor.split(/[+,;\s]+/).filter(Boolean).length > 1;
-                  return (
-                    <td key={c.id} className="p-1 text-center align-top">
-                      <div className="flex flex-col gap-0.5 items-center">
-                        <Input
-                          type="text"
-                          inputMode="numeric"
-                          value={valor}
-                          onChange={(e) => setCelula(t, c.id, e.target.value)}
-                          disabled={!editavel}
-                          placeholder="60+60"
-                          className={cn(
-                            "h-7 text-xs w-24 text-center px-1",
-                            invalida && "border-red-400 bg-red-50",
-                          )}
-                        />
-                        {composta && !invalida && soma !== null && (
-                          <span className="text-[10px] tabular-nums text-muted-foreground">
-                            = {soma}
-                          </span>
-                        )}
-                        {invalida && (
-                          <span className="text-[10px] text-red-600">
-                            inválido
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                  );
-                })}
-                <td className="p-1 text-right text-xs tabular-nums text-muted-foreground align-top pt-2.5">
-                  {totalTamanho(t) || ""}
+          <tbody ref={corpoRef}>
+            {linhas.map((l, linhaIdx) => (
+              <tr key={l.id}>
+                <td className="p-1">
+                  <Select
+                    value={l.tamanho}
+                    onValueChange={(v) =>
+                      setLinhaTamanho(l.id, v as TamanhoGradeRisco)
+                    }
+                    disabled={!editavel}
+                  >
+                    <SelectTrigger className="h-7 w-20 text-xs">
+                      <SelectValue placeholder="—" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TAMANHOS_TODOS.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </td>
+                {cores.map((c, corIdx) => (
+                  <td key={c.id} className="p-1 text-center">
+                    <Input
+                      type="number"
+                      min="0"
+                      data-celula={`${linhaIdx}-${corIdx}`}
+                      value={l.valores[c.id] ?? ""}
+                      onChange={(e) =>
+                        setLinhaValor(l.id, c.id, e.target.value)
+                      }
+                      onKeyDown={(e) => aoTeclarEnter(e, linhaIdx, corIdx)}
+                      disabled={!editavel}
+                      className="h-7 text-xs w-16 text-center px-1 mx-auto"
+                    />
+                  </td>
+                ))}
+                <td className="p-1 text-right text-xs tabular-nums text-muted-foreground">
+                  {totalLinha(l) || ""}
+                </td>
+                <td className="p-1">
+                  {editavel && linhaPreenchida(l) && (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => removerLinha(l.id)}
+                      className="size-6"
+                    >
+                      <Trash2 className="size-3" />
+                    </Button>
+                  )}
                 </td>
               </tr>
             ))}
@@ -610,6 +692,7 @@ function Bloco1Contagem({
               <td className="p-1 text-right text-xs font-semibold tabular-nums">
                 {cores.reduce((s, c) => s + totalCor(c.id), 0)}
               </td>
+              <td />
             </tr>
           </tfoot>
         </table>
