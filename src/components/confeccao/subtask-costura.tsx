@@ -6,7 +6,7 @@
 // próprio fluxo (envio → produção → retiradas parciais → retirada final).
 // Retiradas criam subconferências automaticamente na subtask Conferência.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Info, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -263,6 +263,52 @@ export function SubtaskCostura({
       cancelled = true;
     };
   }, [opNumero]);
+
+  // Pré-preenche a matriz de peças com o rendimento do Corte (proporção por
+  // tamanho do Risco × folhas rendidas por rolo). Só age em oficina ainda sem
+  // nenhuma quantidade digitada/salva e em status "enviado"; ao dividir entre
+  // oficinas, o prefill usa o saldo restante pra não duplicar o total.
+  const prefillFeito = useRef(false);
+  useEffect(() => {
+    if (prefillFeito.current || !podeEditar || pecasCortadas.size === 0) {
+      return;
+    }
+    prefillFeito.current = true;
+    setOficinas((prev) => {
+      const restante = new Map(pecasCortadas);
+      for (const o of prev) {
+        for (const [corId, mapa] of Object.entries(o.pecasMatriz)) {
+          for (const [t, v] of Object.entries(mapa)) {
+            const n = Number(v);
+            if (v.trim() && !isNaN(n) && n > 0) {
+              const k = `${t}|${corId}`;
+              restante.set(k, (restante.get(k) ?? 0) - n);
+            }
+          }
+        }
+      }
+      let mudou = false;
+      const next = prev.map((o) => {
+        const vazia = Object.values(o.pecasMatriz).every((m) =>
+          Object.values(m).every((v) => !v.trim()),
+        );
+        if (!vazia || o.statusInterno !== "enviado") return o;
+        const matriz: OficinaState["pecasMatriz"] = {};
+        for (const [k, qtd] of restante) {
+          if (qtd <= 0) continue;
+          const [tam, corId] = k.split("|");
+          matriz[corId] =
+            matriz[corId] ?? ({} as Record<TamanhoGradeRisco, string>);
+          matriz[corId][tam as TamanhoGradeRisco] = String(qtd);
+          restante.set(k, 0);
+        }
+        if (Object.keys(matriz).length === 0) return o;
+        mudou = true;
+        return { ...o, pecasMatriz: matriz };
+      });
+      return mudou ? next : prev;
+    });
+  }, [pecasCortadas, podeEditar]);
 
   // Carrega retiradas
   const fetchRetiradas = useCallback(async () => {
@@ -654,6 +700,10 @@ export function SubtaskCostura({
             {tamanhosDoRisco.length > 0 && cores.length > 0 && (
               <div className="space-y-2">
                 <Label>Peças enviadas (tamanho × cor)</Label>
+                <p className="text-xs text-muted-foreground">
+                  Pré-preenchido com o rendimento do Corte (peças por tamanho
+                  do Risco × folhas rendidas). Ajuste se necessário.
+                </p>
                 <div className="overflow-x-auto">
                   <table className="text-sm w-full">
                     <thead>
