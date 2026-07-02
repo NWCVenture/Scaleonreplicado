@@ -359,14 +359,14 @@ function SubconferenciaCard({
 // Bloco 1 — Conferência quantitativa (contagem oculta)
 // ============================================================
 
-// Grade de contagem estilo planilha, espelhando a ficha física: cores nas
-// colunas e uma linha por lançamento (fardo/anotação) com tamanho + qtd
-// por cor. Linhas com o mesmo tamanho são somadas na matriz salva.
-// Preencheu a última linha disponível, o sistema cria outra abaixo.
+// Contagem espelhando a ficha física, com UMA TABELA POR COR: cada tabela
+// tem linhas de lançamento (fardo) com tamanho + quantidade. Linhas com o
+// mesmo tamanho somam na matriz salva. Preencheu a última linha da tabela
+// da cor, outra nasce abaixo herdando o tamanho.
 interface LinhaContagem {
   id: string;
   tamanho: TamanhoGradeRisco | "";
-  valores: Record<string, string>; // corId → qtd
+  valor: string;
 }
 
 const LINHAS_INICIAIS = 5;
@@ -374,14 +374,26 @@ const LINHAS_INICIAIS = 5;
 function novaLinhaContagem(
   tamanho: TamanhoGradeRisco | "" = "",
 ): LinhaContagem {
-  return { id: Math.random().toString(36).slice(2), tamanho, valores: {} };
+  return { id: Math.random().toString(36).slice(2), tamanho, valor: "" };
 }
 
 // Linha conta como "preenchida" quando tem quantidade digitada. O tamanho
 // sozinho não conta — a linha nova herda o tamanho da anterior, e isso
 // não pode disparar outra linha em cascata.
 function linhaPreenchida(l: LinhaContagem): boolean {
-  return Object.values(l.valores).some((v) => v.trim() !== "");
+  return l.valor.trim() !== "";
+}
+
+// Garante o mínimo de linhas e sempre uma linha vazia no fim da tabela.
+function completarLinhas(linhas: LinhaContagem[]): LinhaContagem[] {
+  const out = [...linhas];
+  while (
+    out.length < LINHAS_INICIAIS ||
+    linhaPreenchida(out[out.length - 1])
+  ) {
+    out.push(novaLinhaContagem(out[out.length - 1]?.tamanho ?? ""));
+  }
+  return out;
 }
 
 function Bloco1Contagem({
@@ -395,103 +407,101 @@ function Bloco1Contagem({
   editavel: boolean;
   onAlterada: () => void;
 }) {
-  const [linhas, setLinhas] = useState<LinhaContagem[]>(() => {
-    // Contagem já salva volta como uma linha por tamanho (a soma); o
-    // detalhe lançamento-a-lançamento vive só durante a digitação.
-    const iniciais: LinhaContagem[] = [];
-    if (sc.pecasRecebidas) {
-      for (const t of TAMANHOS_TODOS) {
-        const porCor = sc.pecasRecebidas[t];
-        if (!porCor || Object.keys(porCor).length === 0) continue;
-        const valores: Record<string, string> = {};
-        for (const [c, n] of Object.entries(porCor)) valores[c] = String(n);
-        iniciais.push({
-          id: Math.random().toString(36).slice(2),
-          tamanho: t,
-          valores,
-        });
+  // corId → linhas da tabela daquela cor. Contagem já salva volta como
+  // uma linha por tamanho (a soma); o detalhe fardo a fardo vive só
+  // durante a digitação.
+  const [linhasPorCor, setLinhasPorCor] = useState<
+    Record<string, LinhaContagem[]>
+  >(() => {
+    const r: Record<string, LinhaContagem[]> = {};
+    for (const c of cores) {
+      const daCor: LinhaContagem[] = [];
+      if (sc.pecasRecebidas) {
+        for (const t of TAMANHOS_TODOS) {
+          const n = sc.pecasRecebidas[t]?.[c.id];
+          if (n === undefined) continue;
+          daCor.push({
+            id: Math.random().toString(36).slice(2),
+            tamanho: t,
+            valor: String(n),
+          });
+        }
       }
+      r[c.id] = completarLinhas(daCor);
     }
-    while (
-      iniciais.length < LINHAS_INICIAIS ||
-      linhaPreenchida(iniciais[iniciais.length - 1])
-    ) {
-      iniciais.push(
-        novaLinhaContagem(iniciais[iniciais.length - 1]?.tamanho ?? ""),
-      );
-    }
-    return iniciais;
+    return r;
   });
   const [salvando, setSalvando] = useState(false);
-  const corpoRef = useRef<HTMLTableSectionElement>(null);
+  const gradeRef = useRef<HTMLDivElement>(null);
 
-  // Toda mutação passa por aqui: preencheu a última linha disponível,
-  // uma nova linha vazia nasce abaixo (herdando o tamanho).
+  // Toda mutação passa por aqui: preencheu a última linha da tabela da
+  // cor, uma nova nasce abaixo (herdando o tamanho).
   function atualizarLinhas(
+    corId: string,
     updater: (prev: LinhaContagem[]) => LinhaContagem[],
   ) {
-    setLinhas((prev) => {
-      const next = updater(prev);
-      if (next.length === 0 || linhaPreenchida(next[next.length - 1])) {
-        return [
-          ...next,
-          novaLinhaContagem(next[next.length - 1]?.tamanho ?? ""),
-        ];
-      }
-      return next;
-    });
+    setLinhasPorCor((prev) => ({
+      ...prev,
+      [corId]: completarLinhas(updater(prev[corId] ?? [])),
+    }));
   }
 
-  function setLinhaTamanho(id: string, t: TamanhoGradeRisco) {
-    atualizarLinhas((prev) =>
+  function setLinhaTamanho(corId: string, id: string, t: TamanhoGradeRisco) {
+    atualizarLinhas(corId, (prev) =>
       prev.map((l) => (l.id === id ? { ...l, tamanho: t } : l)),
     );
   }
 
-  function setLinhaValor(id: string, corId: string, v: string) {
-    atualizarLinhas((prev) =>
-      prev.map((l) =>
-        l.id === id ? { ...l, valores: { ...l.valores, [corId]: v } } : l,
-      ),
+  function setLinhaValor(corId: string, id: string, v: string) {
+    atualizarLinhas(corId, (prev) =>
+      prev.map((l) => (l.id === id ? { ...l, valor: v } : l)),
     );
   }
 
-  function removerLinha(id: string) {
-    atualizarLinhas((prev) => prev.filter((l) => l.id !== id));
+  function removerLinha(corId: string, id: string) {
+    atualizarLinhas(corId, (prev) => prev.filter((l) => l.id !== id));
   }
 
-  // Navegação estilo planilha: Enter/setas movem o foco entre células.
-  // preventDefault também mata o incrementar/decrementar do input number
-  // nas setas ↑↓. rAF espera o render — a linha de baixo pode ter
-  // acabado de nascer.
+  // Navegação estilo planilha: Enter/↑↓ andam nas linhas da mesma cor,
+  // ←→ pulam pra tabela da cor vizinha (mesma linha; se a vizinha for
+  // mais curta, cai na última). preventDefault também mata o
+  // incrementar/decrementar do input number nas setas ↑↓. rAF espera o
+  // render — a linha de baixo pode ter acabado de nascer.
   function aoNavegarTeclado(
     e: KeyboardEvent<HTMLInputElement>,
-    linhaIdx: number,
     corIdx: number,
+    linhaIdx: number,
   ) {
     let destino: [number, number];
     switch (e.key) {
       case "Enter":
       case "ArrowDown":
-        destino = [linhaIdx + 1, corIdx];
+        destino = [corIdx, linhaIdx + 1];
         break;
       case "ArrowUp":
-        destino = [linhaIdx - 1, corIdx];
+        destino = [corIdx, linhaIdx - 1];
         break;
       case "ArrowLeft":
-        destino = [linhaIdx, corIdx - 1];
+        destino = [corIdx - 1, linhaIdx];
         break;
       case "ArrowRight":
-        destino = [linhaIdx, corIdx + 1];
+        destino = [corIdx + 1, linhaIdx];
         break;
       default:
         return;
     }
     e.preventDefault();
     requestAnimationFrame(() => {
-      const alvo = corpoRef.current?.querySelector<HTMLInputElement>(
+      let alvo = gradeRef.current?.querySelector<HTMLInputElement>(
         `input[data-celula="${destino[0]}-${destino[1]}"]`,
       );
+      if (!alvo && destino[0] !== corIdx) {
+        const daCor = gradeRef.current?.querySelectorAll<HTMLInputElement>(
+          `input[data-celula^="${destino[0]}-"]`,
+        );
+        alvo =
+          daCor && daCor.length > 0 ? daCor[daCor.length - 1] : undefined;
+      }
       if (alvo) {
         alvo.focus();
         alvo.select();
@@ -499,39 +509,29 @@ function Bloco1Contagem({
     });
   }
 
-  function totalLinha(l: LinhaContagem): number {
-    return Object.values(l.valores).reduce((s, v) => {
-      const n = Number(v);
-      return s + (v.trim() && n > 0 ? n : 0);
-    }, 0);
-  }
-
   function totalCor(corId: string): number {
-    return linhas.reduce((s, l) => {
-      const v = l.valores[corId] ?? "";
-      const n = Number(v);
-      return s + (v.trim() && n > 0 ? n : 0);
+    return (linhasPorCor[corId] ?? []).reduce((s, l) => {
+      const n = Number(l.valor);
+      return s + (l.valor.trim() && n > 0 ? n : 0);
     }, 0);
   }
 
   function montarMatriz(): MatrizPecas {
     const out: MatrizPecas = {};
-    for (const l of linhas) {
-      if (!l.tamanho) continue;
-      for (const [c, v] of Object.entries(l.valores)) {
-        const n = Number(v);
-        if (v.trim() && n >= 0) {
-          out[l.tamanho] = out[l.tamanho] ?? {};
-          out[l.tamanho][c] = (out[l.tamanho][c] ?? 0) + n;
-        }
+    for (const c of cores) {
+      for (const l of linhasPorCor[c.id] ?? []) {
+        const n = Number(l.valor);
+        if (!l.tamanho || !l.valor.trim() || !(n >= 0)) continue;
+        out[l.tamanho] = out[l.tamanho] ?? {};
+        out[l.tamanho][c.id] = (out[l.tamanho][c.id] ?? 0) + n;
       }
     }
     return out;
   }
 
   async function confirmarContagem() {
-    const orfa = linhas.some(
-      (l) => !l.tamanho && Object.values(l.valores).some((v) => v.trim()),
+    const orfa = cores.some((c) =>
+      (linhasPorCor[c.id] ?? []).some((l) => !l.tamanho && l.valor.trim()),
     );
     if (orfa) {
       toast.error("Há linha com quantidade preenchida sem tamanho selecionado");
@@ -613,109 +613,99 @@ function Bloco1Contagem({
         </p>
       )}
       <p className="text-xs text-muted-foreground">
-        Cada linha é um lançamento da ficha (ex.: um fardo): escolha o
-        tamanho e digite a quantidade na coluna da cor. Linhas com o mesmo
-        tamanho são somadas. Preencheu a última linha, uma nova nasce
-        embaixo já com o tamanho herdado. Enter e setas do teclado navegam
-        entre as células.
+        Uma tabela por cor: cada linha é um lançamento da ficha (ex.: um
+        fardo) com tamanho e quantidade. Linhas com o mesmo tamanho são
+        somadas. Preencheu a última linha, uma nova nasce embaixo já com o
+        tamanho herdado. Enter e ↑↓ andam nas linhas; ←→ pulam pra cor
+        vizinha.
       </p>
 
-      <div className="overflow-x-auto">
-        <table className="text-sm w-full">
-          <thead>
-            <tr>
-              <th className="text-left p-1 text-xs text-muted-foreground w-24">
-                Tamanho
-              </th>
-              {cores.map((c) => (
-                <th
-                  key={c.id}
-                  className="p-1 text-xs text-muted-foreground text-center"
-                >
-                  {c.nome}
-                </th>
-              ))}
-              <th className="p-1 text-xs text-muted-foreground text-right w-14">
-                Total
-              </th>
-              <th className="w-8" />
-            </tr>
-          </thead>
-          <tbody ref={corpoRef}>
-            {linhas.map((l, linhaIdx) => (
-              <tr key={l.id}>
-                <td className="p-1">
-                  <Select
-                    value={l.tamanho}
-                    onValueChange={(v) =>
-                      setLinhaTamanho(l.id, v as TamanhoGradeRisco)
-                    }
-                    disabled={!editavel}
-                  >
-                    <SelectTrigger className="h-7 w-20 text-xs">
-                      <SelectValue placeholder="—" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TAMANHOS_TODOS.map((t) => (
-                        <SelectItem key={t} value={t}>
-                          {t}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </td>
-                {cores.map((c, corIdx) => (
-                  <td key={c.id} className="p-1 text-center">
-                    <Input
-                      type="number"
-                      min="0"
-                      data-celula={`${linhaIdx}-${corIdx}`}
-                      value={l.valores[c.id] ?? ""}
-                      onChange={(e) =>
-                        setLinhaValor(l.id, c.id, e.target.value)
-                      }
-                      onKeyDown={(e) => aoNavegarTeclado(e, linhaIdx, corIdx)}
-                      disabled={!editavel}
-                      className="h-7 text-xs w-16 text-center px-1 mx-auto"
-                    />
-                  </td>
+      <div ref={gradeRef} className="flex flex-wrap gap-4 items-start">
+        {cores.map((c, corIdx) => (
+          <div key={c.id} className="rounded border p-2 space-y-1">
+            <div className="px-1 text-xs font-semibold">{c.nome}</div>
+            <table className="text-sm">
+              <thead>
+                <tr>
+                  <th className="text-left p-1 text-xs text-muted-foreground">
+                    Tamanho
+                  </th>
+                  <th className="p-1 text-xs text-muted-foreground text-center">
+                    Qtd
+                  </th>
+                  <th className="w-7" />
+                </tr>
+              </thead>
+              <tbody>
+                {(linhasPorCor[c.id] ?? []).map((l, linhaIdx) => (
+                  <tr key={l.id}>
+                    <td className="p-1">
+                      <Select
+                        value={l.tamanho}
+                        onValueChange={(v) =>
+                          setLinhaTamanho(c.id, l.id, v as TamanhoGradeRisco)
+                        }
+                        disabled={!editavel}
+                      >
+                        <SelectTrigger className="h-7 w-20 text-xs">
+                          <SelectValue placeholder="—" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TAMANHOS_TODOS.map((t) => (
+                            <SelectItem key={t} value={t}>
+                              {t}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </td>
+                    <td className="p-1 text-center">
+                      <Input
+                        type="number"
+                        min="0"
+                        data-celula={`${corIdx}-${linhaIdx}`}
+                        value={l.valor}
+                        onChange={(e) =>
+                          setLinhaValor(c.id, l.id, e.target.value)
+                        }
+                        onKeyDown={(e) =>
+                          aoNavegarTeclado(e, corIdx, linhaIdx)
+                        }
+                        disabled={!editavel}
+                        className="h-7 text-xs w-16 text-center px-1 mx-auto"
+                      />
+                    </td>
+                    <td className="p-1">
+                      {editavel && linhaPreenchida(l) && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => removerLinha(c.id, l.id)}
+                          className="size-6"
+                        >
+                          <Trash2 className="size-3" />
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
                 ))}
-                <td className="p-1 text-right text-xs tabular-nums text-muted-foreground">
-                  {totalLinha(l) || ""}
-                </td>
-                <td className="p-1">
-                  {editavel && linhaPreenchida(l) && (
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => removerLinha(l.id)}
-                      className="size-6"
-                    >
-                      <Trash2 className="size-3" />
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr className="border-t">
-              <td className="p-1 text-xs font-medium">Total</td>
-              {cores.map((c) => (
-                <td
-                  key={c.id}
-                  className="p-1 text-center text-xs font-medium tabular-nums"
-                >
-                  {totalCor(c.id)}
-                </td>
-              ))}
-              <td className="p-1 text-right text-xs font-semibold tabular-nums">
-                {cores.reduce((s, c) => s + totalCor(c.id), 0)}
-              </td>
-              <td />
-            </tr>
-          </tfoot>
-        </table>
+              </tbody>
+              <tfoot>
+                <tr className="border-t">
+                  <td className="p-1 text-xs font-medium">Total</td>
+                  <td className="p-1 text-center text-xs font-medium tabular-nums">
+                    {totalCor(c.id)}
+                  </td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        ))}
+      </div>
+
+      <div className="text-xs font-semibold tabular-nums">
+        Total geral: {cores.reduce((s, c) => s + totalCor(c.id), 0)}
       </div>
 
       {temEsperado && sc.quantidadeRevelada && divergencias.length > 0 && (
