@@ -460,18 +460,37 @@ function Bloco1Contagem({
     atualizarLinhas((prev) => prev.filter((l) => l.id !== id));
   }
 
-  // Enter desce pra mesma coluna da linha de baixo, estilo planilha.
-  // rAF espera o render — a linha de baixo pode ter acabado de nascer.
-  function aoTeclarEnter(
+  // Navegação estilo planilha: Enter/setas movem o foco entre células.
+  // preventDefault também mata o incrementar/decrementar do input number
+  // nas setas ↑↓. rAF espera o render — a linha de baixo pode ter
+  // acabado de nascer.
+  function aoNavegarTeclado(
     e: KeyboardEvent<HTMLInputElement>,
     linhaIdx: number,
     corIdx: number,
   ) {
-    if (e.key !== "Enter") return;
+    let destino: [number, number];
+    switch (e.key) {
+      case "Enter":
+      case "ArrowDown":
+        destino = [linhaIdx + 1, corIdx];
+        break;
+      case "ArrowUp":
+        destino = [linhaIdx - 1, corIdx];
+        break;
+      case "ArrowLeft":
+        destino = [linhaIdx, corIdx - 1];
+        break;
+      case "ArrowRight":
+        destino = [linhaIdx, corIdx + 1];
+        break;
+      default:
+        return;
+    }
     e.preventDefault();
     requestAnimationFrame(() => {
       const alvo = corpoRef.current?.querySelector<HTMLInputElement>(
-        `input[data-celula="${linhaIdx + 1}-${corIdx}"]`,
+        `input[data-celula="${destino[0]}-${destino[1]}"]`,
       );
       if (alvo) {
         alvo.focus();
@@ -597,7 +616,8 @@ function Bloco1Contagem({
         Cada linha é um lançamento da ficha (ex.: um fardo): escolha o
         tamanho e digite a quantidade na coluna da cor. Linhas com o mesmo
         tamanho são somadas. Preencheu a última linha, uma nova nasce
-        embaixo já com o tamanho herdado. Enter desce pra linha de baixo.
+        embaixo já com o tamanho herdado. Enter e setas do teclado navegam
+        entre as células.
       </p>
 
       <div className="overflow-x-auto">
@@ -654,7 +674,7 @@ function Bloco1Contagem({
                       onChange={(e) =>
                         setLinhaValor(l.id, c.id, e.target.value)
                       }
-                      onKeyDown={(e) => aoTeclarEnter(e, linhaIdx, corIdx)}
+                      onKeyDown={(e) => aoNavegarTeclado(e, linhaIdx, corIdx)}
                       disabled={!editavel}
                       className="h-7 text-xs w-16 text-center px-1 mx-auto"
                     />
