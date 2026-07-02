@@ -17,6 +17,7 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -50,7 +51,10 @@ import {
   type MatrizPecas,
   type TipoDefeito,
 } from "@/lib/confeccao/schemas/subconferencia";
-import type { TamanhoGradeRisco } from "@/lib/confeccao/schemas/payloads/risco";
+import {
+  TAMANHOS_GRADE_RISCO,
+  type TamanhoGradeRisco,
+} from "@/lib/confeccao/schemas/payloads/risco";
 import type { ConfeccaoSubtask } from "@/lib/db/schema";
 
 interface SubtaskConferenciaProps {
@@ -64,6 +68,11 @@ interface CorRef {
   id: string;
   nome: string;
 }
+
+// A peça chega da Costura já etiquetada — o tamanho recebido pode ser
+// qualquer um da grade comercial (ex.: P etiquetado a partir de M),
+// independente dos tamanhos cortados no Risco.
+const TAMANHOS_TODOS: TamanhoGradeRisco[] = [...TAMANHOS_GRADE_RISCO];
 
 interface SubconferenciaItem {
   id: string;
@@ -103,7 +112,6 @@ export function SubtaskConferencia({
 
   const [subconfs, setSubconfs] = useState<SubconferenciaItem[]>([]);
   const [cores, setCores] = useState<CorRef[]>([]);
-  const [tamanhos, setTamanhos] = useState<TamanhoGradeRisco[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandidas, setExpandidas] = useState<Set<string>>(new Set());
 
@@ -126,22 +134,43 @@ export function SubtaskConferencia({
         return ativa ? new Set([ativa.id]) : new Set();
       });
 
-      // Contexto: cores + tamanhos do Risco da OP
+      // Cores fixas da OP: as contratadas na Compra (OPBUY)
       const resOp = await fetch(`/api/confeccao/ops/${opNumero}`, {
         cache: "no-store",
       });
+      const idsCores: string[] = [];
       if (resOp.ok) {
         const opData = (await resOp.json()) as {
           subtasks: Array<{ prefixo: string; payload: unknown }>;
         };
-        const risco = opData.subtasks.find((s) => s.prefixo === "OPRIS")
+        const compra = opData.subtasks.find((s) => s.prefixo === "OPBUY")
           ?.payload as
-          | { tamanhos?: Array<{ tamanho: TamanhoGradeRisco }> }
+          | { fornecedores?: Array<{ cores?: Array<{ corId: string }> }> }
           | undefined;
-        setTamanhos((risco?.tamanhos ?? []).map((t) => t.tamanho));
+        for (const f of compra?.fornecedores ?? []) {
+          for (const c of f.cores ?? []) {
+            if (c.corId && !idsCores.includes(c.corId)) idsCores.push(c.corId);
+          }
+        }
+      }
+      // União com cores já registradas nas subconferências, pra dado
+      // antigo não sumir da grade
+      for (const s of data.items) {
+        for (const m of [
+          s.pecasRecebidas,
+          s.aprovadas,
+          s.reprovadas,
+          s.retiradaPecasPorTamanhoCor,
+        ]) {
+          for (const porCor of Object.values(m ?? {})) {
+            for (const corId of Object.keys(porCor)) {
+              if (!idsCores.includes(corId)) idsCores.push(corId);
+            }
+          }
+        }
       }
 
-      // Lista cores
+      // Resolve nomes; se a Compra não tem cores, cai pro catálogo completo
       const resCor = await fetch(
         `/api/confeccao/cores?pageSize=100&incluirInativos=true`,
         { cache: "no-store" },
@@ -150,7 +179,12 @@ export function SubtaskConferencia({
         const dataCor = (await resCor.json()) as {
           items: Array<{ id: string; nome: string }>;
         };
-        setCores(dataCor.items);
+        if (idsCores.length > 0) {
+          const nomes = new Map(dataCor.items.map((c) => [c.id, c.nome]));
+          setCores(idsCores.map((id) => ({ id, nome: nomes.get(id) ?? "?" })));
+        } else {
+          setCores(dataCor.items);
+        }
       }
     } catch {
       toast.error("Erro ao carregar dados da Conferência");
@@ -216,7 +250,6 @@ export function SubtaskConferencia({
               opNumero={opNumero}
               contaId={contaId}
               cores={cores}
-              tamanhos={tamanhos}
               expandido={expandidas.has(sc.id)}
               podeEditar={podeEditar}
               onToggle={() => toggleExpand(sc.id)}
@@ -238,7 +271,6 @@ function SubconferenciaCard({
   opNumero,
   contaId,
   cores,
-  tamanhos,
   expandido,
   podeEditar,
   onToggle,
@@ -248,7 +280,6 @@ function SubconferenciaCard({
   opNumero: string;
   contaId: string;
   cores: CorRef[];
-  tamanhos: TamanhoGradeRisco[];
   expandido: boolean;
   podeEditar: boolean;
   onToggle: () => void;
@@ -292,7 +323,6 @@ function SubconferenciaCard({
           <Bloco1Contagem
             sc={sc}
             cores={cores}
-            tamanhos={tamanhos}
             editavel={editavel}
             onAlterada={onAlterada}
           />
@@ -301,7 +331,7 @@ function SubconferenciaCard({
             opNumero={opNumero}
             contaId={contaId}
             cores={cores}
-            tamanhos={tamanhos}
+            tamanhos={TAMANHOS_TODOS}
             editavel={editavel}
             onAlterada={onAlterada}
           />
@@ -323,51 +353,121 @@ function SubconferenciaCard({
 // Bloco 1 — Conferência quantitativa (contagem oculta)
 // ============================================================
 
+// Linha da grade de contagem estilo planilha: um lançamento (ex.: um saco
+// contado) com tamanho + quantidade por cor. Tamanhos podem repetir entre
+// linhas; a matriz salva é a SOMA por tamanho × cor.
+interface LinhaContagem {
+  id: string;
+  tamanho: TamanhoGradeRisco | "";
+  valores: Record<string, string>; // corId → qtd
+}
+
+const LINHAS_INICIAIS = 3;
+
+function novaLinhaContagem(): LinhaContagem {
+  return { id: Math.random().toString(36).slice(2), tamanho: "", valores: {} };
+}
+
+function linhaPreenchida(l: LinhaContagem): boolean {
+  return (
+    l.tamanho !== "" || Object.values(l.valores).some((v) => v.trim() !== "")
+  );
+}
+
 function Bloco1Contagem({
   sc,
   cores,
-  tamanhos,
   editavel,
   onAlterada,
 }: {
   sc: SubconferenciaItem;
   cores: CorRef[];
-  tamanhos: TamanhoGradeRisco[];
   editavel: boolean;
   onAlterada: () => void;
 }) {
-  // Estado da matriz (string pra controlar inputs vazios)
-  const [matriz, setMatriz] = useState<Record<string, Record<string, string>>>(
-    () => {
-      const r: Record<string, Record<string, string>> = {};
-      if (sc.pecasRecebidas) {
-        for (const [t, m] of Object.entries(sc.pecasRecebidas)) {
-          for (const [c, n] of Object.entries(m)) {
-            r[t] = r[t] ?? {};
-            r[t][c] = String(n);
-          }
-        }
+  const [linhas, setLinhas] = useState<LinhaContagem[]>(() => {
+    // Contagem já salva volta como uma linha por tamanho (a soma); o
+    // detalhe lançamento-a-lançamento vive só durante a digitação.
+    const iniciais: LinhaContagem[] = [];
+    if (sc.pecasRecebidas) {
+      for (const t of TAMANHOS_TODOS) {
+        const porCor = sc.pecasRecebidas[t];
+        if (!porCor || Object.keys(porCor).length === 0) continue;
+        const valores: Record<string, string> = {};
+        for (const [c, n] of Object.entries(porCor)) valores[c] = String(n);
+        iniciais.push({
+          id: Math.random().toString(36).slice(2),
+          tamanho: t,
+          valores,
+        });
       }
-      return r;
-    },
-  );
+    }
+    while (
+      iniciais.length < LINHAS_INICIAIS ||
+      linhaPreenchida(iniciais[iniciais.length - 1])
+    ) {
+      iniciais.push(novaLinhaContagem());
+    }
+    return iniciais;
+  });
   const [salvando, setSalvando] = useState(false);
 
-  function setCelula(t: TamanhoGradeRisco, c: string, v: string) {
-    setMatriz((prev) => ({
-      ...prev,
-      [t]: { ...(prev[t] ?? {}), [c]: v },
-    }));
+  // Toda mutação passa por aqui: preencheu a última linha disponível,
+  // uma nova linha vazia nasce abaixo.
+  function atualizarLinhas(
+    updater: (prev: LinhaContagem[]) => LinhaContagem[],
+  ) {
+    setLinhas((prev) => {
+      const next = updater(prev);
+      if (next.length === 0 || linhaPreenchida(next[next.length - 1])) {
+        return [...next, novaLinhaContagem()];
+      }
+      return next;
+    });
+  }
+
+  function setLinhaTamanho(id: string, t: TamanhoGradeRisco) {
+    atualizarLinhas((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, tamanho: t } : l)),
+    );
+  }
+
+  function setLinhaValor(id: string, corId: string, v: string) {
+    atualizarLinhas((prev) =>
+      prev.map((l) =>
+        l.id === id ? { ...l, valores: { ...l.valores, [corId]: v } } : l,
+      ),
+    );
+  }
+
+  function removerLinha(id: string) {
+    atualizarLinhas((prev) => prev.filter((l) => l.id !== id));
+  }
+
+  function totalLinha(l: LinhaContagem): number {
+    return Object.values(l.valores).reduce((s, v) => {
+      const n = Number(v);
+      return s + (v.trim() && n > 0 ? n : 0);
+    }, 0);
+  }
+
+  function totalCor(corId: string): number {
+    return linhas.reduce((s, l) => {
+      const v = l.valores[corId] ?? "";
+      const n = Number(v);
+      return s + (v.trim() && n > 0 ? n : 0);
+    }, 0);
   }
 
   function montarMatriz(): MatrizPecas {
     const out: MatrizPecas = {};
-    for (const [t, m] of Object.entries(matriz)) {
-      for (const [c, v] of Object.entries(m)) {
+    for (const l of linhas) {
+      if (!l.tamanho) continue;
+      for (const [c, v] of Object.entries(l.valores)) {
         const n = Number(v);
         if (v.trim() && n >= 0) {
-          out[t] = out[t] ?? {};
-          out[t][c] = n;
+          out[l.tamanho] = out[l.tamanho] ?? {};
+          out[l.tamanho][c] = (out[l.tamanho][c] ?? 0) + n;
         }
       }
     }
@@ -375,6 +475,15 @@ function Bloco1Contagem({
   }
 
   async function confirmarContagem() {
+    const orfa = linhas.some(
+      (l) => !l.tamanho && Object.values(l.valores).some((v) => v.trim()),
+    );
+    if (orfa) {
+      toast.error(
+        "Há linha com quantidade preenchida sem tamanho selecionado",
+      );
+      return;
+    }
     setSalvando(true);
     try {
       const res = await fetch(`/api/confeccao/subconferencias/${sc.id}`, {
@@ -450,73 +559,134 @@ function Bloco1Contagem({
             : "Conte as peças que chegaram. A retirada não tem quantidade esperada — esta contagem é o número oficial."}
         </p>
       )}
+      <p className="text-xs text-muted-foreground">
+        Cada linha é um lançamento (ex.: um saco contado): escolha o tamanho
+        e informe a quantidade por cor. Linhas com o mesmo tamanho são
+        somadas. Preencheu a última linha, uma nova aparece embaixo.
+      </p>
 
       <div className="overflow-x-auto">
         <table className="text-sm w-full">
           <thead>
             <tr>
-              <th className="text-left p-1 text-xs text-muted-foreground">
-                Cor / Tam
+              <th className="text-left p-1 text-xs text-muted-foreground w-24">
+                Tamanho
               </th>
-              {tamanhos.map((t) => (
+              {cores.map((c) => (
                 <th
-                  key={t}
+                  key={c.id}
                   className="p-1 text-xs text-muted-foreground text-center"
                 >
-                  {t}
+                  {c.nome}
                 </th>
               ))}
+              <th className="p-1 text-xs text-muted-foreground text-right w-14">
+                Total
+              </th>
+              <th className="w-8" />
             </tr>
           </thead>
           <tbody>
-            {cores.map((c) => (
-              <tr key={c.id}>
-                <td className="p-1 text-xs font-medium">{c.nome}</td>
-                {tamanhos.map((t) => {
-                  const diverg = divergencias.find(
-                    (d) => d.tamanho === t && d.corId === c.id,
-                  );
-                  const mostrarDiverg = sc.quantidadeRevelada && diverg;
-                  return (
-                    <td key={t} className="p-1">
-                      <div className="flex flex-col gap-0.5 items-center">
-                        <Input
-                          type="number"
-                          min="0"
-                          value={matriz[t]?.[c.id] ?? ""}
-                          onChange={(e) => setCelula(t, c.id, e.target.value)}
-                          disabled={!editavel}
-                          className={cn(
-                            "h-7 text-xs w-16 text-center px-1",
-                            mostrarDiverg && "border-red-400 bg-red-50",
-                          )}
-                        />
-                        {temEsperado && sc.quantidadeRevelada && (
-                          <span
-                            className={cn(
-                              "text-[10px] tabular-nums",
-                              diverg
-                                ? diverg.diferenca > 0
-                                  ? "text-emerald-600"
-                                  : "text-red-600"
-                                : "text-muted-foreground",
-                            )}
-                          >
-                            esp: {esperado[t]?.[c.id] ?? 0}
-                            {diverg
-                              ? ` (${diverg.diferenca > 0 ? "+" : ""}${diverg.diferenca})`
-                              : ""}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                  );
-                })}
+            {linhas.map((l) => (
+              <tr key={l.id}>
+                <td className="p-1">
+                  <Select
+                    value={l.tamanho}
+                    onValueChange={(v) =>
+                      setLinhaTamanho(l.id, v as TamanhoGradeRisco)
+                    }
+                    disabled={!editavel}
+                  >
+                    <SelectTrigger className="h-7 w-20 text-xs">
+                      <SelectValue placeholder="—" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TAMANHOS_TODOS.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </td>
+                {cores.map((c) => (
+                  <td key={c.id} className="p-1 text-center">
+                    <Input
+                      type="number"
+                      min="0"
+                      value={l.valores[c.id] ?? ""}
+                      onChange={(e) =>
+                        setLinhaValor(l.id, c.id, e.target.value)
+                      }
+                      disabled={!editavel}
+                      className="h-7 text-xs w-16 text-center px-1 mx-auto"
+                    />
+                  </td>
+                ))}
+                <td className="p-1 text-right text-xs tabular-nums text-muted-foreground">
+                  {totalLinha(l) || ""}
+                </td>
+                <td className="p-1">
+                  {editavel && linhaPreenchida(l) && (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => removerLinha(l.id)}
+                      className="size-6"
+                    >
+                      <Trash2 className="size-3" />
+                    </Button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr className="border-t">
+              <td className="p-1 text-xs font-medium">Total</td>
+              {cores.map((c) => (
+                <td
+                  key={c.id}
+                  className="p-1 text-center text-xs font-medium tabular-nums"
+                >
+                  {totalCor(c.id)}
+                </td>
+              ))}
+              <td className="p-1 text-right text-xs font-semibold tabular-nums">
+                {cores.reduce((s, c) => s + totalCor(c.id), 0)}
+              </td>
+              <td />
+            </tr>
+          </tfoot>
         </table>
       </div>
+
+      {temEsperado && sc.quantidadeRevelada && divergencias.length > 0 && (
+        <div className="rounded border border-red-200 bg-red-50 p-2 space-y-1">
+          <p className="text-xs font-medium text-red-800">
+            Divergências vs. esperado da retirada
+          </p>
+          {divergencias.map((d) => (
+            <p
+              key={`${d.tamanho}|${d.corId}`}
+              className={cn(
+                "text-xs tabular-nums",
+                d.diferenca > 0 ? "text-emerald-700" : "text-red-700",
+              )}
+            >
+              {d.tamanho} · {cores.find((c) => c.id === d.corId)?.nome ?? "?"}{" "}
+              — contado {d.recebido}, esperado {d.esperado} (
+              {d.diferenca > 0 ? "+" : ""}
+              {d.diferenca})
+            </p>
+          ))}
+        </div>
+      )}
+      {temEsperado && sc.quantidadeRevelada && divergencias.length === 0 && (
+        <p className="text-xs text-emerald-700">
+          Sem divergências vs. esperado da retirada.
+        </p>
+      )}
 
       {editavel && (
         <div className="flex flex-wrap gap-2 items-center">
