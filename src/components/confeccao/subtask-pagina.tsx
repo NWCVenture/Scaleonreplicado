@@ -2,9 +2,14 @@
 
 // Cabeçalho enxuto + conteúdo de uma subtask direto na tela, sem card.
 // Usado pela tela da OP (navegação por abas) e pela página single-subtask.
+// Digitar no conteúdo marca a subtask como "não salva"; qualquer save
+// bem-sucedido (todos chamam onAlterado) limpa — enquanto suja, trocar
+// de aba/página pede confirmação (useAlteracoesNaoSalvas).
 
+import { useCallback, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import Link from "next/link";
+import { useAlteracoesNaoSalvas } from "@/hooks/use-alteracoes-nao-salvas";
 import { Button } from "@/components/ui/button";
 import {
   SUBTASK_PREFIXO_LABEL,
@@ -30,6 +35,13 @@ export function SubtaskPagina({
   const labelTipo = SUBTASK_PREFIXO_LABEL[subtask.prefixo] ?? subtask.prefixo;
   const bloqueada = subtask.status === "bloqueada";
 
+  const [naoSalvo, setNaoSalvo] = useState(false);
+  useAlteracoesNaoSalvas(naoSalvo);
+  const aoAlterar = useCallback(() => {
+    setNaoSalvo(false);
+    onAlterado();
+  }, [onAlterado]);
+
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between flex-wrap gap-2">
@@ -40,6 +52,11 @@ export function SubtaskPagina({
               {subtask.numero}
             </span>
             <SubtaskStatusBadge status={subtask.status} />
+            {naoSalvo && (
+              <span className="text-xs font-medium text-amber-600">
+                • alterações não salvas
+              </span>
+            )}
           </div>
           {subtask.atribuidoNome && (
             <div className="text-xs text-muted-foreground mt-0.5">
@@ -80,12 +97,14 @@ export function SubtaskPagina({
           Subtask bloqueada — aguardando conclusão da subtask anterior.
         </p>
       ) : (
-        <SubtaskConteudoRouter
-          subtask={subtask}
-          opNumero={opNumero}
-          contaId={contaId}
-          onAlterado={onAlterado}
-        />
+        <div onInput={() => setNaoSalvo(true)}>
+          <SubtaskConteudoRouter
+            subtask={subtask}
+            opNumero={opNumero}
+            contaId={contaId}
+            onAlterado={aoAlterar}
+          />
+        </div>
       )}
     </div>
   );
