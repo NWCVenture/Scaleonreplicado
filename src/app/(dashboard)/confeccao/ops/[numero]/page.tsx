@@ -2,14 +2,14 @@
 
 // Tela "Visão geral" da OP: header + KPIs + fardos + histórico. Cada
 // subtask tem sua PRÓPRIA página em /confeccao/ops/[numero]/subtasks/
-// [prefixo]; a navegação entre elas é pela barra de abas (OpAbasNav)
-// no topo, estilo abas de planilha.
+// [prefixo]; a navegação entre elas é pela barra de abas, renderizada
+// pelo OpContextoProvider no layout da rota (que também busca a OP e
+// compartilha via contexto — sem refetch a cada troca de aba).
 
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Scale } from "lucide-react";
-import { toast } from "sonner";
 import { useSession } from "@/lib/auth-client";
 import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { Button } from "@/components/ui/button";
@@ -21,105 +21,24 @@ import {
 } from "@/components/ui/sheet";
 import { OPHeader } from "@/components/confeccao/op-header";
 import { OpDashboardStrip } from "@/components/confeccao/op-dashboard-strip";
-import { OpAbasNav } from "@/components/confeccao/op-abas-nav";
+import { useOpContexto } from "@/components/confeccao/op-contexto";
 import { NotasOP } from "@/components/confeccao/notas-op";
 import { FardosNoEstoque } from "@/components/confeccao/fardos-no-estoque";
 import { derivarKpisOp } from "@/lib/confeccao/dashboard-kpis";
 import { totalRolosRecebidos } from "@/lib/confeccao/matching-rolos";
 import type { SubtaskCortePayload } from "@/lib/confeccao/schemas/payloads/corte";
-import type { ConfeccaoSubtask } from "@/lib/db/schema";
 
-interface OPDetalhe {
-  op: {
-    id: string;
-    numero: string;
-    status: "em_andamento" | "concluida" | "cancelada";
-    temVies: boolean;
-    observacoes: string | null;
-    produtoId: string;
-    produtoNome: string;
-    produtoDescricao: string | null;
-    createdAt: string;
-    atribuidoAId: string;
-    canceladaEm: string | null;
-    cancelamentoJustificativa: string | null;
-    criadaPor: { id: string; name: string; email: string } | null;
-    atribuidoA: { id: string; name: string; email: string } | null;
-    canceladaPor: { id: string; name: string } | null;
-    autorizadoPor: { id: string; name: string } | null;
-  };
-  subtasks: Array<
-    ConfeccaoSubtask & {
-      atribuidoNome: string | null;
-    }
-  >;
-  progresso: {
-    subtasksConcluidas: number;
-    subtasksTotal: number;
-    percentual: number;
-  };
-}
-
-export default function OPDetailPage({
-  params,
-}: {
-  params: Promise<{ numero: string }>;
-}) {
-  const { numero } = use(params);
+export default function OPDetailPage() {
   const router = useRouter();
-  const { data: session, isPending } = useSession();
+  const { data: session } = useSession();
   const { isAdmin } = usePapelAtivo();
+  const { data, refetch } = useOpContexto();
 
-  const [data, setData] = useState<OPDetalhe | null>(null);
   const [historicoOpen, setHistoricoOpen] = useState(false);
-  // Garante que o fetch inicial e o redirect-de-login rodem no máximo uma
-  // vez por vida do componente. Sem esse latch, qualquer oscilação na
-  // referência de `session` vinda do useSession (revalidação em foco da
-  // janela, StrictMode, etc) re-disparava fetchOp(), que setava o flag de
-  // loading e re-renderizava "Carregando…" full-page — desmontando os
-  // formulários das subtasks e perdendo o que o usuário tinha digitado.
-  const fetchOnceRef = useRef(false);
-  const redirecionouRef = useRef(false);
 
-  const fetchOp = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/confeccao/ops/${numero}`, {
-        cache: "no-store",
-      });
-      if (res.status === 404) {
-        toast.error("OP não encontrada");
-        router.replace("/confeccao");
-        return;
-      }
-      if (!res.ok) throw new Error();
-      const json = (await res.json()) as OPDetalhe;
-      setData(json);
-    } catch {
-      toast.error("Erro ao carregar OP");
-    }
-  }, [numero, router]);
-
-  useEffect(() => {
-    if (isPending) return;
-    if (!session) {
-      if (redirecionouRef.current) return;
-      redirecionouRef.current = true;
-      router.replace("/login");
-      return;
-    }
-    if (fetchOnceRef.current) return;
-    fetchOnceRef.current = true;
-    void fetchOp();
-  }, [isPending, session, router, fetchOp]);
-
-  // Mostra "Carregando…" só enquanto ainda não temos dados pra renderizar.
-  // Refetches posteriores (via onAlterado) atualizam o estado in-place sem
-  // desmontar os formulários das subtasks. Também guarda contra `session`
-  // virar null por algum motivo (sign-out em outra aba) — nesse caso o
-  // useEffect já agendou o redirect pra /login.
   if (!data || !session) {
     return (
-      <div className="p-6 text-sm text-muted-foreground">Carregando…</div>
+      <div className="text-sm text-muted-foreground">Carregando…</div>
     );
   }
 
@@ -133,9 +52,6 @@ export default function OPDetailPage({
 
   return (
     <div className="space-y-4">
-      <div className="pt-4">
-        <OpAbasNav opNumero={data.op.numero} subtasks={data.subtasks} />
-      </div>
       <OPHeader
         numero={data.op.numero}
         status={data.op.status}
@@ -147,7 +63,7 @@ export default function OPDetailPage({
         progresso={data.progresso}
         isAdmin={isAdmin}
         usuarioAtualId={session.user.id}
-        onAtualizado={() => void fetchOp()}
+        onAtualizado={() => void refetch()}
         onAbrirHistorico={() => setHistoricoOpen(true)}
       />
 

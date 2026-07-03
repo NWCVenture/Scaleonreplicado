@@ -1,28 +1,21 @@
 "use client";
 
 // Página individual da subtask — cada subtask da OP tem a sua, e a
-// navegação entre elas é pela barra de abas (OpAbasNav) no topo, estilo
-// abas de planilha. Conteúdo direto na tela, sem card.
+// navegação entre elas é pela barra de abas do layout da rota (estilo
+// abas de planilha). Os dados da OP vêm do OpContextoProvider, que
+// persiste entre as navegações — trocar de aba é instantâneo, sem
+// refetch. Conteúdo direto na tela, sem card.
 
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import { use, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
-import { useSession } from "@/lib/auth-client";
 import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { Button } from "@/components/ui/button";
-import { OpAbasNav } from "@/components/confeccao/op-abas-nav";
+import { useOpContexto } from "@/components/confeccao/op-contexto";
 import { SubtaskPagina } from "@/components/confeccao/subtask-pagina";
-import type {
-  ConfeccaoSubtask,
-  ConfeccaoSubtaskPrefixo,
-} from "@/lib/db/schema";
-
-interface OPDetalhe {
-  op: { numero: string; produtoNome: string };
-  subtasks: Array<ConfeccaoSubtask & { atribuidoNome: string | null }>;
-}
+import type { ConfeccaoSubtaskPrefixo } from "@/lib/db/schema";
 
 const PREFIXOS_VALIDOS: ConfeccaoSubtaskPrefixo[] = [
   "OPBUY",
@@ -40,16 +33,9 @@ export default function SubtaskFullPage({
 }) {
   const { numero, prefixo } = use(params);
   const router = useRouter();
-  const { data: session, isPending } = useSession();
   const { me } = usePapelAtivo();
   const contaId = me?.contaAtivaId ?? "";
-
-  const [opData, setOpData] = useState<OPDetalhe | null>(null);
-  // Latches pra evitar que oscilações na referência de `session` re-disparem
-  // fetchOp ou redirect — o que antes desmontava o formulário in-place e
-  // fazia perder o que o usuário tinha digitado. Mesma lógica do Nova OP /
-  // OP detail.
-  const fetchOnceRef = useRef(false);
+  const { data: opData, refetch } = useOpContexto();
   const redirecionouRef = useRef(false);
 
   const prefixoTyped =
@@ -57,53 +43,24 @@ export default function SubtaskFullPage({
       ? (prefixo as ConfeccaoSubtaskPrefixo)
       : null;
 
-  const fetchOp = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/confeccao/ops/${numero}`, {
-        cache: "no-store",
-      });
-      if (res.status === 404) {
-        toast.error("OP não encontrada");
-        router.replace("/confeccao");
-        return;
-      }
-      if (!res.ok) throw new Error();
-      setOpData((await res.json()) as OPDetalhe);
-    } catch {
-      toast.error("Erro ao carregar");
-    }
-  }, [numero, router]);
-
   useEffect(() => {
-    if (isPending) return;
-    if (!session) {
-      if (redirecionouRef.current) return;
-      redirecionouRef.current = true;
-      router.replace("/login");
-      return;
-    }
-    if (!prefixoTyped) {
-      if (redirecionouRef.current) return;
-      redirecionouRef.current = true;
-      toast.error("Prefixo inválido");
-      router.replace(`/confeccao/ops/${numero}`);
-      return;
-    }
-    if (fetchOnceRef.current) return;
-    fetchOnceRef.current = true;
-    void fetchOp();
-  }, [isPending, session, router, prefixoTyped, numero, fetchOp]);
+    if (prefixoTyped) return;
+    if (redirecionouRef.current) return;
+    redirecionouRef.current = true;
+    toast.error("Prefixo inválido");
+    router.replace(`/confeccao/ops/${numero}`);
+  }, [prefixoTyped, numero, router]);
 
   if (!opData || !prefixoTyped) {
     return (
-      <div className="p-6 text-sm text-muted-foreground">Carregando…</div>
+      <div className="text-sm text-muted-foreground">Carregando…</div>
     );
   }
 
   const subtask = opData.subtasks.find((s) => s.prefixo === prefixoTyped);
   if (!subtask) {
     return (
-      <div className="p-6 space-y-4">
+      <div className="space-y-4">
         <Button variant="ghost" size="sm" asChild>
           <Link href={`/confeccao/ops/${numero}`}>
             <ArrowLeft className="size-4" />
@@ -121,9 +78,7 @@ export default function SubtaskFullPage({
   }
 
   return (
-    <div className="pt-4 space-y-4">
-      <OpAbasNav opNumero={opData.op.numero} subtasks={opData.subtasks} />
-
+    <div className="space-y-4">
       <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground">
         <span className="font-mono">OP {opData.op.numero}</span>
         <span>{opData.op.produtoNome}</span>
@@ -133,7 +88,7 @@ export default function SubtaskFullPage({
         subtask={subtask}
         opNumero={opData.op.numero}
         contaId={contaId}
-        onAlterado={fetchOp}
+        onAlterado={refetch}
       />
     </div>
   );
