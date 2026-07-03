@@ -1,8 +1,8 @@
 "use client";
 
-// Página single-subtask em layout full — abre em nova aba via
-// botão "↗" no SubtaskCard. Mostra mini-header com link voltar + o
-// card da subtask expandido em modoFullPage.
+// Página single-subtask em layout full — abre em nova aba via botão "↗"
+// na tela da OP. Mostra mini-header com link voltar + conteúdo da
+// subtask direto na tela (sem card).
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { useSession } from "@/lib/auth-client";
 import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { Button } from "@/components/ui/button";
-import { SubtaskCard } from "@/components/confeccao/subtask-card";
+import { SubtaskPagina } from "@/components/confeccao/subtask-pagina";
 import type {
   ConfeccaoSubtask,
   ConfeccaoSubtaskPrefixo,
@@ -120,7 +120,7 @@ export default function SubtaskFullPage({
   }
 
   return (
-    <div className="p-6 space-y-4 max-w-4xl">
+    <div className="pt-6 space-y-4">
       <div className="flex items-center justify-between gap-4">
         <Button variant="ghost" size="sm" asChild>
           <Link href={`/confeccao/ops/${numero}`}>
@@ -133,16 +133,11 @@ export default function SubtaskFullPage({
         </span>
       </div>
 
-      <SubtaskCard
+      <SubtaskPagina
         subtask={subtask}
         opNumero={opData.op.numero}
         contaId={contaId}
-        expandido
-        onToggle={() => {
-          /* sem efeito em modo full-page */
-        }}
         onAlterado={fetchOp}
-        modoFullPage
       />
     </div>
   );

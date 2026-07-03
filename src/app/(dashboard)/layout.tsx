@@ -662,7 +662,16 @@ export default function DashboardLayout({
             </button>
           </div>
         )}
-        <div className="container py-8 md:py-12 max-w-5xl mx-auto flex-1">
+        {/* Telas de OP da confecção usam a largura toda (conteúdo denso,
+            abas + grades); o resto mantém o container centralizado. */}
+        <div
+          className={cn(
+            "flex-1",
+            pathname.startsWith("/confeccao/ops/")
+              ? "w-full px-6 pb-6"
+              : "container py-8 md:py-12 max-w-5xl mx-auto",
+          )}
+        >
           {children}
         </div>
       </main>
