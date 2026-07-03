@@ -3,8 +3,8 @@
 // Conteúdo da subtask OPCONF (Conferência) — RITM-13.
 //
 // Container de subconferências (uma por retirada). Cada subconferência
-// tem 3 blocos: quantitativa (contagem oculta), inspeção visual,
-// destinação. Subtask só fecha quando todas concluídas + todas
+// tem 3 blocos: quantitativa (contagem oculta), defeitos (informativo)
+// e destinação. Subtask só fecha quando todas concluídas + todas
 // oficinas da Costura finalizadas.
 
 import {
@@ -46,7 +46,6 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { LookupUsuarioConta } from "@/components/confeccao/lookup-usuario-conta";
 import { UploadAnexo } from "@/components/confeccao/upload-anexo";
 import { SubtaskStatusSelect } from "@/components/confeccao/subtask-status-select";
 import {
@@ -225,7 +224,7 @@ export function SubtaskConferencia({
           <h3 className="font-medium">Conferência</h3>
           <p className="text-xs text-muted-foreground">
             Container de subconferências (uma por retirada da Costura). Cada
-            uma tem 3 blocos: quantitativa, inspeção visual, destinação.
+            uma tem 3 blocos: contagem, defeitos, destinação.
           </p>
         </div>
         <SubtaskStatusSelect
@@ -332,7 +331,7 @@ function SubconferenciaCard({
             editavel={editavel}
             onAlterada={onAlterada}
           />
-          <Bloco2Inspecao
+          <Bloco2Defeitos
             sc={sc}
             opNumero={opNumero}
             contaId={contaId}
@@ -772,10 +771,10 @@ function Bloco1Contagem({
 }
 
 // ============================================================
-// Bloco 2 — Inspeção visual
+// Bloco 2 — Defeitos (registro informativo)
 // ============================================================
 
-function Bloco2Inspecao({
+function Bloco2Defeitos({
   sc,
   opNumero,
   contaId,
@@ -792,23 +791,6 @@ function Bloco2Inspecao({
   editavel: boolean;
   onAlterada: () => void;
 }) {
-  const [responsavelId, setResponsavelId] = useState(
-    sc.responsavelInspecaoId ?? "",
-  );
-  const [aprovadasMatriz, setAprovadasMatriz] = useState<
-    Record<string, Record<string, string>>
-  >(() => {
-    const r: Record<string, Record<string, string>> = {};
-    if (sc.aprovadas) {
-      for (const [t, m] of Object.entries(sc.aprovadas)) {
-        for (const [c, n] of Object.entries(m)) {
-          r[t] = r[t] ?? {};
-          r[t][c] = String(n);
-        }
-      }
-    }
-    return r;
-  });
   const [reprovadasMatriz, setReprovadasMatriz] = useState<
     Record<string, Record<string, string>>
   >(() => {
@@ -826,14 +808,11 @@ function Bloco2Inspecao({
   const [tiposDefeito, setTiposDefeito] = useState<TipoDefeito[]>(
     sc.tiposDefeito ?? [],
   );
+  const [semDefeitos, setSemDefeitos] = useState<boolean>(
+    somarMatriz(sc.reprovadas ?? {}) === 0,
+  );
   const [salvando, setSalvando] = useState(false);
 
-  function setCelulaApr(t: string, c: string, v: string) {
-    setAprovadasMatriz((prev) => ({
-      ...prev,
-      [t]: { ...(prev[t] ?? {}), [c]: v },
-    }));
-  }
   function setCelulaRep(t: string, c: string, v: string) {
     setReprovadasMatriz((prev) => ({
       ...prev,
@@ -868,116 +847,111 @@ function Bloco2Inspecao({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          responsavelInspecaoId: responsavelId || null,
-          aprovadas: montar(aprovadasMatriz),
-          reprovadas: montar(reprovadasMatriz),
-          tiposDefeito,
+          reprovadas: semDefeitos ? {} : montar(reprovadasMatriz),
+          tiposDefeito: semDefeitos ? [] : tiposDefeito,
           dataInspecao: new Date().toISOString(),
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data.error ?? "Erro ao salvar inspeção");
+        toast.error(data.error ?? "Erro ao salvar defeitos");
         return;
       }
-      toast.success("Inspeção salva");
+      toast.success(
+        semDefeitos ? "Registrado sem defeitos" : "Defeitos registrados",
+      );
       onAlterada();
     } finally {
       setSalvando(false);
     }
   }
 
-  const totalApr = somarMatriz(montar(aprovadasMatriz));
-  const totalRep = somarMatriz(montar(reprovadasMatriz));
+  const totalDefeitos = semDefeitos ? 0 : somarMatriz(montar(reprovadasMatriz));
   const totalRecebido = sc.pecasRecebidas ? somarMatriz(sc.pecasRecebidas) : 0;
-  const inconsistente =
-    totalRecebido > 0 && totalApr + totalRep > totalRecebido;
+  const excede = totalRecebido > 0 && totalDefeitos > totalRecebido;
 
   return (
     <div className="space-y-3 border-t pt-4">
-      <Label className="text-sm font-semibold">Bloco 2 — Inspeção visual</Label>
+      <Label className="text-sm font-semibold">Bloco 2 — Defeitos</Label>
+      <p className="text-xs text-muted-foreground">
+        Registro informativo, apenas em caso de defeito — não é obrigatório
+        pra concluir. As peças aprovadas são calculadas automaticamente
+        (recebidas − defeitos) na conclusão.
+      </p>
 
-      <div className="space-y-2">
-        <Label className="text-xs">Responsável pela inspeção</Label>
-        <LookupUsuarioConta
-          value={responsavelId}
-          onChange={(id) => setResponsavelId(id)}
+      <label className="flex w-fit cursor-pointer items-center gap-2 text-sm">
+        <Checkbox
+          checked={semDefeitos}
+          onCheckedChange={(v) => setSemDefeitos(v === true)}
           disabled={!editavel}
-          className="w-full max-w-md"
         />
-      </div>
+        Sem defeitos
+      </label>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <MatrizInput
-          titulo="Aprovadas"
-          matriz={aprovadasMatriz}
-          cores={cores}
-          tamanhos={tamanhos}
-          editavel={editavel}
-          onChange={setCelulaApr}
-          total={totalApr}
-        />
-        <MatrizInput
-          titulo="Reprovadas"
-          matriz={reprovadasMatriz}
-          cores={cores}
-          tamanhos={tamanhos}
-          editavel={editavel}
-          onChange={setCelulaRep}
-          total={totalRep}
-          totalClasse="text-red-700"
-        />
-      </div>
+      {!semDefeitos && (
+        <>
+          <MatrizInput
+            titulo="Peças com defeito"
+            matriz={reprovadasMatriz}
+            cores={cores}
+            tamanhos={tamanhos}
+            editavel={editavel}
+            onChange={setCelulaRep}
+            total={totalDefeitos}
+            totalClasse="text-red-700"
+          />
 
-      {inconsistente && (
-        <div className="text-xs text-amber-700 flex items-center gap-1">
-          <AlertTriangle className="size-3" />
-          Aprovadas + reprovadas ({totalApr + totalRep}) excede total recebido
-          ({totalRecebido})
-        </div>
+          {excede && (
+            <div className="text-xs text-amber-700 flex items-center gap-1">
+              <AlertTriangle className="size-3" />
+              Defeitos ({totalDefeitos}) excedem o total recebido (
+              {totalRecebido})
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label className="text-xs">Tipos de defeito encontrados</Label>
+            <div className="flex flex-wrap gap-1">
+              {TIPOS_DEFEITO.map((d) => (
+                <label
+                  key={d}
+                  className={cn(
+                    "flex items-center gap-1.5 text-xs rounded border px-2 py-1 cursor-pointer",
+                    tiposDefeito.includes(d)
+                      ? "bg-primary/10 border-primary/40"
+                      : "hover:bg-accent/40",
+                  )}
+                >
+                  <Checkbox
+                    checked={tiposDefeito.includes(d)}
+                    onCheckedChange={() => toggleDefeito(d)}
+                    disabled={!editavel}
+                  />
+                  {d}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs">Fotos de defeitos</Label>
+            <UploadAnexo
+              subtaskId={sc.id}
+              opNumero={opNumero}
+              subtaskNumero={sc.numero}
+              categoria="foto_defeito"
+              contaId={contaId}
+              label="Anexar foto"
+              multiple
+              disabled={!editavel}
+            />
+          </div>
+        </>
       )}
-
-      <div className="space-y-2">
-        <Label className="text-xs">Tipos de defeito encontrados</Label>
-        <div className="flex flex-wrap gap-1">
-          {TIPOS_DEFEITO.map((d) => (
-            <label
-              key={d}
-              className={cn(
-                "flex items-center gap-1.5 text-xs rounded border px-2 py-1 cursor-pointer",
-                tiposDefeito.includes(d)
-                  ? "bg-primary/10 border-primary/40"
-                  : "hover:bg-accent/40",
-              )}
-            >
-              <Checkbox
-                checked={tiposDefeito.includes(d)}
-                onCheckedChange={() => toggleDefeito(d)}
-                disabled={!editavel}
-              />
-              {d}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <Label className="text-xs">Fotos de defeitos</Label>
-        <UploadAnexo
-          subtaskId={sc.id}
-          opNumero={opNumero}
-          subtaskNumero={sc.numero}
-          categoria="foto_defeito"
-          contaId={contaId}
-          label="Anexar foto"
-          multiple
-          disabled={!editavel}
-        />
-      </div>
 
       {editavel && (
         <Button size="sm" variant="outline" onClick={salvar} disabled={salvando}>
-          {salvando ? "Salvando…" : "Salvar inspeção"}
+          {salvando ? "Salvando…" : "Salvar defeitos"}
         </Button>
       )}
     </div>
@@ -1072,9 +1046,11 @@ function Bloco3Destinacao({
   );
   const [salvando, setSalvando] = useState(false);
 
-  const temAprovadas = (sc.aprovadas && somarMatriz(sc.aprovadas) > 0) || false;
-  const temReprovadas =
-    (sc.reprovadas && somarMatriz(sc.reprovadas) > 0) || false;
+  // Aprovadas não são digitadas — derivadas de recebidas − defeitos.
+  const totalRecebido = sc.pecasRecebidas ? somarMatriz(sc.pecasRecebidas) : 0;
+  const totalDefeitos = sc.reprovadas ? somarMatriz(sc.reprovadas) : 0;
+  const temAprovadas = totalRecebido - totalDefeitos > 0;
+  const temReprovadas = totalDefeitos > 0;
 
   async function salvar() {
     setSalvando(true);
@@ -1125,7 +1101,7 @@ function Bloco3Destinacao({
 
       {temReprovadas && (
         <div className="space-y-2">
-          <Label className="text-xs">Destino das peças reprovadas</Label>
+          <Label className="text-xs">Destino das peças com defeito</Label>
           <Select
             value={destinoReprovadas}
             onValueChange={(v) =>
@@ -1149,7 +1125,7 @@ function Bloco3Destinacao({
 
       {!temAprovadas && !temReprovadas && (
         <p className="text-xs text-muted-foreground">
-          Preencha aprovadas/reprovadas no Bloco 2 antes de definir destinação.
+          Registre a contagem no Bloco 1 antes de definir a destinação.
         </p>
       )}
 

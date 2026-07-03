@@ -1,7 +1,7 @@
 // POST /api/confeccao/subconferencias/[id]/concluir
 //
-// Valida que todos os 3 blocos estão preenchidos e marca subconferência
-// como concluida. Cria nota de auditoria.
+// Valida contagem + destinação, DERIVA aprovadas (recebidas − defeitos)
+// e marca subconferência como concluida. Cria nota de auditoria.
 
 import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
@@ -13,6 +13,7 @@ import {
   confeccaoSubconferencia,
 } from "@/lib/db/schema";
 import {
+  derivarAprovadas,
   validarPodeConcluirSubconferencia,
   type MatrizPecas,
 } from "@/lib/confeccao/schemas/subconferencia";
@@ -57,12 +58,11 @@ export async function POST(
       }
       await assertOpAtivaBySubtask(tx, contaId, sc.subtaskConferenciaId);
 
+      const pecasRecebidas = sc.pecasRecebidas as MatrizPecas | null;
+      const reprovadas = sc.reprovadas as MatrizPecas | null;
       const validacao = validarPodeConcluirSubconferencia({
-        pecasRecebidas: sc.pecasRecebidas as MatrizPecas | null,
-        responsavelInspecaoId: sc.responsavelInspecaoId,
-        aprovadas: sc.aprovadas as MatrizPecas | null,
-        reprovadas: sc.reprovadas as MatrizPecas | null,
-        dataInspecao: sc.dataInspecao,
+        pecasRecebidas,
+        reprovadas,
         localizacaoArmazem: sc.localizacaoArmazem,
         destinoReprovadas: sc.destinoReprovadas as
           | "doacao"
@@ -77,7 +77,15 @@ export async function POST(
       const agora = new Date();
       const [updated] = await tx
         .update(confeccaoSubconferencia)
-        .set({ status: "concluida", concluidaEm: agora, updatedAt: agora })
+        .set({
+          status: "concluida",
+          concluidaEm: agora,
+          updatedAt: agora,
+          // Aprovadas não são mais digitadas: derivadas da contagem menos
+          // defeitos, na conclusão — custos e dashboard de qualidade leem
+          // esse campo de subconferências concluídas.
+          aprovadas: derivarAprovadas(pecasRecebidas ?? {}, reprovadas),
+        })
         .where(eq(confeccaoSubconferencia.id, id))
         .returning();
 

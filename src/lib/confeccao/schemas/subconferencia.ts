@@ -2,13 +2,15 @@
 //
 // Cada subconferência é vinculada 1:1 com uma retirada. 3 blocos:
 //  1. Conferência quantitativa (papagaio) — contagem oculta inicial
-//  2. Inspeção visual — aprovadas/reprovadas + defeitos + fotos
+//  2. Defeitos — registro INFORMATIVO de peças com defeito + tipos +
+//     fotos. Não é obrigatório pra concluir; "aprovadas" não é mais
+//     digitado — é DERIVADO na conclusão (recebidas − defeitos), pra
+//     manter custos e dashboard de qualidade funcionando.
 //  3. Destinação — localização armazém + destino das reprovadas
 //
-// Subconferência só pode ser concluída quando todos os 3 blocos estão
-// preenchidos. OPCONF só pode ser concluída quando todas as
-// subconferências dela estão concluidas E todas as oficinas da Costura
-// estão "finalizada".
+// Conclusão exige bloco 1 + destinação coerente. OPCONF só pode ser
+// concluída quando todas as subconferências dela estão concluidas E
+// todas as oficinas da Costura estão "finalizada".
 
 import { z } from "zod";
 import { TamanhoGradeRiscoSchema } from "./payloads/risco";
@@ -57,18 +59,36 @@ export type AtualizarSubconferenciaInput = z.infer<
 >;
 
 /**
- * Subconferência só pode ser concluída se todos os 3 blocos estão completos:
- *  Bloco 1: pecasRecebidas preenchido
- *  Bloco 2: responsavelInspecaoId + aprovadas + reprovadas + dataInspecao
- *  Bloco 3: localizacaoArmazem (se há aprovadas)
- *           + destinoReprovadas (se há reprovadas)
+ * Deriva a matriz de aprovadas a partir da contagem e dos defeitos:
+ * aprovadas[t][c] = max(0, recebidas[t][c] − defeitos[t][c]).
+ * Células de defeito sem contagem correspondente não geram aprovadas.
+ */
+export function derivarAprovadas(
+  recebidas: MatrizPecas,
+  defeitos: MatrizPecas | null,
+): MatrizPecas {
+  const out: MatrizPecas = {};
+  for (const [t, porCor] of Object.entries(recebidas)) {
+    for (const [c, n] of Object.entries(porCor)) {
+      const aprovadas = Math.max(0, n - (defeitos?.[t]?.[c] ?? 0));
+      out[t] = out[t] ?? {};
+      out[t][c] = aprovadas;
+    }
+  }
+  return out;
+}
+
+/**
+ * Regras de conclusão da subconferência:
+ *  Bloco 1: pecasRecebidas preenchido (obrigatório)
+ *  Bloco 2 (Defeitos): informativo — nada obrigatório, mas defeitos não
+ *    podem exceder o recebido
+ *  Bloco 3: localizacaoArmazem (se há aprovadas derivadas)
+ *           + destinoReprovadas (se há defeitos)
  */
 export function validarPodeConcluirSubconferencia(input: {
   pecasRecebidas: MatrizPecas | null;
-  responsavelInspecaoId: string | null;
-  aprovadas: MatrizPecas | null;
   reprovadas: MatrizPecas | null;
-  dataInspecao: Date | null;
   localizacaoArmazem: string | null;
   destinoReprovadas: DestinoReprovadas | null;
 }): { ok: true } | { ok: false; mensagem: string } {
@@ -79,34 +99,24 @@ export function validarPodeConcluirSubconferencia(input: {
         "Bloco 1 (contagem): preencha a quantidade recebida antes de concluir",
     };
   }
-  if (!input.responsavelInspecaoId) {
-    return {
-      ok: false,
-      mensagem: "Bloco 2 (inspeção): selecione o responsável pela inspeção",
-    };
-  }
-  if (!input.aprovadas || somarMatriz(input.aprovadas) === 0) {
+  const totalReprovadas = somarMatriz(input.reprovadas ?? {});
+  if (totalReprovadas > somarMatriz(input.pecasRecebidas)) {
     return {
       ok: false,
       mensagem:
-        "Bloco 2 (inspeção): preencha as peças aprovadas (ou marque 0 se nenhuma)",
+        "Bloco 2 (defeitos): peças com defeito excedem o total recebido",
     };
   }
-  if (!input.dataInspecao) {
-    return {
-      ok: false,
-      mensagem: "Bloco 2 (inspeção): registre a data da inspeção",
-    };
-  }
-  const totalReprovadas = somarMatriz(input.reprovadas ?? {});
   if (totalReprovadas > 0 && !input.destinoReprovadas) {
     return {
       ok: false,
       mensagem:
-        "Bloco 3 (destinação): defina o destino das peças reprovadas (doação/descarte/retrabalho)",
+        "Bloco 3 (destinação): defina o destino das peças com defeito (doação/descarte/retrabalho)",
     };
   }
-  const totalAprovadas = somarMatriz(input.aprovadas);
+  const totalAprovadas = somarMatriz(
+    derivarAprovadas(input.pecasRecebidas, input.reprovadas),
+  );
   if (totalAprovadas > 0 && !input.localizacaoArmazem?.trim()) {
     return {
       ok: false,

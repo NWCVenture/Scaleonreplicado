@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   AtualizarSubconferenciaSchema,
   compararMatrizes,
+  derivarAprovadas,
   somarMatriz,
   validarPodeConcluirSubconferencia,
 } from "./subconferencia";
@@ -66,15 +67,40 @@ test("compararMatrizes: célula presente só em uma matriz", () => {
   assert.equal(d[0].diferenca, -30);
 });
 
-test("validarPodeConcluirSubconferencia: payload completo → ok", () => {
+test("derivarAprovadas: recebidas − defeitos, por célula", () => {
+  const r = derivarAprovadas(
+    { M: { co1: 100, co2: 50 }, G: { co1: 30 } },
+    { M: { co1: 10 } },
+  );
+  assert.deepEqual(r, { M: { co1: 90, co2: 50 }, G: { co1: 30 } });
+});
+
+test("derivarAprovadas: defeito maior que recebido → 0 (clamp)", () => {
+  const r = derivarAprovadas({ M: { co1: 5 } }, { M: { co1: 8 } });
+  assert.deepEqual(r, { M: { co1: 0 } });
+});
+
+test("derivarAprovadas: sem defeitos (null) → cópia das recebidas", () => {
+  const r = derivarAprovadas({ M: { co1: 100 } }, null);
+  assert.deepEqual(r, { M: { co1: 100 } });
+});
+
+test("validarPodeConcluirSubconferencia: contagem + destinação → ok", () => {
   const r = validarPodeConcluirSubconferencia({
     pecasRecebidas: { M: { co1: 100 } },
-    responsavelInspecaoId: "u1",
-    aprovadas: { M: { co1: 90 } },
     reprovadas: { M: { co1: 10 } },
-    dataInspecao: new Date(),
     localizacaoArmazem: "Prateleira A",
     destinoReprovadas: "doacao",
+  });
+  assert.equal(r.ok, true);
+});
+
+test("validarPodeConcluirSubconferencia: defeitos não são obrigatórios", () => {
+  const r = validarPodeConcluirSubconferencia({
+    pecasRecebidas: { M: { co1: 100 } },
+    reprovadas: null,
+    localizacaoArmazem: "Prateleira A",
+    destinoReprovadas: null,
   });
   assert.equal(r.ok, true);
 });
@@ -82,10 +108,7 @@ test("validarPodeConcluirSubconferencia: payload completo → ok", () => {
 test("validarPodeConcluirSubconferencia: sem contagem → erro", () => {
   const r = validarPodeConcluirSubconferencia({
     pecasRecebidas: null,
-    responsavelInspecaoId: "u1",
-    aprovadas: { M: { co1: 90 } },
     reprovadas: null,
-    dataInspecao: new Date(),
     localizacaoArmazem: "Prateleira A",
     destinoReprovadas: null,
   });
@@ -93,13 +116,10 @@ test("validarPodeConcluirSubconferencia: sem contagem → erro", () => {
   if (!r.ok) assert.match(r.mensagem, /contagem/i);
 });
 
-test("validarPodeConcluirSubconferencia: reprovadas sem destino → erro", () => {
+test("validarPodeConcluirSubconferencia: defeitos sem destino → erro", () => {
   const r = validarPodeConcluirSubconferencia({
     pecasRecebidas: { M: { co1: 100 } },
-    responsavelInspecaoId: "u1",
-    aprovadas: { M: { co1: 90 } },
     reprovadas: { M: { co1: 10 } },
-    dataInspecao: new Date(),
     localizacaoArmazem: "Prateleira A",
     destinoReprovadas: null,
   });
@@ -107,16 +127,24 @@ test("validarPodeConcluirSubconferencia: reprovadas sem destino → erro", () =>
   if (!r.ok) assert.match(r.mensagem, /destino/i);
 });
 
-test("validarPodeConcluirSubconferencia: aprovadas sem localização → erro", () => {
+test("validarPodeConcluirSubconferencia: aprovadas derivadas sem localização → erro", () => {
   const r = validarPodeConcluirSubconferencia({
     pecasRecebidas: { M: { co1: 100 } },
-    responsavelInspecaoId: "u1",
-    aprovadas: { M: { co1: 100 } },
     reprovadas: null,
-    dataInspecao: new Date(),
     localizacaoArmazem: null,
     destinoReprovadas: null,
   });
   assert.equal(r.ok, false);
   if (!r.ok) assert.match(r.mensagem, /localiza/i);
+});
+
+test("validarPodeConcluirSubconferencia: defeitos excedem recebido → erro", () => {
+  const r = validarPodeConcluirSubconferencia({
+    pecasRecebidas: { M: { co1: 100 } },
+    reprovadas: { M: { co1: 120 } },
+    localizacaoArmazem: "Prateleira A",
+    destinoReprovadas: "descarte",
+  });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.match(r.mensagem, /excedem/i);
 });
