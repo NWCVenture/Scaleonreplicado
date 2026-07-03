@@ -1,9 +1,9 @@
 "use client";
 
-// Tela da OP com header fixo + abas horizontais das 5/6 subtasks (estilo
-// abas de planilha, na parte de cima). A subtask ativa ocupa a página,
-// sem card. URLs próprias por subtask via
-// /confeccao/ops/[numero]/subtasks/[prefixo].
+// Tela "Visão geral" da OP: header + KPIs + fardos + histórico. Cada
+// subtask tem sua PRÓPRIA página em /confeccao/ops/[numero]/subtasks/
+// [prefixo]; a navegação entre elas é pela barra de abas (OpAbasNav)
+// no topo, estilo abas de planilha.
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -12,7 +12,6 @@ import { Scale } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/lib/auth-client";
 import { usePapelAtivo } from "@/hooks/use-papel-ativo";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -22,25 +21,13 @@ import {
 } from "@/components/ui/sheet";
 import { OPHeader } from "@/components/confeccao/op-header";
 import { OpDashboardStrip } from "@/components/confeccao/op-dashboard-strip";
-import { SubtaskPagina } from "@/components/confeccao/subtask-pagina";
-import { SUBTASK_PREFIXO_LABEL } from "@/components/confeccao/subtask-status-badge";
+import { OpAbasNav } from "@/components/confeccao/op-abas-nav";
 import { NotasOP } from "@/components/confeccao/notas-op";
 import { FardosNoEstoque } from "@/components/confeccao/fardos-no-estoque";
 import { derivarKpisOp } from "@/lib/confeccao/dashboard-kpis";
 import { totalRolosRecebidos } from "@/lib/confeccao/matching-rolos";
 import type { SubtaskCortePayload } from "@/lib/confeccao/schemas/payloads/corte";
-import type {
-  ConfeccaoSubtask,
-  ConfeccaoSubtaskStatus,
-} from "@/lib/db/schema";
-
-const STATUS_DOT: Record<ConfeccaoSubtaskStatus, string> = {
-  bloqueada: "bg-slate-300",
-  pendente: "bg-amber-400",
-  em_andamento: "bg-blue-500",
-  concluida: "bg-emerald-500",
-  cancelada: "bg-red-500",
-};
+import type { ConfeccaoSubtask } from "@/lib/db/schema";
 
 interface OPDetalhe {
   op: {
@@ -81,11 +68,9 @@ export default function OPDetailPage({
   const { numero } = use(params);
   const router = useRouter();
   const { data: session, isPending } = useSession();
-  const { isAdmin, me } = usePapelAtivo();
-  const contaId = me?.contaAtivaId ?? "";
+  const { isAdmin } = usePapelAtivo();
 
   const [data, setData] = useState<OPDetalhe | null>(null);
-  const [abaAtiva, setAbaAtiva] = useState<string | null>(null); // prefixo
   const [historicoOpen, setHistoricoOpen] = useState(false);
   // Garante que o fetch inicial e o redirect-de-login rodem no máximo uma
   // vez por vida do componente. Sem esse latch, qualquer oscilação na
@@ -109,15 +94,6 @@ export default function OPDetailPage({
       if (!res.ok) throw new Error();
       const json = (await res.json()) as OPDetalhe;
       setData(json);
-      // Seleciona a primeira subtask "pendente" ou "em_andamento".
-      // Não muda se o usuário já escolheu uma aba.
-      setAbaAtiva((prev) => {
-        if (prev) return prev;
-        const ativa = json.subtasks.find(
-          (s) => s.status === "pendente" || s.status === "em_andamento",
-        );
-        return (ativa ?? json.subtasks[0])?.prefixo ?? null;
-      });
     } catch {
       toast.error("Erro ao carregar OP");
     }
@@ -157,6 +133,9 @@ export default function OPDetailPage({
 
   return (
     <div className="space-y-4">
+      <div className="pt-4">
+        <OpAbasNav opNumero={data.op.numero} subtasks={data.subtasks} />
+      </div>
       <OPHeader
         numero={data.op.numero}
         status={data.op.status}
@@ -207,63 +186,6 @@ export default function OPDetailPage({
         opNumero={data.op.numero}
         opStatus={data.op.status}
       />
-
-      {/* Abas horizontais das subtasks (estilo abas de planilha) */}
-      <div>
-        <div className="flex items-end gap-1 overflow-x-auto border-b">
-          {data.subtasks.map((s) => {
-            const bloqueada = s.status === "bloqueada";
-            const ativa = abaAtiva === s.prefixo;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                disabled={bloqueada}
-                onClick={() => setAbaAtiva(s.prefixo)}
-                title={
-                  bloqueada
-                    ? "Aguardando conclusão da subtask anterior"
-                    : undefined
-                }
-                className={cn(
-                  "flex items-center gap-2 rounded-t-md border border-b-0 px-4 py-2 text-sm whitespace-nowrap transition-colors",
-                  ativa
-                    ? "-mb-px border-border bg-background font-medium"
-                    : "border-transparent bg-muted/50 text-muted-foreground hover:bg-accent/50",
-                  bloqueada && "cursor-not-allowed opacity-50",
-                )}
-              >
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {s.ordemSequencial}
-                </span>
-                {SUBTASK_PREFIXO_LABEL[s.prefixo] ?? s.prefixo}
-                <span
-                  className={cn(
-                    "size-2 shrink-0 rounded-full",
-                    STATUS_DOT[s.status],
-                  )}
-                />
-              </button>
-            );
-          })}
-        </div>
-
-        {(() => {
-          const ativa = data.subtasks.find((s) => s.prefixo === abaAtiva);
-          if (!ativa) return null;
-          return (
-            <div className="pt-4">
-              <SubtaskPagina
-                subtask={ativa}
-                opNumero={data.op.numero}
-                contaId={contaId}
-                onAlterado={() => void fetchOp()}
-                mostrarAbrirEmNovaAba
-              />
-            </div>
-          );
-        })()}
-      </div>
 
       <div className="flex items-center justify-between">
         {(() => {

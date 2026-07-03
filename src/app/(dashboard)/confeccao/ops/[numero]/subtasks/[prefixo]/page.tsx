@@ -1,8 +1,8 @@
 "use client";
 
-// Página single-subtask em layout full — abre em nova aba via botão "↗"
-// na tela da OP. Mostra mini-header com link voltar + conteúdo da
-// subtask direto na tela (sem card).
+// Página individual da subtask — cada subtask da OP tem a sua, e a
+// navegação entre elas é pela barra de abas (OpAbasNav) no topo, estilo
+// abas de planilha. Conteúdo direto na tela, sem card.
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { useSession } from "@/lib/auth-client";
 import { usePapelAtivo } from "@/hooks/use-papel-ativo";
 import { Button } from "@/components/ui/button";
+import { OpAbasNav } from "@/components/confeccao/op-abas-nav";
 import { SubtaskPagina } from "@/components/confeccao/subtask-pagina";
 import type {
   ConfeccaoSubtask,
@@ -120,17 +121,12 @@ export default function SubtaskFullPage({
   }
 
   return (
-    <div className="pt-6 space-y-4">
-      <div className="flex items-center justify-between gap-4">
-        <Button variant="ghost" size="sm" asChild>
-          <Link href={`/confeccao/ops/${numero}`}>
-            <ArrowLeft className="size-4" />
-            Voltar à OP {opData.op.numero}
-          </Link>
-        </Button>
-        <span className="text-xs text-muted-foreground">
-          {opData.op.produtoNome}
-        </span>
+    <div className="pt-4 space-y-4">
+      <OpAbasNav opNumero={opData.op.numero} subtasks={opData.subtasks} />
+
+      <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground">
+        <span className="font-mono">OP {opData.op.numero}</span>
+        <span>{opData.op.produtoNome}</span>
       </div>
 
       <SubtaskPagina
