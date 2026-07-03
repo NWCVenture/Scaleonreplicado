@@ -369,7 +369,10 @@ interface LinhaContagem {
   valor: string;
 }
 
-const LINHAS_INICIAIS = 5;
+// Uma única linha inicial: as próximas nascem na digitação e herdam o
+// tamanho da anterior — com várias linhas pré-criadas o tamanho viria
+// vazio e teria que ser selecionado à mão em cada uma.
+const LINHAS_INICIAIS = 1;
 
 function novaLinhaContagem(
   tamanho: TamanhoGradeRisco | "" = "",
