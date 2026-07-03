@@ -46,7 +46,15 @@ export function OpAbasNav({
 
   return (
     <div className="flex items-end gap-1 overflow-x-auto border-b">
-      <Link href={base} className={classesAba(pathname === base)}>
+      {/* prefetch={true}: rota dinâmica sem loading.js não é pré-carregada
+          por padrão — sem isso, cada clique de aba espera uma ida ao
+          servidor buscar o payload RSC (~segundos). Com prefetch cheio,
+          as rotas das abas carregam em background e a troca é imediata. */}
+      <Link
+        href={base}
+        prefetch={true}
+        className={classesAba(pathname === base)}
+      >
         Visão geral
       </Link>
       {subtasks.map((s) => {
@@ -79,7 +87,12 @@ export function OpAbasNav({
           );
         }
         return (
-          <Link key={s.id} href={href} className={classesAba(pathname === href)}>
+          <Link
+            key={s.id}
+            href={href}
+            prefetch={true}
+            className={classesAba(pathname === href)}
+          >
             {conteudo}
           </Link>
         );
