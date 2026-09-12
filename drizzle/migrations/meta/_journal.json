@@ -260,6 +260,20 @@
       "when": 1781213761545,
       "tag": "0036_funny_frightful_four",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1789255979268,
+      "tag": "0037_fresh_nekra",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1789256063946,
+      "tag": "0038_neat_earthquake",
+      "breakpoints": true
     }
   ]
 }
