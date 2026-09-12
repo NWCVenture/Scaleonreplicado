@@ -160,6 +160,8 @@ export async function POST(
         sku: string;
         lote: string;
         quantidade: number;
+        codigoFardo: string | null;
+        fardoUuid: string | null;
       }> = [];
       // Detecta duplicatas dentro do próprio batch (mesmo uuid/codigoFardo
       // chegando duas vezes no mesmo POST).
@@ -235,6 +237,8 @@ export async function POST(
           sku: cand.sku,
           lote: cand.lote,
           quantidade: cand.quantidade,
+          codigoFardo: parsedCodigo ?? null,
+          fardoUuid: parsedUuid ?? null,
         });
       }
 
@@ -252,18 +256,54 @@ export async function POST(
           )
         );
 
-      const newFardos = aInserir.map((f) => ({
+      const candidatosInsert = aInserir.map((f) => ({
         id: generateId(),
         estanteId: id,
         qrCode: f.qrCode,
         sku: f.sku,
         lote: f.lote,
         quantidade: f.quantidade,
+        codigoFardo: f.codigoFardo,
+        fardoUuid: f.fardoUuid,
         adicionadoPor: session.user.id,
         contaId,
       }));
 
-      await tx.insert(estanteFardo).values(newFardos);
+      // O banco é a autoridade, não a verificação acima.
+      //
+      // A varredura em memória continua porque dá uma mensagem melhor ("já
+      // existe na estante X"), mas ela não sobrevive a duas bipagens
+      // simultâneas: sob READ COMMITTED ambas leem "não existe" e ambas
+      // chegam aqui. Quem arbitra é o índice único parcial (RITM-04).
+      //
+      // `onConflictDoNothing` sem alvo cobre os dois índices — uuid e
+      // codigo_fardo. O `returning` diz o que de fato entrou: o que não
+      // voltou foi recusado pelo banco, e vira `skipped` em vez de derrubar
+      // a requisição inteira com 500.
+      const inseridos = await tx
+        .insert(estanteFardo)
+        .values(candidatosInsert)
+        .onConflictDoNothing()
+        .returning({ id: estanteFardo.id });
+
+      const idsInseridos = new Set(inseridos.map((r) => r.id));
+      const newFardos = candidatosInsert.filter((f) => idsInseridos.has(f.id));
+
+      for (const f of candidatosInsert) {
+        if (idsInseridos.has(f.id)) continue;
+        // Perdeu a corrida: outra requisição gravou esta mesma etiqueta entre
+        // a nossa leitura e a nossa escrita.
+        skipped.push({
+          qrCode: f.qrCode,
+          sku: f.sku,
+          lote: f.lote,
+          motivo: "duplicado-mesma-estante",
+        });
+      }
+
+      if (newFardos.length === 0) {
+        return { added: 0, skipped, recusados, semVerificacao };
+      }
 
       if (data.origem === "importacao") {
         // Mantém o comportamento legado da Importar Balanço: 1 linha
@@ -288,7 +328,8 @@ export async function POST(
           fardoLote: null,
           fardoQuantidade: null,
           totalAntes,
-          totalDepois: totalAntes + aInserir.length,
+          // newFardos, não aInserir: o banco pode ter recusado parte do lote.
+          totalDepois: totalAntes + newFardos.length,
           totalPecas,
           usuarioId: session.user.id,
           contaId,
@@ -313,7 +354,7 @@ export async function POST(
         await tx.insert(estanteMovimentacao).values(movs);
       }
 
-      return { added: aInserir.length, skipped, recusados, semVerificacao };
+      return { added: newFardos.length, skipped, recusados, semVerificacao };
     });
 
     if (!result) {
@@ -333,6 +374,18 @@ export async function POST(
     }
     if (isTenancyAuthError(error)) {
       return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
+
+    // Rede de segurança. O caminho normal é `onConflictDoNothing`, que trata
+    // a colisão sem lançar — se um 23505 chega até aqui, é uma restrição que
+    // esse ON CONFLICT não cobre. Responder 409 evita transformar duplicata
+    // em erro de servidor pro operador.
+    const pgCode = (error as { code?: string }).code;
+    if (pgCode === "23505") {
+      return NextResponse.json(
+        { error: "Fardo já cadastrado" },
+        { status: 409 }
+      );
     }
 
     console.error("Error adding fardos:", error);
