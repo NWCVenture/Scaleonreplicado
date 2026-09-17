@@ -42,8 +42,14 @@ export function extractFlexIds(text: string): string[] {
   return ids;
 }
 
+// O código precisa estar isolado: nenhum dígito ou letra colado antes ou
+// depois. Sem essa exigência a regex recortava pedaços de números maiores —
+// as etiquetas TikTok/iMile trazem, além do rastreio, a chave da NF-e
+// (44 dígitos) e o Nº de Ref (19 dígitos), que viravam 3 e 1 pacotes falsos.
+// Também evita cortar um código de 13-14 dígitos que comece com "4" na
+// alternativa do Mercado Livre (11 dígitos).
 export function extractShippingIds(text: string): string[] {
-  const re = /(4\d{10}|BR\d{12,13}[A-Z]?|\d{13,14})/g;
+  const re = /(?<![0-9A-Za-z])(4\d{10}|BR\d{12,13}[A-Z]?|\d{13,14})(?![0-9A-Za-z])/g;
   return text.match(re) || [];
 }
 

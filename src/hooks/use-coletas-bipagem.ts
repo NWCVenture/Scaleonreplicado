@@ -44,10 +44,20 @@ export function useColetasBipagem() {
   // Returns { newIds, duplicates } for parent to play sounds
   const processText = useCallback(
     (text: string): { newIds: string[]; duplicates: string[] } => {
-      if (!text.trim() || text.trim() === lastProcessedText.current) {
+      const trimmed = text.trim();
+      if (!trimmed) {
         return { newIds: [], duplicates: [] };
       }
-      lastProcessedText.current = text.trim();
+      // Com "Deduplicar" ligado, uma leitura igual à anterior segue o fluxo
+      // normal e é reportada como duplicada (aviso + som de erro). Antes ela
+      // era descartada em silêncio aqui, e o operador que bipava a mesma
+      // etiqueta duas vezes ficava sem saber se o bipe tinha sido lido.
+      // Com "Deduplicar" desligado o descarte da leitura consecutiva idêntica
+      // é mantido como estava.
+      if (!dedup && trimmed === lastProcessedText.current) {
+        return { newIds: [], duplicates: [] };
+      }
+      lastProcessedText.current = trimmed;
 
       let extracted: string[];
       if (currentFunction === "FLEX") {
