@@ -86,7 +86,7 @@ jobs:
         run: npx tsx scripts/auditar-duplicatas-estante.ts
 
       # ── Backup criptografado (backup e aplicar) ──────────────────────
-      - name: Instalar postgresql-client-17
+      - name: Instalar postgresql-client-18
         if: env.MODO != 'auditar'
         run: |
           sudo install -d /usr/share/postgresql-common/pgdg
@@ -95,10 +95,10 @@ jobs:
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-17 > /dev/null
-          # O runner traz o client 16 em /usr/bin; força o 17, senão o pg_dump
-          # recusa a versão maior do servidor (ver backup-confeccao.yml).
-          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          sudo apt-get install -y -qq postgresql-client-18 > /dev/null
+          # O runner traz um client antigo em /usr/bin; força o 18, senão o pg_dump
+          # recusa a versão maior do servidor. O Neon de produção é Postgres 18.
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
 
       - name: Backup criptografado
         if: env.MODO != 'auditar'
