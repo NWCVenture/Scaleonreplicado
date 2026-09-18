@@ -555,6 +555,17 @@ export const estanteFardo = pgTable(
     sku: text("sku").notNull(),
     lote: text("lote").notNull(),
     quantidade: integer("quantidade").notNull(),
+    // Identidade do fardo, extraída do `qr_code` pelo servidor na escrita.
+    // Existe como coluna porque a identidade fica enterrada dentro da string
+    // e string não se indexa por pedaço — sem isso não há como o banco
+    // recusar uma bipagem repetida.
+    //
+    // Ambas nulas em etiqueta v1 (`SKU}LOTE}QTD`), que não carrega
+    // identificador: dois fardos físicos distintos do mesmo produto, lote e
+    // quantidade produzem strings idênticas. Por isso os índices são
+    // parciais — protegem só onde há o que proteger.
+    codigoFardo: text("codigo_fardo"),
+    fardoUuid: text("fardo_uuid"),
     adicionadoPor: text("adicionado_por")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
@@ -568,6 +579,23 @@ export const estanteFardo = pgTable(
     index("idx_estante_fardo_estante").on(table.estanteId),
     index("idx_estante_fardo_sku").on(table.sku),
     index("idx_estante_fardo_conta").on(table.contaId),
+    // A catraca. Verificação em código não sobrevive a duas bipagens
+    // simultâneas — sob READ COMMITTED ambas leem "não existe" e ambas
+    // gravam. Só o banco arbitra, porque é o único ponto por onde as duas
+    // escritas obrigatoriamente passam.
+    //
+    // Escopado por conta_id, como `uq_sku_catalogo_codigo_conta`. Não segue
+    // o modelo de `stock_item.codigo_fardo`, que é UNIQUE global e portanto
+    // deixa uma empresa bloquear a bipagem de outra.
+    //
+    // Parcial (`WHERE ... IS NOT NULL`) porque etiqueta v1 não carrega
+    // identificador: exigir unicidade ali recusaria estoque legítimo.
+    uniqueIndex("uq_estante_fardo_uuid_conta")
+      .on(table.contaId, table.fardoUuid)
+      .where(sql`fardo_uuid IS NOT NULL`),
+    uniqueIndex("uq_estante_fardo_codigo_conta")
+      .on(table.contaId, table.codigoFardo)
+      .where(sql`codigo_fardo IS NOT NULL`),
   ]
 );
 

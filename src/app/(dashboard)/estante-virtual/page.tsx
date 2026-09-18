@@ -275,6 +275,12 @@ export default function EstanteVirtualPage() {
           motivo: "duplicado-mesma-estante" | "ja-existe-outra-estante";
           estanteNome?: string;
         }>;
+        recusados?: Array<{
+          qrCode: string;
+          motivo: string;
+          detalhe: string;
+        }>;
+        semVerificacao?: Array<{ qrCode: string; sku: string; lote: string }>;
       } = await res.json();
 
       if (data.added > 0) {
@@ -287,6 +293,27 @@ export default function EstanteVirtualPage() {
             ? `Já existe em outra estante (${s.estanteNome ?? "—"}): ${s.sku} (lote ${s.lote})`
             : `Duplicado: ${s.sku} (lote ${s.lote})`;
         appendLog("warning", msg);
+      }
+      // Etiqueta fora do contrato: não entrou. Antes o payload malformado
+      // era gravado igual, com os campos excedentes descartados em silêncio.
+      for (const r of data.recusados ?? []) {
+        appendLog(
+          "error",
+          `Etiqueta recusada (${r.motivo}): ${r.detalhe} — ${r.qrCode.slice(0, 40)}…`,
+        );
+      }
+      // Etiqueta v1 (sem identificador): entrou, mas ninguém conseguiu
+      // verificar se já existia. O operador precisa saber disso.
+      for (const s of data.semVerificacao ?? []) {
+        appendLog(
+          "warning",
+          `Incluído SEM verificação de duplicata (etiqueta antiga sem identificador): ${s.sku} (lote ${s.lote})`,
+        );
+      }
+      if ((data.recusados?.length ?? 0) > 0) {
+        toast.error(
+          `${data.recusados!.length} etiqueta(s) recusada(s) — ver log da sessão`,
+        );
       }
       if (data.added === 0 && (data.skipped?.length ?? 0) > 0) {
         toast.warning(`Nenhum fardo adicionado — ver log da sessão`);

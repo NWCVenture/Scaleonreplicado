@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX "uq_estante_fardo_uuid_conta" ON "estante_fardo" USING btree ("conta_id","fardo_uuid") WHERE fardo_uuid IS NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "uq_estante_fardo_codigo_conta" ON "estante_fardo" USING btree ("conta_id","codigo_fardo") WHERE codigo_fardo IS NOT NULL;

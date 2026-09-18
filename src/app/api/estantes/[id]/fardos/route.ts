@@ -7,6 +7,12 @@ import { z } from "zod";
 import { generateId } from "@/lib/utils";
 import { withContaAtiva } from "@/lib/tenancy";
 import { parseQRCode } from "@/lib/estante-utils";
+import {
+  temIdentidade,
+  validarQR,
+  type FardoValidado,
+  type MotivoRecusa,
+} from "@/lib/estante-virtual/fardo-qr";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -17,10 +23,18 @@ const addFardoSchema = z.object({
   fardos: z
     .array(
       z.object({
+        // Sem limite de tamanho aqui de propósito: quem julga tamanho é
+        // `validarQR`, por item. Um `.max()` no schema derrubaria o lote
+        // inteiro com 400 por causa de uma única etiqueta malformada, em vez
+        // de aceitar as boas e reportar a ruim em `recusados`.
         qrCode: z.string().min(1),
-        sku: z.string().min(1),
-        lote: z.string().min(1),
-        quantidade: z.number().int().positive(),
+        // sku/lote/quantidade ainda são aceitos por compatibilidade com
+        // clientes antigos, mas são IGNORADOS: o servidor deriva tudo do
+        // próprio qrCode. Confiar no cliente era o que permitia gravar SKU
+        // divergente da etiqueta — e sem normalização nenhuma.
+        sku: z.string().optional(),
+        lote: z.string().optional(),
+        quantidade: z.number().int().positive().optional(),
       })
     )
     .min(1),
@@ -36,6 +50,25 @@ type SkippedFardo = {
   lote: string;
   motivo: "duplicado-mesma-estante" | "ja-existe-outra-estante";
   estanteNome?: string;
+};
+
+/** Etiqueta que nem chegou a ser avaliada: formato fora do contrato. */
+type RecusadoFardo = {
+  qrCode: string;
+  motivo: MotivoRecusa;
+  detalhe: string;
+};
+
+/**
+ * Etiqueta v1 (`SKU}LOTE}QTD`): entrou, mas sem passar por verificação de
+ * duplicata — ela não carrega identificador, então é impossível distinguir
+ * uma re-bipagem de um segundo fardo legítimo. Antes isso acontecia em
+ * silêncio, com a mesma mensagem de sucesso de uma inclusão verificada.
+ */
+type SemVerificacaoFardo = {
+  qrCode: string;
+  sku: string;
+  lote: string;
 };
 
 export async function POST(
@@ -62,16 +95,45 @@ export async function POST(
         return null;
       }
 
-      // ── Validação anti-duplicata ───────────────────────────────────
-      // Pra cada fardo recebido, extrai uuid e codigoFardo do payload do QR.
-      // Em seguida, busca em todas as estantes da conta (incluindo a atual)
-      // qualquer fardo cujo qr_code carregue o mesmo uuid OU o mesmo
-      // codigoFardo. Quando há colisão, o fardo é descartado e reportado em
-      // `skipped` com o motivo + nome da estante onde já está.
-      const candidates = data.fardos.map((f) => ({
-        ...f,
-        parsed: parseQRCode(f.qrCode),
+      // ── Etapa 1: validação de formato ──────────────────────────────
+      // Régua estrita (src/lib/estante-virtual/fardo-qr.ts): tamanho máximo
+      // e contagem de campos exata. O que não passa é recusado com motivo,
+      // sem contaminar o resto do lote — os demais fardos seguem normalmente.
+      const recusados: RecusadoFardo[] = [];
+      const validos: FardoValidado[] = [];
+
+      for (const f of data.fardos) {
+        const r = validarQR(f.qrCode);
+        if (!r.ok) {
+          recusados.push({
+            qrCode: f.qrCode.slice(0, 120),
+            motivo: r.motivo,
+            detalhe: r.detalhe,
+          });
+          continue;
+        }
+        validos.push(r.fardo);
+      }
+
+      // ── Etapa 2: anti-duplicata ────────────────────────────────────
+      // Compara uuid e codigoFardo contra todas as estantes da conta. Só
+      // alcança etiquetas que carregam identificador; as v1 passam direto
+      // e são reportadas em `semVerificacao`.
+      const candidates = validos.map((fardo) => ({
+        qrCode: fardo.qrCode,
+        sku: fardo.sku,
+        lote: fardo.lote,
+        quantidade: fardo.quantidade,
+        parsed: {
+          codigoFardo: fardo.codigoFardo ?? undefined,
+          uuid: fardo.fardoUuid ?? undefined,
+        },
+        temIdentidade: temIdentidade(fardo),
       }));
+
+      const semVerificacao: SemVerificacaoFardo[] = candidates
+        .filter((c) => !c.temIdentidade)
+        .map((c) => ({ qrCode: c.qrCode, sku: c.sku, lote: c.lote }));
 
       const existentes = await tx
         .select({
@@ -92,7 +154,15 @@ export async function POST(
       }));
 
       const skipped: SkippedFardo[] = [];
-      const aInserir: typeof data.fardos = [];
+      // Campos derivados do QR pelo servidor — nunca o que o cliente mandou.
+      const aInserir: Array<{
+        qrCode: string;
+        sku: string;
+        lote: string;
+        quantidade: number;
+        codigoFardo: string | null;
+        fardoUuid: string | null;
+      }> = [];
       // Detecta duplicatas dentro do próprio batch (mesmo uuid/codigoFardo
       // chegando duas vezes no mesmo POST).
       const uuidsBatch = new Set<string>();
@@ -167,11 +237,13 @@ export async function POST(
           sku: cand.sku,
           lote: cand.lote,
           quantidade: cand.quantidade,
+          codigoFardo: parsedCodigo ?? null,
+          fardoUuid: parsedUuid ?? null,
         });
       }
 
       if (aInserir.length === 0) {
-        return { added: 0, skipped };
+        return { added: 0, skipped, recusados, semVerificacao };
       }
 
       const [{ count: totalAntes }] = await tx
@@ -184,18 +256,54 @@ export async function POST(
           )
         );
 
-      const newFardos = aInserir.map((f) => ({
+      const candidatosInsert = aInserir.map((f) => ({
         id: generateId(),
         estanteId: id,
         qrCode: f.qrCode,
         sku: f.sku,
         lote: f.lote,
         quantidade: f.quantidade,
+        codigoFardo: f.codigoFardo,
+        fardoUuid: f.fardoUuid,
         adicionadoPor: session.user.id,
         contaId,
       }));
 
-      await tx.insert(estanteFardo).values(newFardos);
+      // O banco é a autoridade, não a verificação acima.
+      //
+      // A varredura em memória continua porque dá uma mensagem melhor ("já
+      // existe na estante X"), mas ela não sobrevive a duas bipagens
+      // simultâneas: sob READ COMMITTED ambas leem "não existe" e ambas
+      // chegam aqui. Quem arbitra é o índice único parcial (RITM-04).
+      //
+      // `onConflictDoNothing` sem alvo cobre os dois índices — uuid e
+      // codigo_fardo. O `returning` diz o que de fato entrou: o que não
+      // voltou foi recusado pelo banco, e vira `skipped` em vez de derrubar
+      // a requisição inteira com 500.
+      const inseridos = await tx
+        .insert(estanteFardo)
+        .values(candidatosInsert)
+        .onConflictDoNothing()
+        .returning({ id: estanteFardo.id });
+
+      const idsInseridos = new Set(inseridos.map((r) => r.id));
+      const newFardos = candidatosInsert.filter((f) => idsInseridos.has(f.id));
+
+      for (const f of candidatosInsert) {
+        if (idsInseridos.has(f.id)) continue;
+        // Perdeu a corrida: outra requisição gravou esta mesma etiqueta entre
+        // a nossa leitura e a nossa escrita.
+        skipped.push({
+          qrCode: f.qrCode,
+          sku: f.sku,
+          lote: f.lote,
+          motivo: "duplicado-mesma-estante",
+        });
+      }
+
+      if (newFardos.length === 0) {
+        return { added: 0, skipped, recusados, semVerificacao };
+      }
 
       if (data.origem === "importacao") {
         // Mantém o comportamento legado da Importar Balanço: 1 linha
@@ -220,7 +328,8 @@ export async function POST(
           fardoLote: null,
           fardoQuantidade: null,
           totalAntes,
-          totalDepois: totalAntes + aInserir.length,
+          // newFardos, não aInserir: o banco pode ter recusado parte do lote.
+          totalDepois: totalAntes + newFardos.length,
           totalPecas,
           usuarioId: session.user.id,
           contaId,
@@ -245,7 +354,7 @@ export async function POST(
         await tx.insert(estanteMovimentacao).values(movs);
       }
 
-      return { added: aInserir.length, skipped };
+      return { added: newFardos.length, skipped, recusados, semVerificacao };
     });
 
     if (!result) {
@@ -265,6 +374,18 @@ export async function POST(
     }
     if (isTenancyAuthError(error)) {
       return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+    }
+
+    // Rede de segurança. O caminho normal é `onConflictDoNothing`, que trata
+    // a colisão sem lançar — se um 23505 chega até aqui, é uma restrição que
+    // esse ON CONFLICT não cobre. Responder 409 evita transformar duplicata
+    // em erro de servidor pro operador.
+    const pgCode = (error as { code?: string }).code;
+    if (pgCode === "23505") {
+      return NextResponse.json(
+        { error: "Fardo já cadastrado" },
+        { status: 409 }
+      );
     }
 
     console.error("Error adding fardos:", error);
