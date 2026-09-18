@@ -16,11 +16,14 @@ interface ScanOverlayProps {
 }
 
 export function ScanOverlay({ visible, content, onHide }: ScanOverlayProps) {
+  // Reinicia a contagem a cada bipe novo (content muda) e só nele. Depende de
+  // onHide ser estável no pai — senão todo re-render reinicia o timer e o
+  // aviso nunca some enquanto o operador digita.
   useEffect(() => {
     if (!visible) return;
     const timer = setTimeout(() => onHide(), 1500);
     return () => clearTimeout(timer);
-  }, [visible, onHide]);
+  }, [visible, content, onHide]);
 
   if (!visible) return null;
 

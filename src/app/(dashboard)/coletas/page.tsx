@@ -67,6 +67,10 @@ import {
 // Sem isso, cada bipe seguinte refaz POST → spam de toast.
 const INIT_RETRY_THROTTLE_MS = 5000;
 
+// Espera sem digitação antes de processar quando a leitura não termina com
+// Enter (leitor sem sufixo ou texto colado). Ver handleTextareaChange.
+const LEITURA_SEM_ENTER_MS = 300;
+
 type ViewMode = "bipagem" | "historico" | "configuracoes";
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -525,10 +529,21 @@ export default function ColetasPage() {
     [playSound],
   );
 
-  // Debounce o processText em vez de empilhar um setTimeout por keystroke.
-  // Scanner manda burst de 10-20 chars em ~50ms — antes a gente rodava o
-  // extrator de IDs N vezes (uma por keystroke), agora roda 1 vez com o
-  // texto completo. Isso reduz drasticamente CPU em sessões longas.
+  // Referência estável: o ScanOverlay reinicia o timer de esconder quando
+  // onHide muda. Com uma arrow inline, cada re-render (cada tecla digitada)
+  // reiniciava o timer e o "Bipado" do pacote anterior ficava preso na tela
+  // enquanto o operador bipava o próximo — inclusive um código não reconhecido.
+  const hideOverlay = useCallback(() => setOverlayVisible(false), []);
+
+  // Quando processar a leitura:
+  //  - Leitor que envia Enter no fim (caso comum): processa na hora em que o
+  //    Enter chega. É o único sinal confiável de que a leitura terminou.
+  //  - Leitor sem Enter ou texto colado: espera LEITURA_SEM_ENTER_MS sem
+  //    digitação. Antes essa espera era de 30ms e valia para todos os casos —
+  //    qualquer engasgo do navegador no meio de uma leitura partia o código
+  //    em dois pedaços, e o auto-limpar descartava o primeiro.
+  // Em ambos os casos o extrator roda 1 vez com o texto completo, não 1 vez
+  // por tecla.
   const processTimerRef = useRef<NodeJS.Timeout | null>(null);
   const handleTextareaChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -537,8 +552,10 @@ export default function ColetasPage() {
 
       if (processTimerRef.current) {
         clearTimeout(processTimerRef.current);
+        processTimerRef.current = null;
       }
-      processTimerRef.current = setTimeout(() => {
+
+      const processarLeitura = () => {
         const result = bipagem.processText(value);
         if (result.newIds.length > 0) {
           const lastId = result.newIds[result.newIds.length - 1];
@@ -558,7 +575,15 @@ export default function ColetasPage() {
         if (bipagem.autoClear) {
           bipagem.setInputValue("");
         }
-      }, 30);
+      };
+
+      // "Termina com" e não "contém": com o auto-limpar desligado o campo
+      // acumula leituras anteriores, e "contém" reprocessaria a cada tecla.
+      if (/[\r\n]$/.test(value)) {
+        processarLeitura();
+      } else {
+        processTimerRef.current = setTimeout(processarLeitura, LEITURA_SEM_ENTER_MS);
+      }
     },
     [bipagem, showOverlay, getCarrier, setDevolucaoPacketId, setDevolucaoModalOpen],
   );
@@ -1325,7 +1350,7 @@ export default function ColetasPage() {
       <ScanOverlay
         visible={overlayVisible}
         content={overlayContent}
-        onHide={() => setOverlayVisible(false)}
+        onHide={hideOverlay}
       />
 
       {/* Devolucao modal */}
