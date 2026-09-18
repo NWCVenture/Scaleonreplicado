@@ -1,0 +1,169 @@
+name: Manutenção do banco — Estante Virtual
+
+# Operações no banco de PRODUÇÃO para o deploy da catraca da Estante Virtual.
+# Disparo manual. Procedimento completo em
+# docs/runbooks/deploy-estante-virtual-catraca.md.
+#
+# Repositório público: log e artefatos são visíveis a qualquer pessoa.
+#  - Os scripts rodam com SAIDA_RESUMIDA=1 e imprimem só contagens.
+#  - Todo arquivo com dados (backup, relatório de linhas removidas) sai
+#    criptografado com a chave pública GPG informada no disparo. Só quem tem a
+#    chave privada abre.
+#  - Entradas do disparo chegam aos scripts por variável de ambiente, nunca
+#    interpoladas no shell.
+
+on:
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "auditar = só leitura | backup = cópia criptografada | aplicar = executa a mudança"
+        type: choice
+        options: [auditar, backup, aplicar]
+        default: auditar
+        required: true
+      chave_publica_b64:
+        description: "Chave pública GPG em base64 (base64 -w0 chave-publica.asc). Obrigatória em backup e aplicar."
+        type: string
+        required: false
+      confirmacao:
+        description: 'Para o modo "aplicar", digite APLICAR'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+# Nunca duas operações no banco ao mesmo tempo.
+concurrency:
+  group: manutencao-banco-producao
+  cancel-in-progress: false
+
+jobs:
+  manutencao:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL_PROD }}
+      SAIDA_RESUMIDA: "1"
+      MODO: ${{ inputs.modo }}
+    steps:
+      - name: Validar entradas
+        env:
+          CHAVE_B64: ${{ inputs.chave_publica_b64 }}
+          CONFIRMACAO: ${{ inputs.confirmacao }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "Segredo NEON_DATABASE_URL_PROD ausente."; exit 1
+          fi
+          if [ "$MODO" != "auditar" ]; then
+            if ! printf '%s' "$CHAVE_B64" | base64 -d > "$RUNNER_TEMP/chave-publica.asc" 2>/dev/null \
+               || ! grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$RUNNER_TEMP/chave-publica.asc"; then
+              echo "Modo $MODO exige chave_publica_b64 válida."; exit 1
+            fi
+            echo "Chave pública recebida."
+          fi
+          if [ "$MODO" = "aplicar" ] && [ "$CONFIRMACAO" != "APLICAR" ]; then
+            echo 'Modo aplicar exige confirmacao=APLICAR.'; exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Instalar dependências
+        run: npm ci
+
+      # ── Leitura (todos os modos) ─────────────────────────────────────
+      - name: Diagnóstico (somente leitura)
+        run: npx tsx scripts/diagnostico-producao.ts
+
+      - name: Auditoria de duplicatas (somente leitura)
+        run: npx tsx scripts/auditar-duplicatas-estante.ts
+
+      # ── Backup criptografado (backup e aplicar) ──────────────────────
+      - name: Instalar postgresql-client-17
+        if: env.MODO != 'auditar'
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-17 > /dev/null
+          # O runner traz o client 16 em /usr/bin; força o 17, senão o pg_dump
+          # recusa a versão maior do servidor (ver backup-confeccao.yml).
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: Backup criptografado
+        if: env.MODO != 'auditar'
+        run: |
+          set -o pipefail
+          pg_dump "$DATABASE_URL" --format=custom --no-owner \
+            | gpg --batch --yes --trust-model always \
+                  --recipient-file "$RUNNER_TEMP/chave-publica.asc" \
+                  --output "$RUNNER_TEMP/backup-producao.dump.gpg" --encrypt
+          echo "Backup criptografado: $(stat -c %s "$RUNNER_TEMP/backup-producao.dump.gpg") bytes"
+
+      - name: Guardar backup
+        if: env.MODO != 'auditar'
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-producao
+          path: ${{ runner.temp }}/backup-producao.dump.gpg
+          retention-days: 1
+          if-no-files-found: error
+
+      # ── Aplicação (só aplicar) ───────────────────────────────────────
+      # Ordem obrigatória: índice único não nasce sobre dados que o violam.
+      - name: Remover duplicatas
+        if: env.MODO == 'aplicar'
+        run: npx tsx scripts/auditar-duplicatas-estante.ts --apply
+
+      - name: Criptografar relatório das linhas removidas
+        if: env.MODO == 'aplicar'
+        run: |
+          shopt -s nullglob
+          arquivos=(estante-duplicatas-*.json)
+          if [ ${#arquivos[@]} -eq 0 ]; then
+            echo '{"removidas":[]}' > estante-duplicatas-nenhuma.json
+            arquivos=(estante-duplicatas-nenhuma.json)
+          fi
+          for f in "${arquivos[@]}"; do
+            gpg --batch --yes --trust-model always \
+                --recipient-file "$RUNNER_TEMP/chave-publica.asc" \
+                --output "$RUNNER_TEMP/$f.gpg" --encrypt "$f"
+            rm -f "$f"
+          done
+
+      - name: Guardar relatório das linhas removidas
+        if: env.MODO == 'aplicar'
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-duplicatas
+          path: ${{ runner.temp }}/estante-duplicatas-*.json.gpg
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Criar colunas (migration 0037)
+        if: env.MODO == 'aplicar'
+        run: npx tsx scripts/aplicar-migracao-estante.ts --fase=colunas
+
+      - name: Preencher identidade dos fardos
+        if: env.MODO == 'aplicar'
+        run: npx tsx scripts/backfill-identidade-estante.ts --apply
+
+      - name: Criar índices únicos (migration 0038)
+        if: env.MODO == 'aplicar'
+        run: npx tsx scripts/aplicar-migracao-estante.ts --fase=indices
+
+      - name: Auditoria final
+        if: env.MODO == 'aplicar'
+        run: |
+          npx tsx scripts/auditar-duplicatas-estante.ts
+          npx tsx scripts/diagnostico-producao.ts
