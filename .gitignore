@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Relatórios de auditoria da Estante Virtual (scripts/auditar-duplicatas-estante.ts)
+estante-duplicatas-*.json
