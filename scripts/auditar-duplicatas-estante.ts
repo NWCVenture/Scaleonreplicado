@@ -27,6 +27,12 @@ import { validarQR } from "../src/lib/estante-virtual/fardo-qr";
 
 const APLICAR = process.argv.includes("--apply");
 
+// Com SAIDA_RESUMIDA=1 só contagens vão para o log — nada de nome de estante,
+// SKU, lote, ids, códigos de fardo ou endereço do banco. Usado pelo workflow
+// de manutenção: logs de repositório público são visíveis a qualquer pessoa.
+// O detalhe completo continua no relatório JSON, que o workflow criptografa.
+const RESUMIDA = process.env.SAIDA_RESUMIDA === "1";
+
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL não definida. Use dotenv -e .env.local.");
 }
@@ -64,6 +70,7 @@ interface Remocao {
 }
 
 function alvo(): string {
+  if (RESUMIDA) return "(oculto)";
   return process.env.DATABASE_URL?.split("@")[1]?.split("/")[0] ?? "?";
 }
 
@@ -153,12 +160,16 @@ async function main() {
       const k = `${r.colidiu_em}=${r.chave}`;
       porChave.set(k, [...(porChave.get(k) ?? []), r]);
     }
-    for (const [chave, grupo] of porChave) {
-      const g = grupo[0];
-      console.log(`  ${chave}`);
-      console.log(`     estante: ${g.estante_nome} · ${g.sku} (${g.lote}) · ${g.quantidade} peças`);
-      console.log(`     mantém : ${g.mantido_id}  (${g.mantido_created_at})`);
-      console.log(`     remove : ${grupo.length} linha(s)`);
+    if (RESUMIDA) {
+      console.log(`  ${porChave.size} fardo(s) com cópias, ${remover.length} cópia(s) a remover`);
+    } else {
+      for (const [chave, grupo] of porChave) {
+        const g = grupo[0];
+        console.log(`  ${chave}`);
+        console.log(`     estante: ${g.estante_nome} · ${g.sku} (${g.lote}) · ${g.quantidade} peças`);
+        console.log(`     mantém : ${g.mantido_id}  (${g.mantido_created_at})`);
+        console.log(`     remove : ${grupo.length} linha(s)`);
+      }
     }
     console.log("");
   }
@@ -169,16 +180,20 @@ async function main() {
     console.log("  físicos distintos do mesmo produto/lote/quantidade produzem");
     console.log("  strings idênticas: é impossível distinguir duplicata de estoque");
     console.log("  legítimo. O índice único parcial também vai ignorá-las.");
-    for (const l of semIdentidade) {
-      console.log(`     ${l.estante_nome} · ${l.sku} (${l.lote}) · ${l.quantidade} peças · ${l.id}`);
+    if (!RESUMIDA) {
+      for (const l of semIdentidade) {
+        console.log(`     ${l.estante_nome} · ${l.sku} (${l.lote}) · ${l.quantidade} peças · ${l.id}`);
+      }
     }
     console.log("");
   }
 
   if (naoParseaveis.length > 0) {
     console.log("── Não parseáveis — NÃO são tocadas ────────────────");
-    for (const l of naoParseaveis) {
-      console.log(`     ${l.estante_nome} · ${l.id} · ${l.qr_code.length} caracteres`);
+    if (!RESUMIDA) {
+      for (const l of naoParseaveis) {
+        console.log(`     ${l.estante_nome} · ${l.id} · ${l.qr_code.length} caracteres`);
+      }
     }
     console.log("");
   }
@@ -190,11 +205,15 @@ async function main() {
   if (foraDoContrato.length > 0) {
     console.log("── Fora do contrato atual — NÃO são tocadas ────────");
     console.log("  Gravadas antes da validação entrar em vigor. Informativo.");
-    for (const l of foraDoContrato) {
-      const r = validarQR(l.qr_code);
-      const motivo = r.ok ? "?" : `${r.motivo}: ${r.detalhe}`;
-      console.log(`     ${l.estante_nome} · ${l.sku} · ${l.id}`);
-      console.log(`        ${motivo}`);
+    if (RESUMIDA) {
+      console.log(`  ${foraDoContrato.length} fardo(s)`);
+    } else {
+      for (const l of foraDoContrato) {
+        const r = validarQR(l.qr_code);
+        const motivo = r.ok ? "?" : `${r.motivo}: ${r.detalhe}`;
+        console.log(`     ${l.estante_nome} · ${l.sku} · ${l.id}`);
+        console.log(`        ${motivo}`);
+      }
     }
     console.log("");
   }
@@ -240,7 +259,14 @@ async function main() {
 }
 
 main().catch(async (err) => {
-  console.error("Falhou:", err);
+  // No modo resumido, nunca o objeto inteiro: erro do Postgres carrega os
+  // parâmetros da consulta e o detalhe da chave violada.
+  if (RESUMIDA) {
+    const e = err as { message?: string; code?: string };
+    console.error(`Falhou: ${e?.code ?? ""} ${e?.message ?? "erro"}`);
+  } else {
+    console.error("Falhou:", err);
+  }
   await client.end();
   process.exit(1);
 });

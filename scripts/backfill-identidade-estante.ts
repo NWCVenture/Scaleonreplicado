@@ -25,6 +25,10 @@ import { validarQR } from "../src/lib/estante-virtual/fardo-qr";
 
 const APLICAR = process.argv.includes("--apply");
 
+// Com SAIDA_RESUMIDA=1 só contagens vão para o log (workflow em repositório
+// público). Ver scripts/auditar-duplicatas-estante.ts.
+const RESUMIDA = process.env.SAIDA_RESUMIDA === "1";
+
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL não definida. Use dotenv -e .env.local.");
 }
@@ -44,7 +48,7 @@ interface Linha {
 
 async function main() {
   console.log("=== Backfill de identidade — estante_fardo ===");
-  console.log(`Target: ${process.env.DATABASE_URL?.split("@")[1]?.split("/")[0] ?? "?"}`);
+  console.log(`Target: ${RESUMIDA ? "(oculto)" : (process.env.DATABASE_URL?.split("@")[1]?.split("/")[0] ?? "?")}`);
   console.log(`Modo:   ${APLICAR ? "APLICAR" : "somente leitura"}\n`);
 
   const linhas = await client<Linha[]>`
@@ -71,7 +75,7 @@ async function main() {
     const r = validarQR(l.qr_code);
     if (!r.ok) {
       foraDoContrato++;
-      console.log(`  fora do contrato: ${l.id} · ${l.sku} · ${r.motivo}`);
+      if (!RESUMIDA) console.log(`  fora do contrato: ${l.id} · ${l.sku} · ${r.motivo}`);
       continue;
     }
 
@@ -108,7 +112,8 @@ async function main() {
   const colisoes = [...porChave.entries()].filter(([, ids]) => ids.length > 1);
   if (colisoes.length > 0) {
     console.log("── COLISÕES — o índice único vai falhar ────────────");
-    for (const [k, ids] of colisoes) console.log(`  ${k} → ${ids.length} linhas`);
+    if (RESUMIDA) console.log(`  ${colisoes.length} chave(s) em colisão`);
+    else for (const [k, ids] of colisoes) console.log(`  ${k} → ${ids.length} linhas`);
     console.log("\n  Rode antes: scripts/auditar-duplicatas-estante.ts --apply");
     await client.end();
     process.exit(1);
@@ -155,7 +160,14 @@ async function main() {
 }
 
 main().catch(async (err) => {
-  console.error("Falhou:", err);
+  // No modo resumido, nunca o objeto inteiro: erro do Postgres carrega os
+  // parâmetros da consulta e o detalhe da chave violada.
+  if (RESUMIDA) {
+    const e = err as { message?: string; code?: string };
+    console.error(`Falhou: ${e?.code ?? ""} ${e?.message ?? "erro"}`);
+  } else {
+    console.error("Falhou:", err);
+  }
   await client.end();
   process.exit(1);
 });
