@@ -82,6 +82,9 @@ jobs:
       - name: Diagnóstico (somente leitura)
         run: npx tsx scripts/diagnostico-producao.ts
 
+      - name: Estabilidade do banco (somente leitura)
+        run: npx tsx scripts/diagnostico-estabilidade.ts
+
       - name: Auditoria de duplicatas (somente leitura)
         run: npx tsx scripts/auditar-duplicatas-estante.ts
 
