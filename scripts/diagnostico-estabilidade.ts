@@ -68,7 +68,7 @@ async function main() {
            to_char(s.expires_at, 'DD/MM HH24:MI')                           AS expira_em_utc,
            (s.expires_at > now())::text                                     AS ativa,
            coalesce(${client.unsafe(IP_MASCARADO)}, '—')                    AS ip,
-           left(coalesce(s.user_agent, '—'), 28)                            AS dispositivo
+           left(coalesce(s.user_agent, '—'), 60)                            AS dispositivo
     FROM session s JOIN "user" u ON u.id = s.user_id
     WHERE s.created_at > now() - interval '7 days'
     ORDER BY s.created_at DESC
@@ -78,11 +78,11 @@ async function main() {
   if (sessoes.length === 0) {
     console.log("  (nenhuma sessão criada nos últimos 7 dias)");
   } else {
-    console.log("  pessoa    entrou       último uso   expira       ativa  ip");
+    console.log("  pessoa    entrou       último uso   expira       ativa  ip              dispositivo");
     for (const s of sessoes) {
       console.log(
         `  ${s.pessoa}  ${s.entrou_em_utc}  ${s.ultimo_uso_utc}  ${s.expira_em_utc}  ` +
-          `${(s.ativa === "true" ? "sim" : "não").padEnd(5)}  ${s.ip}`,
+          `${(s.ativa === "true" ? "sim" : "não").padEnd(5)}  ${s.ip}  ${s.dispositivo}`,
       );
     }
   }
