@@ -68,7 +68,7 @@ async function main() {
            to_char(s.expires_at, 'DD/MM HH24:MI')                           AS expira_em_utc,
            (s.expires_at > now())::text                                     AS ativa,
            coalesce(${client.unsafe(IP_MASCARADO)}, '—')                    AS ip,
-           left(coalesce(s.user_agent, '—'), 60)                            AS dispositivo
+           left(coalesce(s.user_agent, '—'), 130)                            AS dispositivo
     FROM session s JOIN "user" u ON u.id = s.user_id
     WHERE s.created_at > now() - interval '7 days'
     ORDER BY s.created_at DESC
