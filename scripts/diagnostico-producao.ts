@@ -70,6 +70,43 @@ async function main() {
     console.log(`  ${p.transportadora.padEnd(12)} contas=${p.contas}  com prefixo 3320=${p.com_3320}`);
   }
 
+  // Conferência de conta de acesso SEM expor e-mail no log.
+  // Passe EMAIL_SHA256 com um ou mais hashes SHA-256 do e-mail em minúsculas,
+  // separados por vírgula. O log mostra só os 8 primeiros caracteres do hash.
+  const [u] = await client<Record<string, string | null>[]>`
+    SELECT
+      (SELECT count(*) FROM "user")::text                            AS usuarios,
+      (SELECT to_char(max(created_at), 'YYYY-MM-DD') FROM "user")    AS ultimo_usuario_criado,
+      (SELECT count(*) FROM account WHERE provider_id = 'credential')::text AS com_senha,
+      (SELECT count(*) FROM session WHERE expires_at > now())::text   AS sessoes_ativas
+  `;
+  console.log("\n── Contas de acesso ────────────────────────────────");
+  for (const [k, val] of Object.entries(u)) console.log(`  ${k.padEnd(24)} ${val ?? "—"}`);
+
+  const hashes = (process.env.EMAIL_SHA256 ?? "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => /^[0-9a-f]{64}$/.test(h));
+  if (hashes.length > 0) {
+    const achados = await client<{ hash: string; verificado: boolean; tem_senha: boolean }[]>`
+      SELECT encode(sha256(convert_to(lower(u.email), 'UTF8')), 'hex') AS hash,
+             u.email_verified                     AS verificado,
+             (a.id IS NOT NULL)                   AS tem_senha
+      FROM "user" u
+      LEFT JOIN account a ON a.user_id = u.id AND a.provider_id = 'credential'
+      WHERE encode(sha256(convert_to(lower(u.email), 'UTF8')), 'hex') = ANY(${hashes})
+    `;
+    console.log("\n── E-mails consultados (por hash) ──────────────────");
+    for (const h of hashes) {
+      const achado = achados.find((a) => a.hash === h);
+      console.log(
+        achado
+          ? `  ${h.slice(0, 8)}…  EXISTE  (verificado=${achado.verificado} senha=${achado.tem_senha})`
+          : `  ${h.slice(0, 8)}…  NÃO EXISTE`,
+      );
+    }
+  }
+
   await client.end();
 }
 
