@@ -67,6 +67,7 @@ async function main() {
            to_char(s.updated_at, 'DD/MM HH24:MI')                           AS ultimo_uso_utc,
            to_char(s.expires_at, 'DD/MM HH24:MI')                           AS expira_em_utc,
            (s.expires_at > now())::text                                     AS ativa,
+           coalesce(left(s.conta_ativa_id, 12), 'NULA')                      AS conta_ativa,
            coalesce(${client.unsafe(IP_MASCARADO)}, '—')                    AS ip,
            left(coalesce(s.user_agent, '—'), 130)                            AS dispositivo
     FROM session s JOIN "user" u ON u.id = s.user_id
@@ -78,11 +79,11 @@ async function main() {
   if (sessoes.length === 0) {
     console.log("  (nenhuma sessão criada nos últimos 7 dias)");
   } else {
-    console.log("  pessoa    entrou       último uso   expira       ativa  ip              dispositivo");
+    console.log("  pessoa    entrou       último uso   expira       ativa  conta ativa   ip");
     for (const s of sessoes) {
       console.log(
         `  ${s.pessoa}  ${s.entrou_em_utc}  ${s.ultimo_uso_utc}  ${s.expira_em_utc}  ` +
-          `${(s.ativa === "true" ? "sim" : "não").padEnd(5)}  ${s.ip}  ${s.dispositivo}`,
+          `${(s.ativa === "true" ? "sim" : "não").padEnd(5)}  ${(s.conta_ativa ?? "").padEnd(12)}  ${s.ip}`,
       );
     }
   }
@@ -102,6 +103,31 @@ async function main() {
     console.log(
       `  ${s.pessoa}  criada ${s.credencial_criada}  alterada ${s.credencial_alterada}  ` +
         `trocou=${s.senha_ja_trocada === "true" ? "sim" : "não"}`,
+    );
+  }
+
+  // Toda função com escopo de conta passa por requireContaAtiva(), que só
+  // escolhe a conta sozinha quando o usuário tem EXATAMENTE um vínculo ativo.
+  // Com zero vínculos, ou com dois sem escolha feita, a rota devolve 401 e a
+  // tela mostra falha genérica. Esta seção mostra quem está nessa situação.
+  const vinculos = await client<Record<string, string | null>[]>`
+    SELECT ${client.unsafe(APELIDO)}                                      AS pessoa,
+           count(DISTINCT uc.id) FILTER (WHERE uc.ativo)::text            AS vinculos_ativos,
+           count(DISTINCT uc.id)::text                                    AS vinculos_total,
+           count(DISTINCT s.id) FILTER (WHERE s.expires_at > now() AND s.conta_ativa_id IS NULL)::text AS sessoes_sem_conta
+    FROM "user" u
+    LEFT JOIN usuario_conta uc ON uc.usuario_id = u.id
+    LEFT JOIN session s ON s.user_id = u.id
+    GROUP BY u.email
+    ORDER BY count(DISTINCT uc.id) FILTER (WHERE uc.ativo), u.email
+  `;
+  console.log("\n── Vínculos de conta (quem consegue usar o sistema) ─");
+  console.log("  pessoa    vinculos_ativos  total  sessoes_ativas_sem_conta");
+  for (const v of vinculos) {
+    const alerta = v.vinculos_ativos === "1" ? "" : "  <<< nao auto-seleciona";
+    console.log(
+      `  ${v.pessoa}  ${(v.vinculos_ativos ?? "0").padStart(15)}  ${(v.vinculos_total ?? "0").padStart(5)}  ` +
+        `${(v.sessoes_sem_conta ?? "0").padStart(24)}${alerta}`,
     );
   }
 
