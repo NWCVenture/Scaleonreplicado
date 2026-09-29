@@ -118,6 +118,10 @@ export default function ColetasPage() {
   );
   const continuandoBipagemIdRef = useRef<string | null>(null);
   continuandoBipagemIdRef.current = continuandoBipagemId;
+  // Códigos que já estavam na bipagem quando esta tela a carregou. Vai no PUT
+  // para o servidor saber o que esta tela pode remover — sem isso ele apagava
+  // pacote que outro operador bipou no meio do caminho.
+  const pacotesBaseRef = useRef<string[] | null>(null);
 
   // Sessão ativa achada no GET inicial — abre modal "Continuar / Finalizar agora".
   // Não carregamos no estado client antes do usuário decidir.
@@ -623,6 +627,7 @@ export default function ColetasPage() {
     if (continuandoBipagemIdRef.current) {
       setContinuandoBipagemId(null);
       continuandoBipagemIdRef.current = null;
+      pacotesBaseRef.current = null;
       initLockRef.current = false;
     }
     toast.info("Lista zerada");
@@ -661,6 +666,7 @@ export default function ColetasPage() {
       setSaveState("idle");
       setContinuandoBipagemId(null);
       continuandoBipagemIdRef.current = null;
+      pacotesBaseRef.current = null;
       setIsForcingStop(false);
       toast.dismiss("coletas-sessao-init-error");
       toast.info("Sessão encerrada");
@@ -815,6 +821,9 @@ export default function ColetasPage() {
             conta: bipagem.currentAccount,
             pacotes,
             devolucoes,
+            ...(continuandoId && pacotesBaseRef.current
+              ? { pacotesBase: pacotesBaseRef.current }
+              : {}),
           }),
         },
       );
@@ -900,6 +909,7 @@ export default function ColetasPage() {
       setSaveState("idle");
       setContinuandoBipagemId(null);
       continuandoBipagemIdRef.current = null;
+      pacotesBaseRef.current = null;
       toast.dismiss("coletas-sessao-init-error");
       toast.success(
         continuandoId ? "Bipagem atualizada!" : "Bipagem finalizada!",
@@ -1111,6 +1121,7 @@ export default function ColetasPage() {
         // original em vez de POST (clone).
         setContinuandoBipagemId(bipagemId);
         continuandoBipagemIdRef.current = bipagemId;
+        pacotesBaseRef.current = pacotes.map((p) => p.codigo);
         // Evita o auto-save criar uma nova sessão por cima — a continuação
         // mantém o estado puramente local até o finalize.
         initLockRef.current = true;
@@ -1484,6 +1495,7 @@ export default function ColetasPage() {
                 onClick={() => {
                   setContinuandoBipagemId(null);
                   continuandoBipagemIdRef.current = null;
+                  pacotesBaseRef.current = null;
                   initLockRef.current = false;
                   toast.info(
                     "Modo continuação cancelado — finalize para criar nova bipagem",
