@@ -62,8 +62,9 @@ export async function PATCH(
     return NextResponse.json(updated);
   } catch (error) {
     console.error("Error updating SKU:", error);
-    const msg = error instanceof Error ? error.message : "Erro ao atualizar SKU";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // Mensagem fixa: o erro do driver carrega a SQL e os parâmetros da
+    // query, que não podem ir para o navegador. O detalhe fica no log.
+    return NextResponse.json({ error: "Erro ao atualizar SKU" }, { status: 500 });
   }
 }
 
@@ -114,7 +115,8 @@ export async function DELETE(
     return NextResponse.json({ ok: true, stockItemsAffected: result.stockCount });
   } catch (error) {
     console.error("Error deleting SKU:", error);
-    const msg = error instanceof Error ? error.message : "Erro ao excluir SKU";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // Mensagem fixa: o erro do driver carrega a SQL e os parâmetros da
+    // query, que não podem ir para o navegador. O detalhe fica no log.
+    return NextResponse.json({ error: "Erro ao excluir SKU" }, { status: 500 });
   }
 }

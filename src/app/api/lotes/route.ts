@@ -4,6 +4,7 @@ import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
 import { withContaAtiva } from "@/lib/tenancy";
+import { ehViolacaoDeUnico } from "@/lib/pg-erro";
 
 export async function GET(_request: NextRequest) {
   try {
@@ -71,10 +72,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
 
-    if (
-      error instanceof Error &&
-      error.message.includes("unique constraint")
-    ) {
+    if (ehViolacaoDeUnico(error)) {
       return NextResponse.json({ error: "Lote ja existe" }, { status: 409 });
     }
 

@@ -4,6 +4,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
 import { withContaAtiva } from "@/lib/tenancy";
+import { codigoPg } from "@/lib/pg-erro";
 
 export async function GET(request: NextRequest) {
   try {
@@ -62,7 +63,7 @@ export async function POST(request: NextRequest) {
     if (error instanceof Error && error.message.includes("conta ativa")) {
       return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
-    const pgCode = (error as { code?: string }).code;
+    const pgCode = codigoPg(error);
     if (
       pgCode === "23505" ||
       (error instanceof Error &&
@@ -74,7 +75,8 @@ export async function POST(request: NextRequest) {
       );
     }
     console.error("Error creating tamanho:", error);
-    const msg = error instanceof Error ? error.message : "Erro ao criar tamanho";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // Mensagem fixa: o erro do driver carrega a SQL e os parâmetros da
+    // query, que não podem ir para o navegador. O detalhe fica no log.
+    return NextResponse.json({ error: "Erro ao criar tamanho" }, { status: 500 });
   }
 }

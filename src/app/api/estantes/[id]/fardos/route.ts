@@ -13,6 +13,7 @@ import {
   type FardoValidado,
   type MotivoRecusa,
 } from "@/lib/estante-virtual/fardo-qr";
+import { codigoPg } from "@/lib/pg-erro";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -380,7 +381,7 @@ export async function POST(
     // a colisão sem lançar — se um 23505 chega até aqui, é uma restrição que
     // esse ON CONFLICT não cobre. Responder 409 evita transformar duplicata
     // em erro de servidor pro operador.
-    const pgCode = (error as { code?: string }).code;
+    const pgCode = codigoPg(error);
     if (pgCode === "23505") {
       return NextResponse.json(
         { error: "Fardo já cadastrado" },

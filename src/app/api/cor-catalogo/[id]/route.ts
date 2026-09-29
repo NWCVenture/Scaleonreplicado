@@ -57,8 +57,9 @@ export async function PATCH(
     return NextResponse.json(updated);
   } catch (error) {
     console.error("Error updating cor:", error);
-    const msg = error instanceof Error ? error.message : "Erro ao atualizar cor";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // Mensagem fixa: o erro do driver carrega a SQL e os parâmetros da
+    // query, que não podem ir para o navegador. O detalhe fica no log.
+    return NextResponse.json({ error: "Erro ao atualizar cor" }, { status: 500 });
   }
 }
 
@@ -92,7 +93,8 @@ export async function DELETE(
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Error deleting cor:", error);
-    const msg = error instanceof Error ? error.message : "Erro ao excluir cor";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // Mensagem fixa: o erro do driver carrega a SQL e os parâmetros da
+    // query, que não podem ir para o navegador. O detalhe fica no log.
+    return NextResponse.json({ error: "Erro ao excluir cor" }, { status: 500 });
   }
 }

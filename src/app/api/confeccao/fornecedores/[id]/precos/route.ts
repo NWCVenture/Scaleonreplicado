@@ -12,6 +12,7 @@ import {
   confeccaoTipoTecido,
 } from "@/lib/db/schema";
 import { CriarFornecedorTecidoPrecoSchema } from "@/lib/confeccao/schemas/cadastros";
+import { codigoPg } from "@/lib/pg-erro";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -155,7 +156,7 @@ export async function POST(
     if (isTenancyAuthError(err)) {
       return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
     }
-    const pgCode = (err as { code?: string }).code;
+    const pgCode = codigoPg(err);
     if (pgCode === "23505") {
       return NextResponse.json(
         {

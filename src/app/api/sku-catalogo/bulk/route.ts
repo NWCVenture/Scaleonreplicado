@@ -66,7 +66,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
     }
     console.error("Error bulk creating SKUs:", error);
-    const msg = error instanceof Error ? error.message : "Erro ao criar SKUs";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // Mensagem fixa: o erro do driver carrega a SQL e os parâmetros da
+    // query, que não podem ir para o navegador. O detalhe fica no log.
+    return NextResponse.json({ error: "Erro ao criar SKUs" }, { status: 500 });
   }
 }

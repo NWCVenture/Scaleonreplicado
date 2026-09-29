@@ -8,6 +8,7 @@ import { requireAdminAtivo, withContaAtiva } from "@/lib/tenancy";
 import { confeccaoTemplateWhatsapp } from "@/lib/db/schema";
 import { CriarTemplateWhatsappSchema } from "@/lib/confeccao/schemas/template-whatsapp";
 import { ConfeccaoFornecedorCategoriaSchema } from "@/lib/confeccao/schemas/cadastros";
+import { codigoPg } from "@/lib/pg-erro";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -92,7 +93,7 @@ export async function POST(request: NextRequest) {
     if (isTenancyAuthError(err)) {
       return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
     }
-    const pgCode = (err as { code?: string }).code;
+    const pgCode = codigoPg(err);
     if (pgCode === "23505") {
       return NextResponse.json(
         { error: "Template com este nome já existe" },

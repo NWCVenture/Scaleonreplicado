@@ -90,8 +90,9 @@ export async function POST(
       return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
     }
     console.error("Erro ao subir imagem:", error);
-    const msg = error instanceof Error ? error.message : "Erro ao subir imagem";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // Mensagem fixa: o erro do driver carrega a SQL e os parâmetros da
+    // query, que não podem ir para o navegador. O detalhe fica no log.
+    return NextResponse.json({ error: "Erro ao subir imagem" }, { status: 500 });
   }
 }
 

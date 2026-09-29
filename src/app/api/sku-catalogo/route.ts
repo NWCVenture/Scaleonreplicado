@@ -4,6 +4,7 @@ import { and, asc, eq, ilike, not } from "drizzle-orm";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
 import { withContaAtiva } from "@/lib/tenancy";
+import { codigoPg } from "@/lib/pg-erro";
 
 export async function GET(request: NextRequest) {
   try {
@@ -82,7 +83,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Postgres unique violation (code 23505) — pg-driver attaches `.code`
-    const pgCode = (error as { code?: string }).code;
+    const pgCode = codigoPg(error);
     if (
       pgCode === "23505" ||
       (error instanceof Error &&
@@ -96,7 +97,8 @@ export async function POST(request: NextRequest) {
     }
 
     console.error("Error creating SKU:", error);
-    const msg = error instanceof Error ? error.message : "Erro ao criar SKU";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // Mensagem fixa: o erro do driver carrega a SQL e os parâmetros da
+    // query, que não podem ir para o navegador. O detalhe fica no log.
+    return NextResponse.json({ error: "Erro ao criar SKU" }, { status: 500 });
   }
 }

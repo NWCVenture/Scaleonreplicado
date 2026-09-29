@@ -5,6 +5,7 @@ import { z } from "zod";
 import { generateId } from "@/lib/utils";
 import { withContaAtiva } from "@/lib/tenancy";
 import { upsertCorGlobal } from "@/lib/modelo-cascade";
+import { codigoPg } from "@/lib/pg-erro";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -69,7 +70,7 @@ export async function POST(
     if (isTenancyAuthError(error)) {
       return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
     }
-    const pgCode = (error as { code?: string }).code;
+    const pgCode = codigoPg(error);
     if (pgCode === "23505") {
       return NextResponse.json(
         { error: "Cor já cadastrada neste modelo" },
