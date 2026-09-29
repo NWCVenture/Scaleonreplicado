@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { withContaAtiva } from "@/lib/tenancy";
+import { withContaAtiva, corpoDeErroDeTenancy } from "@/lib/tenancy";
 import { enviarRelatorio } from "@/lib/sessao-expedicao-relatorio";
 
 function isTenancyAuthError(err: unknown): boolean {
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ...result, since, ate });
   } catch (error) {
     if (isTenancyAuthError(error)) {
-      return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
+      return NextResponse.json(corpoDeErroDeTenancy(error), { status: 401 });
     }
     console.error("Erro ao enviar relatório:", error);
     return NextResponse.json(

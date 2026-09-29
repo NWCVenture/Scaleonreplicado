@@ -11,7 +11,7 @@ import { and, count, desc, eq, gte, lte } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
-import { withContaAtiva } from "@/lib/tenancy";
+import { withContaAtiva, corpoDeErroDeTenancy, corpoSemSessao } from "@/lib/tenancy";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -105,7 +105,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(result);
   } catch (error) {
     if (isTenancyAuthError(error)) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+      return NextResponse.json(corpoDeErroDeTenancy(error), { status: 401 });
     }
     console.error("Error fetching coletas:", error);
     return NextResponse.json(
@@ -177,7 +177,7 @@ export async function POST(request: NextRequest) {
   try {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+      return NextResponse.json(corpoSemSessao(), { status: 401 });
     }
 
     const body = await request.json();
@@ -301,7 +301,7 @@ export async function POST(request: NextRequest) {
       );
     }
     if (isTenancyAuthError(error)) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+      return NextResponse.json(corpoDeErroDeTenancy(error), { status: 401 });
     }
 
     console.error("Error creating bipagem:", error);

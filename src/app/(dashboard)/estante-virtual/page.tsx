@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "@/lib/auth-client";
 import { toast } from "sonner";
+import { erroDaResposta } from "@/lib/api-erro";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -182,8 +183,7 @@ export default function EstanteVirtualPage() {
       body: JSON.stringify({ nome, descricao: descricao || undefined }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || "Erro ao criar estante");
+      throw new Error(await erroDaResposta(res, "Erro ao criar estante"));
     }
     toast.success(`Estante "${nome}" criada!`);
     setShowCriar(false);

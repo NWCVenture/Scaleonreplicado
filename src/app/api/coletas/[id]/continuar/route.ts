@@ -9,7 +9,7 @@ import {
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { generateId } from "@/lib/utils";
-import { withContaAtiva } from "@/lib/tenancy";
+import { withContaAtiva, corpoDeErroDeTenancy, corpoSemSessao } from "@/lib/tenancy";
 
 function isTenancyAuthError(err: unknown): boolean {
   const msg = (err as Error)?.message ?? "";
@@ -82,7 +82,7 @@ export async function PUT(
   try {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!session) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+      return NextResponse.json(corpoSemSessao(), { status: 401 });
     }
 
     const { id } = await params;
@@ -282,7 +282,7 @@ export async function PUT(
       );
     }
     if (isTenancyAuthError(error)) {
-      return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+      return NextResponse.json(corpoDeErroDeTenancy(error), { status: 401 });
     }
     console.error("Error continuing bipagem:", error);
     return NextResponse.json(

@@ -8,7 +8,7 @@ import {
 } from "@/lib/db/schema";
 import { and, desc, eq, gt, inArray, lt } from "drizzle-orm";
 import { generateId } from "@/lib/utils";
-import { withContaAtiva } from "@/lib/tenancy";
+import { withContaAtiva, corpoDeErroDeTenancy } from "@/lib/tenancy";
 import type { db as dbType } from "@/lib/db";
 
 type Tx = Parameters<Parameters<typeof dbType.transaction>[0]>[0];
@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ historico: result });
   } catch (error) {
     if (isTenancyAuthError(error)) {
-      return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
+      return NextResponse.json(corpoDeErroDeTenancy(error), { status: 401 });
     }
     console.error("Erro ao listar histórico:", error);
     return NextResponse.json(
@@ -325,7 +325,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result.row, { status: 201 });
   } catch (error) {
     if (isTenancyAuthError(error)) {
-      return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
+      return NextResponse.json(corpoDeErroDeTenancy(error), { status: 401 });
     }
     console.error("Erro ao salvar histórico:", error);
     const msg =

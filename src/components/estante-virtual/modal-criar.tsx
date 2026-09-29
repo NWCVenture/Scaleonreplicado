@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Plus } from "lucide-react";
+import { toast } from "sonner";
 
 interface ModalCriarProps {
   open: boolean;
@@ -30,6 +31,11 @@ export function ModalCriar({ open, onOpenChange, onSubmit }: ModalCriarProps) {
       await onSubmit(nome.trim().toUpperCase(), descricao.trim());
       setNome("");
       setDescricao("");
+    } catch (e) {
+      // Sem este catch o erro virava rejeição não tratada: o spinner parava e
+      // nada aparecia na tela, então "não consigo criar a estante" chegava ao
+      // operador sem motivo nenhum.
+      toast.error((e as Error).message || "Erro ao criar estante");
     } finally {
       setIsSubmitting(false);
     }

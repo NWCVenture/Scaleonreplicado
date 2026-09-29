@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { CODIGO_SEM_CONTA_ATIVA, CODIGO_SEM_SESSAO } from "./api-erro";
 import { eq, and, sql } from "drizzle-orm";
 import { auth } from "./auth";
 import { db } from "./db";
@@ -8,6 +9,33 @@ import {
   session as sessionTable,
   type PapelConta,
 } from "./db/schema";
+
+/**
+ * Corpo de resposta para o erro lançado por `requireContaAtiva`/`withContaAtiva`.
+ *
+ * O status continua 401 (o cliente já trata), mas o `code` diz à tela o que
+ * pedir ao operador: escolher a conta no menu lateral, ou entrar novamente.
+ * Sem isso, "sessão sem conta ativa" e "sessão expirada" viravam o mesmo
+ * "Não autorizado", e ninguém sabia o que fazer.
+ */
+export function corpoDeErroDeTenancy(err: unknown): {
+  error: string;
+  code: string;
+} {
+  const msg = (err as Error)?.message ?? "";
+  if (msg.includes("conta ativa")) {
+    return {
+      error: "Nenhuma conta ativa selecionada",
+      code: CODIGO_SEM_CONTA_ATIVA,
+    };
+  }
+  return { error: "Não autenticado", code: CODIGO_SEM_SESSAO };
+}
+
+/** Corpo de resposta para requisição sem sessão (antes de resolver a conta). */
+export function corpoSemSessao(): { error: string; code: string } {
+  return { error: "Não autenticado", code: CODIGO_SEM_SESSAO };
+}
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 

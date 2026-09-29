@@ -339,7 +339,7 @@ export default function PacotesUrgentes() {
 
   // ── CSV handlers ──────────────────────────────────────────────────────────
   const processCSVFiles = useCallback(async (files: FileList | File[]) => {
-    const arr = Array.from(files).filter((f) => f.name.endsWith(".csv"));
+    const arr = Array.from(files).filter((f) => f.type === "text/csv" || f.name.toLowerCase().endsWith(".csv"));
     if (!arr.length) { toast.error("Nenhum arquivo CSV encontrado"); return; }
     const newOrders = new Map(allOrders);
     const newFiles: UploadedFile[] = [];
@@ -453,7 +453,7 @@ export default function PacotesUrgentes() {
 
   // ── PDF handlers ──────────────────────────────────────────────────────────
   const handlePDFFiles = useCallback(async (files: FileList | File[]) => {
-    const arr = Array.from(files).filter((f) => f.name.endsWith(".pdf"));
+    const arr = Array.from(files).filter((f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"));
     if (!arr.length) { toast.error("Nenhum PDF encontrado"); return; }
 
     setPdfPages(null);

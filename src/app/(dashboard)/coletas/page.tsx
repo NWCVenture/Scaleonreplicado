@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { cn, copyToClipboard } from "@/lib/utils";
+import { erroDaResposta } from "@/lib/api-erro";
 import {
   Loader2,
   Package,
@@ -818,7 +819,11 @@ export default function ColetasPage() {
         },
       );
 
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        throw new Error(
+          await erroDaResposta(res, "Erro ao finalizar bipagem"),
+        );
+      }
 
       // Export TXT
       const date = new Date();
@@ -900,8 +905,8 @@ export default function ColetasPage() {
         continuandoId ? "Bipagem atualizada!" : "Bipagem finalizada!",
       );
       return true;
-    } catch {
-      toast.error("Erro ao finalizar bipagem");
+    } catch (e) {
+      toast.error((e as Error).message || "Erro ao finalizar bipagem");
       return false;
     } finally {
       setIsFinalizing(false);

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { mensagemDeErro } from "@/lib/api-erro";
 import { useSession } from "@/lib/auth-client";
 import {
   AlertTriangle,
@@ -887,7 +888,11 @@ export default function ExpedicaoDiariaPage() {
   // o conjunto completo do IndexedDB).
   const handlePDFFiles = useCallback(
     async (files: FileList | File[]) => {
-      const arr = Array.from(files).filter((f) => f.name.endsWith(".pdf"));
+      const arr = Array.from(files).filter(
+        (f) =>
+          f.type === "application/pdf" ||
+          f.name.toLowerCase().endsWith(".pdf"),
+      );
       if (!arr.length) {
         toast.error("Nenhum PDF encontrado");
         return;
@@ -1001,8 +1006,10 @@ export default function ExpedicaoDiariaPage() {
   // e re-analyze do conjunto completo. Usado por drag/drop e pelo input.
   const handlePDFAppend = useCallback(
     (files: FileList | File[]) => {
-      const newFiles = Array.from(files).filter((f) =>
-        f.name.endsWith(".pdf"),
+      const newFiles = Array.from(files).filter(
+        (f) =>
+          f.type === "application/pdf" ||
+          f.name.toLowerCase().endsWith(".pdf"),
       );
       if (!newFiles.length) {
         toast.error("Nenhum PDF encontrado");
@@ -1157,10 +1164,11 @@ export default function ExpedicaoDiariaPage() {
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as {
           error?: string;
+          code?: string;
           conflicts?: string[];
         };
         const err = new Error(
-          data?.error ?? `HTTP ${res.status}`,
+          mensagemDeErro(res.status, data, `HTTP ${res.status}`),
         ) as Error & { status?: number; conflicts?: string[] };
         err.status = res.status;
         err.conflicts = Array.isArray(data?.conflicts) ? data.conflicts : [];
