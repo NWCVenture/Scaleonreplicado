@@ -138,19 +138,23 @@ async function main() {
   // etiqueta carrega dado de cliente e o log deste workflow é público.
   const blob = await client<Record<string, string | null>[]>`
     SELECT
-      (SELECT count(*) FROM historico_impressao_etiquetas)::text  AS filas_expedicao,
+      (SELECT count(*) FROM historico_impressao_etiquetas)::text    AS filas_total,
+      (SELECT count(*) FROM historico_impressao_etiquetas
+         WHERE cleaned_up = false)::text                            AS filas_com_arquivo,
+      (SELECT count(*) FROM historico_impressao_etiquetas
+         WHERE cleaned_up = false AND expires_at < now())::text      AS filas_vencidas_nao_limpas,
       (SELECT to_char(max(created_at), 'DD/MM/YYYY HH24:MI')
-         FROM historico_impressao_etiquetas)                       AS ultima_fila_expedicao,
+         FROM historico_impressao_etiquetas)                        AS ultima_fila_exportada,
+      (SELECT to_char(min(created_at), 'DD/MM/YYYY')
+         FROM historico_impressao_etiquetas WHERE cleaned_up = false) AS arquivo_mais_antigo,
+      (SELECT coalesce(sum(page_count), 0)::text
+         FROM historico_impressao_etiquetas WHERE cleaned_up = false) AS paginas_guardadas,
       (SELECT count(*) FROM coleta_devolucao
-         WHERE foto_pacote_url IS NOT NULL)::text                  AS devolucoes_com_foto,
+         WHERE foto_pacote_url IS NOT NULL)::text                   AS devolucoes_com_foto,
       (SELECT count(*) FROM coleta_devolucao
-         WHERE foto_pacote_url IS NULL)::text                      AS devolucoes_sem_foto,
-      (SELECT to_char(max(created_at), 'DD/MM/YYYY HH24:MI')
-         FROM coleta_devolucao WHERE foto_pacote_url IS NOT NULL)  AS ultima_foto_gravada,
-      (SELECT to_char(max(created_at), 'DD/MM/YYYY HH24:MI')
-         FROM coleta_devolucao)                                    AS ultima_devolucao,
+         WHERE foto_pacote_url IS NULL)::text                       AS devolucoes_sem_foto,
       (SELECT count(*) FROM modelo_principal
-         WHERE etiqueta_imagem_url IS NOT NULL)::text              AS imagens_de_etiqueta
+         WHERE etiqueta_imagem_url IS NOT NULL)::text               AS imagens_de_etiqueta
   `;
   console.log("\n── Arquivos no Blob (store suspenso) ───────────────");
   for (const [k, v] of Object.entries(blob[0])) {
