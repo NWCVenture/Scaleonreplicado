@@ -131,6 +131,32 @@ async function main() {
     );
   }
 
+  // ── Arquivos no Vercel Blob ───────────────────────────────────────────────
+  // O store do Blob foi suspenso por estourar o limite gratuito (980 MB em 242
+  // arquivos). Estas contagens dizem QUANDO cada fluxo parou de conseguir
+  // gravar e quanto material está preso lá. Só números e datas — URL de
+  // etiqueta carrega dado de cliente e o log deste workflow é público.
+  const blob = await client<Record<string, string | null>[]>`
+    SELECT
+      (SELECT count(*) FROM historico_impressao_etiquetas)::text  AS filas_expedicao,
+      (SELECT to_char(max(created_at), 'DD/MM/YYYY HH24:MI')
+         FROM historico_impressao_etiquetas)                       AS ultima_fila_expedicao,
+      (SELECT count(*) FROM coleta_devolucao
+         WHERE foto_pacote_url IS NOT NULL)::text                  AS devolucoes_com_foto,
+      (SELECT count(*) FROM coleta_devolucao
+         WHERE foto_pacote_url IS NULL)::text                      AS devolucoes_sem_foto,
+      (SELECT to_char(max(created_at), 'DD/MM/YYYY HH24:MI')
+         FROM coleta_devolucao WHERE foto_pacote_url IS NOT NULL)  AS ultima_foto_gravada,
+      (SELECT to_char(max(created_at), 'DD/MM/YYYY HH24:MI')
+         FROM coleta_devolucao)                                    AS ultima_devolucao,
+      (SELECT count(*) FROM modelo_principal
+         WHERE etiqueta_imagem_url IS NOT NULL)::text              AS imagens_de_etiqueta
+  `;
+  console.log("\n── Arquivos no Blob (store suspenso) ───────────────");
+  for (const [k, v] of Object.entries(blob[0])) {
+    console.log(`  ${k.padEnd(24)} ${v ?? "—"}`);
+  }
+
   await client.end();
 }
 
