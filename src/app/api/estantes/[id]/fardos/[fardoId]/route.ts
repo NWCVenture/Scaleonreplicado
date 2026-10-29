@@ -93,6 +93,7 @@ export async function DELETE(
         totalAntes,
         totalDepois,
         totalPecas: null,
+        duplicadoAutorizado: fardo.duplicadoAutorizado,
         usuarioId: session.user.id,
         contaId,
       });

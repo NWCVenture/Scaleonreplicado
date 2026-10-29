@@ -14,6 +14,7 @@ import {
   ClipboardCheck,
   BarChart2,
   History,
+  Copy,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ type MovimentacaoItem = {
   totalAntes: number;
   totalDepois: number;
   totalPecas: number | null;
+  duplicadoAutorizado: boolean;
   usuarioNome: string | null;
   createdAt: string;
 };
@@ -114,6 +116,8 @@ export function HistoricoView({ onBack }: HistoricoViewProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [filtroTipo, setFiltroTipo] = useState<string>("TODOS");
   const [filtroData, setFiltroData] = useState("");
+  // Auditoria: só os movimentos de fardos cópia (QR duplicado autorizado).
+  const [soDuplicados, setSoDuplicados] = useState(false);
 
   const fetchMovimentacoes = async () => {
     setIsLoading(true);
@@ -139,17 +143,22 @@ export function HistoricoView({ onBack }: HistoricoViewProps) {
   }, [filtroTipo, filtroData]);
 
   // Daily summary
-  const resumoDiario: Record<string, { saidas: number; entradas: number }> = {};
+  const resumoDiario: Record<
+    string,
+    { saidas: number; entradas: number; duplicados: number }
+  > = {};
   const relevantes =
     filtroTipo === "TODOS" || filtroTipo === "SAIDA" || filtroTipo === "ENTRADA"
       ? movimentacoes
       : [];
   relevantes.forEach((m) => {
     const dia = new Date(m.createdAt).toLocaleDateString("pt-BR");
-    if (!resumoDiario[dia]) resumoDiario[dia] = { saidas: 0, entradas: 0 };
+    if (!resumoDiario[dia])
+      resumoDiario[dia] = { saidas: 0, entradas: 0, duplicados: 0 };
     if (m.tipo === "SAIDA") resumoDiario[dia].saidas++;
     if (m.tipo === "ENTRADA" || m.tipo === "IMPORTACAO")
       resumoDiario[dia].entradas++;
+    if (m.duplicadoAutorizado) resumoDiario[dia].duplicados++;
   });
   const diasOrdenados = Object.keys(resumoDiario).sort((a, b) => {
     const [da, ma, ya] = a.split("/").map(Number);
@@ -159,10 +168,11 @@ export function HistoricoView({ onBack }: HistoricoViewProps) {
     );
   });
 
-  const filteredMovs =
-    filtroTipo === "TODOS"
-      ? movimentacoes
-      : movimentacoes.filter((m) => m.tipo === filtroTipo);
+  const filteredMovs = movimentacoes.filter(
+    (m) =>
+      (filtroTipo === "TODOS" || m.tipo === filtroTipo) &&
+      (!soDuplicados || m.duplicadoAutorizado),
+  );
 
   return (
     <div className="space-y-4">
@@ -194,6 +204,18 @@ export function HistoricoView({ onBack }: HistoricoViewProps) {
             Limpar data
           </button>
         )}
+        <button
+          onClick={() => setSoDuplicados((v) => !v)}
+          aria-pressed={soDuplicados}
+          className={cn(
+            "text-xs px-3 py-1 rounded-full border transition-colors inline-flex items-center gap-1",
+            soDuplicados
+              ? "bg-amber-500 text-black border-amber-500"
+              : "border-amber-800 text-amber-400 hover:bg-slate-800",
+          )}
+        >
+          <Copy className="h-3 w-3" /> Só QR duplicado
+        </button>
       </div>
 
       {/* Type filter pills */}
@@ -249,6 +271,12 @@ export function HistoricoView({ onBack }: HistoricoViewProps) {
                         <ArrowDownCircle className="h-3 w-3" /> {r.entradas}{" "}
                         entrada(s)
                       </span>
+                      {r.duplicados > 0 && (
+                        <span className="flex items-center gap-1 text-amber-400 font-semibold">
+                          <Copy className="h-3 w-3" /> {r.duplicados}{" "}
+                          duplicado(s)
+                        </span>
+                      )}
                     </div>
                   </div>
                 );
@@ -287,6 +315,14 @@ export function HistoricoView({ onBack }: HistoricoViewProps) {
                   >
                     {getTipoLabel(mov.tipo)}
                   </span>
+                  {mov.duplicadoAutorizado && (
+                    <span
+                      className="text-xs font-bold px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 inline-flex items-center gap-1"
+                      title="Fardo cópia: mesmo QR de um fardo que já estava no estoque, gravado com autorização"
+                    >
+                      <Copy className="h-3 w-3" /> QR DUPLICADO
+                    </span>
+                  )}
                   <span className="text-sm font-medium">
                     {mov.estanteNome}
                   </span>

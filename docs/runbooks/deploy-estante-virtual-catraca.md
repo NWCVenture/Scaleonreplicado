@@ -154,3 +154,53 @@ verificação de duplicata"). Resolver exige reimprimir essas etiquetas.
 
 **SKUs divergentes já gravados** não são corrigidos; a padronização vale para
 inclusões novas.
+
+---
+
+## Adendo — "Autorizar QR duplicado" (migration 0039)
+
+Etiquetas foram impressas em várias cópias e coladas em fardos físicos
+diferentes. A catraca recusava a segunda bipagem. Agora o scanner tem a chave
+**Autorizar QR duplicado** (por sessão, começa desligada): com ela ligada, a
+repetição entra como **cópia** (`duplicado_autorizado = true`), marcada no
+histórico com o selo "QR DUPLICADO" e o filtro "Só QR duplicado" — base da
+auditoria diária.
+
+Mudança de banco, aditiva:
+
+- coluna `duplicado_autorizado boolean NOT NULL DEFAULT false` em
+  `estante_fardo` e `estante_movimentacao`;
+- os dois índices da catraca recriados com `AND duplicado_autorizado = false`:
+  continua existindo no máximo **um original** por etiqueta; as cópias ficam
+  fora do índice.
+
+### Mesmas regras, mesma ordem: banco antes do merge
+
+```
+app nova + banco velho  →  coluna inexistente  →  inclusão, retirada, detalhe e histórico da Estante quebram
+app velha + banco novo  →  coluna fica false, índice equivale ao antigo  →  seguro
+```
+
+1. Disparar o workflow **a partir da branch da feature** (o arquivo do
+   workflow que roda é o da branch escolhida), `modo=aplicar`. O passo novo
+   "Cópias autorizadas (migration 0039)" roda `aplicar-migracao-estante.ts
+   --fase=duplicados`. A troca dos índices é DROP + CREATE na mesma transação
+   — não há instante sem catraca.
+2. Conferir no log: `colunas_duplicado=2/2 indices_com_duplicado=2/2` e
+   "Conferência OK".
+3. Merge do PR. A Vercel publica.
+
+### O script de limpeza respeita as cópias
+
+`auditar-duplicatas-estante.ts` ignora linhas com `duplicado_autorizado` (e
+roda igual antes da 0039, quando a coluna ainda não existe). Sem isso, qualquer
+disparo do workflow em modo `aplicar` depois da feature em uso **apagaria as
+cópias autorizadas** como se fossem duplicatas.
+
+### Rollback
+
+**Aplicação:** promover o deploy anterior na Vercel. A aplicação antiga ignora
+a coluna; as cópias já gravadas continuam no estoque e podem ser retiradas.
+
+**Banco:** não voltar os índices à definição antiga com cópias gravadas — o
+`CREATE UNIQUE INDEX` falha (as cópias violam). Manter a 0039 é inofensivo.

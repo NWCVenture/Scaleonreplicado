@@ -10,6 +10,14 @@
 //   --fase=colunas   ADD COLUMN codigo_fardo, fardo_uuid        (migration 0037)
 //   --fase=indices   CREATE UNIQUE INDEX parciais por conta      (migration 0038)
 //
+// E uma terceira, do "Autorizar QR duplicado":
+//   --fase=duplicados  ADD COLUMN duplicado_autorizado em estante_fardo e
+//                      estante_movimentacao; recria os dois índices com
+//                      `AND duplicado_autorizado = false`   (migration 0039)
+//   A troca dos índices é DROP + CREATE na mesma transação: não existe
+//   instante sem catraca. Segura com a aplicação antiga no ar — ela não grava
+//   a coluna (fica false) e, sem cópias, o índice novo equivale ao antigo.
+//
 // Idempotente: pode rodar de novo sem efeito. Seguro com a aplicação antiga no
 // ar — ela não escreve nas colunas novas (ficam nulas) e os índices parciais
 // ignoram nulos.
@@ -20,8 +28,8 @@
 import postgres from "postgres";
 
 const FASE = process.argv.find((a) => a.startsWith("--fase="))?.split("=")[1];
-if (FASE !== "colunas" && FASE !== "indices") {
-  throw new Error("Informe --fase=colunas ou --fase=indices");
+if (FASE !== "colunas" && FASE !== "indices" && FASE !== "duplicados") {
+  throw new Error("Informe --fase=colunas, --fase=indices ou --fase=duplicados");
 }
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL não definida.");
@@ -38,6 +46,8 @@ interface Retrato {
   indices_total: number;
   colunas_novas: number;
   indices_novos: number;
+  colunas_duplicado: number;
+  indices_com_duplicado: number;
 }
 
 async function retrato(): Promise<Retrato> {
@@ -53,7 +63,14 @@ async function retrato(): Promise<Retrato> {
           AND column_name IN ('codigo_fardo', 'fardo_uuid'))::int AS colunas_novas,
       (SELECT count(*) FROM pg_indexes
         WHERE schemaname = 'public' AND tablename = 'estante_fardo'
-          AND indexname IN ('uq_estante_fardo_uuid_conta', 'uq_estante_fardo_codigo_conta'))::int AS indices_novos
+          AND indexname IN ('uq_estante_fardo_uuid_conta', 'uq_estante_fardo_codigo_conta'))::int AS indices_novos,
+      (SELECT count(*) FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name IN ('estante_fardo', 'estante_movimentacao')
+          AND column_name = 'duplicado_autorizado')::int AS colunas_duplicado,
+      (SELECT count(*) FROM pg_indexes
+        WHERE schemaname = 'public' AND tablename = 'estante_fardo'
+          AND indexname IN ('uq_estante_fardo_uuid_conta', 'uq_estante_fardo_codigo_conta')
+          AND indexdef LIKE '%duplicado_autorizado = false%')::int AS indices_com_duplicado
   `;
   return r;
 }
@@ -61,7 +78,8 @@ async function retrato(): Promise<Retrato> {
 function imprimir(rotulo: string, r: Retrato) {
   console.log(
     `${rotulo}: policies=${r.policies} tabelas_rls=${r.tabelas_rls} ` +
-      `colunas_novas=${r.colunas_novas}/2 indices_novos=${r.indices_novos}/2`,
+      `colunas_novas=${r.colunas_novas}/2 indices_novos=${r.indices_novos}/2 ` +
+      `colunas_duplicado=${r.colunas_duplicado}/2 indices_com_duplicado=${r.indices_com_duplicado}/2`,
   );
 }
 
@@ -78,6 +96,27 @@ async function main() {
     if (FASE === "colunas") {
       await tx`ALTER TABLE estante_fardo ADD COLUMN IF NOT EXISTS codigo_fardo text`;
       await tx`ALTER TABLE estante_fardo ADD COLUMN IF NOT EXISTS fardo_uuid text`;
+    } else if (FASE === "duplicados") {
+      await tx`ALTER TABLE estante_fardo
+               ADD COLUMN IF NOT EXISTS duplicado_autorizado boolean DEFAULT false NOT NULL`;
+      await tx`ALTER TABLE estante_movimentacao
+               ADD COLUMN IF NOT EXISTS duplicado_autorizado boolean DEFAULT false NOT NULL`;
+      const [{ n }] = await tx<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM pg_indexes
+        WHERE schemaname = 'public' AND tablename = 'estante_fardo'
+          AND indexname IN ('uq_estante_fardo_uuid_conta', 'uq_estante_fardo_codigo_conta')
+          AND indexdef LIKE '%duplicado_autorizado = false%'
+      `;
+      if (n < 2) {
+        await tx`DROP INDEX IF EXISTS uq_estante_fardo_uuid_conta`;
+        await tx`DROP INDEX IF EXISTS uq_estante_fardo_codigo_conta`;
+        await tx`CREATE UNIQUE INDEX uq_estante_fardo_uuid_conta
+                 ON estante_fardo USING btree (conta_id, fardo_uuid)
+                 WHERE fardo_uuid IS NOT NULL AND duplicado_autorizado = false`;
+        await tx`CREATE UNIQUE INDEX uq_estante_fardo_codigo_conta
+                 ON estante_fardo USING btree (conta_id, codigo_fardo)
+                 WHERE codigo_fardo IS NOT NULL AND duplicado_autorizado = false`;
+      }
     } else {
       await tx`CREATE UNIQUE INDEX IF NOT EXISTS uq_estante_fardo_uuid_conta
                ON estante_fardo USING btree (conta_id, fardo_uuid)
@@ -96,7 +135,10 @@ async function main() {
   const erros: string[] = [];
   if (depois.policies !== antes.policies) erros.push("policies mudaram");
   if (depois.tabelas_rls !== antes.tabelas_rls) erros.push("RLS mudou");
-  if (depois.colunas_total - antes.colunas_total !== depois.colunas_novas - antes.colunas_novas) {
+  const colunasCriadas =
+    depois.colunas_novas - antes.colunas_novas +
+    (depois.colunas_duplicado - antes.colunas_duplicado);
+  if (depois.colunas_total - antes.colunas_total !== colunasCriadas) {
     erros.push("colunas inesperadas mudaram");
   }
   if (depois.indices_total - antes.indices_total !== depois.indices_novos - antes.indices_novos) {
@@ -104,6 +146,11 @@ async function main() {
   }
   if (FASE === "colunas" && depois.colunas_novas !== 2) erros.push("colunas não criadas");
   if (FASE === "indices" && depois.indices_novos !== 2) erros.push("índices não criados");
+  if (FASE === "duplicados") {
+    if (depois.colunas_duplicado !== 2) erros.push("coluna duplicado_autorizado não criada");
+    if (depois.indices_novos !== 2) erros.push("catraca ausente");
+    if (depois.indices_com_duplicado !== 2) erros.push("índices não recriados");
+  }
 
   if (erros.length > 0) {
     console.error(`FALHA na conferência: ${erros.join(", ")}`);

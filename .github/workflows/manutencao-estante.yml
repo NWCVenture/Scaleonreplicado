@@ -162,6 +162,12 @@ jobs:
         if: env.MODO == 'aplicar'
         run: npx tsx scripts/aplicar-migracao-estante.ts --fase=indices
 
+      # "Autorizar QR duplicado": coluna de marcação e índices que ignoram as
+      # cópias autorizadas. Idempotente, como as fases acima.
+      - name: Cópias autorizadas (migration 0039)
+        if: env.MODO == 'aplicar'
+        run: npx tsx scripts/aplicar-migracao-estante.ts --fase=duplicados
+
       - name: Auditoria final
         if: env.MODO == 'aplicar'
         run: |

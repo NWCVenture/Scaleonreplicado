@@ -21,15 +21,22 @@ import {
   AlertCircle,
   Info,
   Trash2,
+  Copy,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { CameraScanner } from "@/components/shared/camera-scanner";
 import { parseQRCode, type ParsedQR } from "@/lib/estante-utils";
 import { cn } from "@/lib/utils";
 
 export type PendingFardo = {
+  /** Identifica a linha da fila; único mesmo quando o QR se repete. */
+  id: string;
+  /** Chave de dedup (uuid > codigoFardo > raw). */
   key: string;
   raw: string;
   parsed: ParsedQR;
+  /** Repetição de um QR que já estava na fila, aceita por autorização. */
+  duplicado?: boolean;
 };
 
 export type SessionLogEntry = {
@@ -46,7 +53,7 @@ interface ModalScannerProps {
   mode: "retirar" | "adicionar" | "bipagem";
   onScanComplete: (parsed: ParsedQR, raw: string) => void;
   pendingFardos?: PendingFardo[];
-  onRemovePending?: (key: string) => void;
+  onRemovePending?: (id: string) => void;
   onConfirmInclusao?: () => void;
   onConfirmRetirada?: () => void;
   bipagemScanned?: string[];
@@ -54,6 +61,8 @@ interface ModalScannerProps {
   sessionLog?: SessionLogEntry[];
   onClearLog?: () => void;
   isConfirming?: boolean;
+  autorizarDuplicado?: boolean;
+  onAutorizarDuplicadoChange?: (value: boolean) => void;
 }
 
 const logIcons = {
@@ -85,6 +94,8 @@ export function ModalScanner({
   sessionLog = [],
   onClearLog,
   isConfirming = false,
+  autorizarDuplicado = false,
+  onAutorizarDuplicadoChange,
 }: ModalScannerProps) {
   const [scanInput, setScanInput] = useState("");
   const [lastScanned, setLastScanned] = useState<ParsedQR | null>(null);
@@ -207,6 +218,44 @@ export function ModalScanner({
           <DialogTitle className={accentColor}>{title}</DialogTitle>
         </DialogHeader>
 
+        {/* Autorizar QR duplicado: vale só pra esta sessão do scanner. */}
+        {onAutorizarDuplicadoChange && (
+          <div
+            className={cn(
+              "flex items-start gap-3 rounded-lg border px-3 py-2",
+              autorizarDuplicado
+                ? "border-amber-600 bg-amber-950/40"
+                : "border-slate-700 bg-slate-900",
+            )}
+          >
+            <Switch
+              aria-label="Autorizar QR duplicado"
+              checked={autorizarDuplicado}
+              onCheckedChange={(v) => {
+                onAutorizarDuplicadoChange(v);
+                // O leitor "digita" no campo focado; devolve o foco a ele.
+                setTimeout(() => scanRef.current?.focus(), 0);
+              }}
+              className="mt-0.5"
+            />
+            <div className="text-xs">
+              <p
+                className={cn(
+                  "font-semibold flex items-center gap-1",
+                  autorizarDuplicado ? "text-amber-300" : "text-foreground",
+                )}
+              >
+                <Copy className="h-3.5 w-3.5" /> Autorizar QR duplicado
+              </p>
+              <p className="text-muted-foreground">
+                {autorizarDuplicado
+                  ? "Ativo: o mesmo QR pode ser bipado várias vezes. Cada repetição entra como cópia e fica marcada no histórico pra auditoria."
+                  : "Ligue quando a mesma etiqueta foi impressa em mais de um fardo."}
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* ── Coluna esquerda: scanner + revisão ───────────────── */}
           <div className="space-y-3">
@@ -294,10 +343,22 @@ export function ModalScanner({
                   ) : (
                     pendingFardos.map((p) => (
                       <div
-                        key={p.key}
-                        className="flex items-center gap-2 text-xs bg-slate-800 rounded px-2 py-1.5 border border-slate-700"
+                        key={p.id}
+                        className={cn(
+                          "flex items-center gap-2 text-xs bg-slate-800 rounded px-2 py-1.5 border",
+                          p.duplicado ? "border-amber-700" : "border-slate-700",
+                        )}
+                        title={
+                          p.duplicado
+                            ? "QR repetido — entra como cópia autorizada"
+                            : undefined
+                        }
                       >
-                        <CheckCircle className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                        {p.duplicado ? (
+                          <Copy className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                        ) : (
+                          <CheckCircle className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                        )}
                         <div className="grid grid-cols-3 gap-2 flex-1 min-w-0">
                           <span
                             className="font-mono font-bold truncate"
@@ -319,7 +380,7 @@ export function ModalScanner({
                           variant="ghost"
                           size="icon"
                           className="h-6 w-6 shrink-0 hover:bg-red-900/50"
-                          onClick={() => onRemovePending?.(p.key)}
+                          onClick={() => onRemovePending?.(p.id)}
                         >
                           <X className="h-3.5 w-3.5 text-muted-foreground" />
                         </Button>
