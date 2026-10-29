@@ -42,6 +42,11 @@ const addFardoSchema = z.object({
   // de resumo no histórico). O fluxo normal de inclusão envia "manual"
   // (padrão), que loga 1 ENTRADA por fardo pra auditoria detalhada.
   origem: z.enum(["manual", "importacao"]).optional().default("manual"),
+  // "Autorizar QR duplicado": em vez de recusar etiqueta já existente, grava
+  // a repetição como cópia (`duplicadoAutorizado`), marcada no histórico pra
+  // auditoria. Existe porque etiquetas foram impressas em várias cópias e
+  // coladas em fardos físicos diferentes.
+  autorizarDuplicado: z.boolean().optional().default(false),
 });
 
 type SkippedFardo = {
@@ -69,6 +74,14 @@ type SemVerificacaoFardo = {
   qrCode: string;
   sku: string;
   lote: string;
+};
+
+/** Etiqueta repetida que entrou como cópia porque o operador autorizou. */
+type DuplicadoAutorizadoFardo = {
+  qrCode: string;
+  sku: string;
+  lote: string;
+  estanteNome?: string;
 };
 
 export async function POST(
@@ -154,6 +167,7 @@ export async function POST(
       }));
 
       const skipped: SkippedFardo[] = [];
+      const duplicadosAutorizados: DuplicadoAutorizadoFardo[] = [];
       // Campos derivados do QR pelo servidor — nunca o que o cliente mandou.
       const aInserir: Array<{
         qrCode: string;
@@ -162,6 +176,7 @@ export async function POST(
         quantidade: number;
         codigoFardo: string | null;
         fardoUuid: string | null;
+        duplicadoAutorizado: boolean;
       }> = [];
       // Detecta duplicatas dentro do próprio batch (mesmo uuid/codigoFardo
       // chegando duas vezes no mesmo POST).
@@ -197,37 +212,32 @@ export async function POST(
           }
         }
 
-        if (conflitoEstante) {
+        const repetidoNoBatch =
+          (!!parsedUuid && uuidsBatch.has(parsedUuid)) ||
+          (!!parsedCodigo && codigosBatch.has(parsedCodigo));
+        const duplicado = !!conflitoEstante || repetidoNoBatch;
+
+        if (duplicado && !data.autorizarDuplicado) {
           skipped.push({
             qrCode: cand.qrCode,
             sku: cand.sku,
             lote: cand.lote,
             motivo:
-              conflitoEstante.estanteId === id
-                ? "duplicado-mesma-estante"
-                : "ja-existe-outra-estante",
-            estanteNome: conflitoEstante.estanteNome,
+              conflitoEstante && conflitoEstante.estanteId !== id
+                ? "ja-existe-outra-estante"
+                : "duplicado-mesma-estante",
+            estanteNome: conflitoEstante?.estanteNome,
           });
           continue;
         }
 
-        if (parsedUuid && uuidsBatch.has(parsedUuid)) {
-          skipped.push({
+        if (duplicado) {
+          duplicadosAutorizados.push({
             qrCode: cand.qrCode,
             sku: cand.sku,
             lote: cand.lote,
-            motivo: "duplicado-mesma-estante",
+            estanteNome: conflitoEstante?.estanteNome,
           });
-          continue;
-        }
-        if (parsedCodigo && codigosBatch.has(parsedCodigo)) {
-          skipped.push({
-            qrCode: cand.qrCode,
-            sku: cand.sku,
-            lote: cand.lote,
-            motivo: "duplicado-mesma-estante",
-          });
-          continue;
         }
 
         if (parsedUuid) uuidsBatch.add(parsedUuid);
@@ -239,11 +249,18 @@ export async function POST(
           quantidade: cand.quantidade,
           codigoFardo: parsedCodigo ?? null,
           fardoUuid: parsedUuid ?? null,
+          duplicadoAutorizado: duplicado,
         });
       }
 
       if (aInserir.length === 0) {
-        return { added: 0, skipped, recusados, semVerificacao };
+        return {
+          added: 0,
+          skipped,
+          recusados,
+          semVerificacao,
+          duplicadosAutorizados,
+        };
       }
 
       const [{ count: totalAntes }] = await tx
@@ -265,6 +282,7 @@ export async function POST(
         quantidade: f.quantidade,
         codigoFardo: f.codigoFardo,
         fardoUuid: f.fardoUuid,
+        duplicadoAutorizado: f.duplicadoAutorizado,
         adicionadoPor: session.user.id,
         contaId,
       }));
@@ -275,6 +293,7 @@ export async function POST(
       // existe na estante X"), mas ela não sobrevive a duas bipagens
       // simultâneas: sob READ COMMITTED ambas leem "não existe" e ambas
       // chegam aqui. Quem arbitra é o índice único parcial (RITM-04).
+      // Cópias autorizadas ficam fora do índice e entram sempre.
       //
       // `onConflictDoNothing` sem alvo cobre os dois índices — uuid e
       // codigo_fardo. O `returning` diz o que de fato entrou: o que não
@@ -302,7 +321,13 @@ export async function POST(
       }
 
       if (newFardos.length === 0) {
-        return { added: 0, skipped, recusados, semVerificacao };
+        return {
+          added: 0,
+          skipped,
+          recusados,
+          semVerificacao,
+          duplicadosAutorizados,
+        };
       }
 
       if (data.origem === "importacao") {
@@ -348,13 +373,20 @@ export async function POST(
           totalAntes: totalAntes + idx,
           totalDepois: totalAntes + idx + 1,
           totalPecas: null,
+          duplicadoAutorizado: f.duplicadoAutorizado,
           usuarioId: session.user.id,
           contaId,
         }));
         await tx.insert(estanteMovimentacao).values(movs);
       }
 
-      return { added: newFardos.length, skipped, recusados, semVerificacao };
+      return {
+        added: newFardos.length,
+        skipped,
+        recusados,
+        semVerificacao,
+        duplicadosAutorizados,
+      };
     });
 
     if (!result) {

@@ -81,6 +81,7 @@ export async function GET(request: NextRequest) {
           totalAntes: estanteMovimentacao.totalAntes,
           totalDepois: estanteMovimentacao.totalDepois,
           totalPecas: estanteMovimentacao.totalPecas,
+          duplicadoAutorizado: estanteMovimentacao.duplicadoAutorizado,
           usuarioId: estanteMovimentacao.usuarioId,
           createdAt: estanteMovimentacao.createdAt,
           usuarioNome: user.name,

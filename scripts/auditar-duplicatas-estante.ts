@@ -18,6 +18,10 @@
 //   dotenv -e .env.local -- npx tsx scripts/auditar-duplicatas-estante.ts --apply
 //
 // Em produção, trocar para `.env.prod`. SEMPRE rodar sem --apply primeiro.
+//
+// Cópias com `duplicado_autorizado` (migration 0039) NÃO são duplicatas: o
+// operador autorizou a repetição da etiqueta e o fardo existe fisicamente.
+// Ficam fora da varredura — como ficam fora dos índices únicos.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -51,6 +55,7 @@ interface Linha {
   lote: string;
   quantidade: number;
   created_at: Date;
+  duplicado_autorizado: boolean;
 }
 
 interface Remocao {
@@ -79,13 +84,32 @@ async function main() {
   console.log(`Target: ${alvo()}`);
   console.log(`Modo:   ${APLICAR ? "APLICAR (vai remover)" : "somente leitura"}\n`);
 
-  const linhas = await client<Linha[]>`
-    SELECT f.id, f.conta_id, f.estante_id, e.nome AS estante_nome,
-           f.qr_code, f.sku, f.lote, f.quantidade, f.created_at
-    FROM estante_fardo f
-    JOIN estante e ON e.id = f.estante_id
-    ORDER BY f.created_at ASC, f.id ASC
+  // Antes da migration 0039 a coluna não existe — e nenhuma cópia autorizada
+  // pode existir ainda.
+  const [{ temColuna }] = await client<{ temColuna: boolean }[]>`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'estante_fardo'
+        AND column_name = 'duplicado_autorizado'
+    ) AS "temColuna"
   `;
+  const linhas = temColuna
+    ? await client<Linha[]>`
+        SELECT f.id, f.conta_id, f.estante_id, e.nome AS estante_nome,
+               f.qr_code, f.sku, f.lote, f.quantidade, f.created_at,
+               f.duplicado_autorizado
+        FROM estante_fardo f
+        JOIN estante e ON e.id = f.estante_id
+        ORDER BY f.created_at ASC, f.id ASC
+      `
+    : await client<Linha[]>`
+        SELECT f.id, f.conta_id, f.estante_id, e.nome AS estante_nome,
+               f.qr_code, f.sku, f.lote, f.quantidade, f.created_at,
+               false AS duplicado_autorizado
+        FROM estante_fardo f
+        JOIN estante e ON e.id = f.estante_id
+        ORDER BY f.created_at ASC, f.id ASC
+      `;
   console.log(`Fardos analisados: ${linhas.length}\n`);
 
   // Espelha exatamente o que os índices únicos parciais vão impor:
@@ -96,8 +120,14 @@ async function main() {
   const remover: Remocao[] = [];
   const naoParseaveis: Linha[] = [];
   const semIdentidade: Linha[] = [];
+  const copiasAutorizadas: Linha[] = [];
 
   for (const l of linhas) {
+    if (l.duplicado_autorizado) {
+      copiasAutorizadas.push(l);
+      continue;
+    }
+
     // parseQRCode normaliza os três separadores (`}`, `{`, `|`) — por isso
     // não dá pra usar split_part do Postgres, que só conhece um.
     const p = parseQRCode(l.qr_code);
@@ -147,7 +177,8 @@ async function main() {
   const pecas = remover.reduce((s, r) => s + r.quantidade, 0);
 
   console.log("── Resumo ──────────────────────────────────────────");
-  console.log(`  deduplicáveis (têm identidade): ${linhas.length - naoParseaveis.length - semIdentidade.length}`);
+  console.log(`  deduplicáveis (têm identidade): ${linhas.length - naoParseaveis.length - semIdentidade.length - copiasAutorizadas.length}`);
+  console.log(`  cópias autorizadas (ignoradas): ${copiasAutorizadas.length}`);
   console.log(`  sem identidade (v1)           : ${semIdentidade.length}`);
   console.log(`  não parseáveis                : ${naoParseaveis.length}`);
   console.log(`  DUPLICATAS a remover          : ${remover.length}`);

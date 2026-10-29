@@ -566,6 +566,12 @@ export const estanteFardo = pgTable(
     // parciais — protegem só onde há o que proteger.
     codigoFardo: text("codigo_fardo"),
     fardoUuid: text("fardo_uuid"),
+    // Cópia de uma etiqueta que já estava no estoque, gravada porque o
+    // operador ligou "Autorizar QR duplicado" na bipagem. Fica fora da
+    // catraca (ver índices abaixo) e é o que a auditoria procura.
+    duplicadoAutorizado: boolean("duplicado_autorizado")
+      .notNull()
+      .default(false),
     adicionadoPor: text("adicionado_por")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
@@ -590,12 +596,16 @@ export const estanteFardo = pgTable(
     //
     // Parcial (`WHERE ... IS NOT NULL`) porque etiqueta v1 não carrega
     // identificador: exigir unicidade ali recusaria estoque legítimo.
+    //
+    // Cópias com `duplicado_autorizado` também ficam de fora: a catraca segue
+    // garantindo no máximo UM original por etiqueta, e as cópias autorizadas
+    // se somam a ele sem colidir.
     uniqueIndex("uq_estante_fardo_uuid_conta")
       .on(table.contaId, table.fardoUuid)
-      .where(sql`fardo_uuid IS NOT NULL`),
+      .where(sql`fardo_uuid IS NOT NULL AND duplicado_autorizado = false`),
     uniqueIndex("uq_estante_fardo_codigo_conta")
       .on(table.contaId, table.codigoFardo)
-      .where(sql`codigo_fardo IS NOT NULL`),
+      .where(sql`codigo_fardo IS NOT NULL AND duplicado_autorizado = false`),
   ]
 );
 
@@ -614,6 +624,11 @@ export const estanteMovimentacao = pgTable(
     totalAntes: integer("total_antes").notNull(),
     totalDepois: integer("total_depois").notNull(),
     totalPecas: integer("total_pecas"),
+    // Movimento de um fardo cópia (ver estante_fardo.duplicado_autorizado).
+    // É o filtro da auditoria diária do histórico.
+    duplicadoAutorizado: boolean("duplicado_autorizado")
+      .notNull()
+      .default(false),
     usuarioId: text("usuario_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),

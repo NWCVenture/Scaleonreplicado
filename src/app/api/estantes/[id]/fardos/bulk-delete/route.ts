@@ -74,6 +74,16 @@ export async function POST(
       const naoEncontrados: NaoEncontrado[] = [];
       const jaMarcados = new Set<string>(); // dedup quando bipam o mesmo fardo duas vezes
 
+      // Mesma etiqueta pode estar em vários fardos quando houve cópia
+      // autorizada. Sai primeiro a cópia: o original é o que a catraca
+      // protege, então ele fica por último.
+      const escolher = (
+        pred: (f: (typeof fardosNaEstante)[number]) => boolean
+      ) =>
+        fardosNaEstante.find(
+          (f) => !jaMarcados.has(f.id) && f.duplicadoAutorizado && pred(f)
+        ) ?? fardosNaEstante.find((f) => !jaMarcados.has(f.id) && pred(f));
+
       for (const req of data.fardos) {
         if (req.fardoId) {
           const hit = fardosNaEstante.find((f) => f.id === req.fardoId);
@@ -95,22 +105,16 @@ export async function POST(
 
         let hit: typeof fardosNaEstante[number] | undefined;
         if (parsed.uuid) {
-          hit = fardosNaEstante.find(
-            (f) =>
-              !jaMarcados.has(f.id) && parseQRCode(f.qrCode)?.uuid === parsed.uuid
-          );
+          hit = escolher((f) => parseQRCode(f.qrCode)?.uuid === parsed.uuid);
         }
         if (!hit && parsed.codigoFardo) {
-          hit = fardosNaEstante.find(
-            (f) =>
-              !jaMarcados.has(f.id) &&
-              parseQRCode(f.qrCode)?.codigoFardo === parsed.codigoFardo
+          hit = escolher(
+            (f) => parseQRCode(f.qrCode)?.codigoFardo === parsed.codigoFardo
           );
         }
         if (!hit) {
-          hit = fardosNaEstante.find(
+          hit = escolher(
             (f) =>
-              !jaMarcados.has(f.id) &&
               norm(f.sku) === norm(parsed.sku) &&
               norm(f.lote) === norm(parsed.lote)
           );
@@ -162,6 +166,7 @@ export async function POST(
         totalAntes: totalAntes - idx,
         totalDepois: totalAntes - idx - 1,
         totalPecas: null,
+        duplicadoAutorizado: f.duplicadoAutorizado,
         usuarioId: session.user.id,
         contaId,
       }));

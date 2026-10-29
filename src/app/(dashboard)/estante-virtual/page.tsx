@@ -113,6 +113,9 @@ export default function EstanteVirtualPage() {
   const [bipagemScanned, setBipagemScanned] = useState<string[]>([]);
   const [sessionLog, setSessionLog] = useState<SessionLogEntry[]>([]);
   const [isConfirming, setIsConfirming] = useState(false);
+  // "Autorizar QR duplicado": desliga o dedup da fila e manda o servidor
+  // gravar repetições como cópia. Vale só pra sessão aberta do scanner.
+  const [autorizarDuplicado, setAutorizarDuplicado] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [removingId, setRemovingId] = useState<string | null>(null);
 
@@ -209,7 +212,12 @@ export default function EstanteVirtualPage() {
       if (scannerMode === "bipagem") {
         const key = `${parsed.sku}|${parsed.lote}`;
         if (bipagemScanned.includes(key)) {
-          appendLog("warning", `Já bipado nesta sessão: ${parsed.sku} (lote ${parsed.lote})`);
+          if (!autorizarDuplicado) {
+            appendLog("warning", `Já bipado nesta sessão: ${parsed.sku} (lote ${parsed.lote})`);
+            return;
+          }
+          setBipagemScanned((prev) => [...prev, key]);
+          appendLog("warning", `Bipado (QR duplicado autorizado): ${parsed.sku} (lote ${parsed.lote})`);
           return;
         }
         setBipagemScanned((prev) => [...prev, key]);
@@ -219,26 +227,46 @@ export default function EstanteVirtualPage() {
 
       // Modos adicionar e retirar: acumular em pendingFardos com dedup local.
       const key = fardoKey(parsed, raw);
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       if (pendingFardos.some((p) => p.key === key)) {
+        if (!autorizarDuplicado) {
+          appendLog(
+            "warning",
+            `Já está na fila: ${parsed.sku} (lote ${parsed.lote}, qtd ${parsed.qtd})`,
+          );
+          return;
+        }
+        setPendingFardos((prev) => [
+          ...prev,
+          { id, key, raw, parsed, duplicado: true },
+        ]);
         appendLog(
           "warning",
-          `Já está na fila: ${parsed.sku} (lote ${parsed.lote}, qtd ${parsed.qtd})`,
+          `Adicionado à fila (QR duplicado autorizado): ${parsed.sku} (lote ${parsed.lote}, qtd ${parsed.qtd})`,
         );
         return;
       }
-      setPendingFardos((prev) => [...prev, { key, raw, parsed }]);
+      setPendingFardos((prev) => [...prev, { id, key, raw, parsed }]);
       appendLog(
         "success",
         `Adicionado à fila: ${parsed.sku} (lote ${parsed.lote}, qtd ${parsed.qtd})`,
       );
     },
-    [selectedId, scannerMode, bipagemScanned, pendingFardos, appendLog, fardoKey],
+    [
+      selectedId,
+      scannerMode,
+      bipagemScanned,
+      pendingFardos,
+      autorizarDuplicado,
+      appendLog,
+      fardoKey,
+    ],
   );
 
   const handleRemovePending = useCallback(
-    (key: string) => {
-      const removed = pendingFardos.find((p) => p.key === key);
-      setPendingFardos((prev) => prev.filter((p) => p.key !== key));
+    (id: string) => {
+      const removed = pendingFardos.find((p) => p.id === id);
+      setPendingFardos((prev) => prev.filter((p) => p.id !== id));
       if (removed) {
         appendLog(
           "info",
@@ -263,6 +291,10 @@ export default function EstanteVirtualPage() {
             lote: p.parsed.lote,
             quantidade: p.parsed.qtd,
           })),
+          // Repetições aceitas na fila enquanto a chave estava ligada
+          // continuam autorizadas mesmo que ela tenha sido desligada depois.
+          autorizarDuplicado:
+            autorizarDuplicado || pendingFardos.some((p) => p.duplicado),
         }),
       });
       if (!res.ok) throw new Error("Erro ao adicionar");
@@ -281,6 +313,12 @@ export default function EstanteVirtualPage() {
           detalhe: string;
         }>;
         semVerificacao?: Array<{ qrCode: string; sku: string; lote: string }>;
+        duplicadosAutorizados?: Array<{
+          qrCode: string;
+          sku: string;
+          lote: string;
+          estanteNome?: string;
+        }>;
       } = await res.json();
 
       if (data.added > 0) {
@@ -310,6 +348,12 @@ export default function EstanteVirtualPage() {
           `Incluído SEM verificação de duplicata (etiqueta antiga sem identificador): ${s.sku} (lote ${s.lote})`,
         );
       }
+      for (const d of data.duplicadosAutorizados ?? []) {
+        appendLog(
+          "warning",
+          `Incluído como cópia (QR duplicado autorizado)${d.estanteNome ? ` — original em ${d.estanteNome}` : ""}: ${d.sku} (lote ${d.lote})`,
+        );
+      }
       if ((data.recusados?.length ?? 0) > 0) {
         toast.error(
           `${data.recusados!.length} etiqueta(s) recusada(s) — ver log da sessão`,
@@ -327,7 +371,14 @@ export default function EstanteVirtualPage() {
     } finally {
       setIsConfirming(false);
     }
-  }, [selectedId, pendingFardos, appendLog, fetchDetail, fetchEstantes]);
+  }, [
+    selectedId,
+    pendingFardos,
+    autorizarDuplicado,
+    appendLog,
+    fetchDetail,
+    fetchEstantes,
+  ]);
 
   const handleConfirmRetirada = useCallback(async () => {
     if (!selectedId || pendingFardos.length === 0) return;
@@ -565,6 +616,7 @@ export default function EstanteVirtualPage() {
     setScannerMode(mode);
     setPendingFardos([]);
     setSessionLog([]);
+    setAutorizarDuplicado(false);
     if (mode === "bipagem") setBipagemScanned([]);
     setShowScanner(true);
   };
@@ -787,6 +839,7 @@ export default function EstanteVirtualPage() {
               setPendingFardos([]);
               setBipagemScanned([]);
               setSessionLog([]);
+              setAutorizarDuplicado(false);
             }
           }}
           title={scannerTitle}
@@ -801,6 +854,16 @@ export default function EstanteVirtualPage() {
           sessionLog={sessionLog}
           onClearLog={() => setSessionLog([])}
           isConfirming={isConfirming}
+          autorizarDuplicado={autorizarDuplicado}
+          onAutorizarDuplicadoChange={(v) => {
+            setAutorizarDuplicado(v);
+            appendLog(
+              v ? "warning" : "info",
+              v
+                ? "QR duplicado AUTORIZADO nesta sessão — repetições entram como cópia"
+                : "Autorização de QR duplicado desligada",
+            );
+          }}
         />
         <ModalImportar
           open={showImportar}
